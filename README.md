@@ -430,21 +430,104 @@ A future storage implementation should be replaceable with minimal changes.
 
 ## Multi-Camera System
 
-The architecture must eventually support relationships between cameras.
+The multi-camera subsystem uses a graph-based dynamic search strategy.
 
-Example:
+### Camera Graph
+
+Cameras form a graph where nodes represent cameras and edges represent possible physical or logical transitions:
 
 ```text
 Camera A ─────► Camera B
     │               │
-    └──────► Camera C
+    └──────► Camera C ◄──── Camera D
 ```
 
-The camera graph describes camera relationships.
-
-The transition subsystem handles the logic used when a target leaves one camera and may appear in another.
-
 Camera topology must remain separate from camera-source implementation.
+
+### Dynamic Search Strategy
+
+The system must NOT run the full AI pipeline on every connected camera simultaneously.
+
+When a target is confirmed on a camera:
+
+```text
+1. That camera is the active camera
+2. Adjacent cameras (1-hop) form the initial search set
+3. Non-adjacent cameras remain dormant
+4. If the target is not found within a configurable timeout:
+   → expand the search radius to 2-hop neighbors
+5. Continue expanding until:
+   → target is found, OR
+   → maximum search radius is reached
+```
+
+Camera connectivity and camera AI activity are separate concepts.
+
+A camera may remain connected and capturing frames while its expensive AI processing is inactive.
+
+### Search State
+
+The search manager must maintain:
+
+```text
+Current camera
+Search radius
+Search start time
+Search timeout
+Maximum radius
+Active search cameras
+Candidate priorities
+Target recovery state
+```
+
+### Camera Prioritization
+
+The initial implementation should use graph distance and configurable timeout/radius expansion.
+
+Future prioritization may incorporate:
+
+```text
+Graph distance
+Target movement direction
+Historical transitions
+Expected travel time
+Camera reliability
+ReID similarity
+```
+
+### Shared Model Lifecycle
+
+Multiple active cameras must share model instances rather than loading duplicate YOLO or ReID models per camera.
+
+The inference module provides shared model references to all active cameras.
+
+### Module Structure
+
+The multi_camera module is organized as:
+
+```text
+multi_camera/
+├── camera_graph.py      — graph structure, adjacency, distance
+├── camera_node.py       — per-camera node, connection/AI state
+├── transition.py        — transition data between cameras
+├── search_manager.py    — search orchestration, radius expansion
+├── search_state.py      — search state data
+└── camera_priority.py   — candidate camera ranking
+```
+
+File responsibilities:
+
+**camera_graph.py** — Owns the graph structure. Stores nodes and edges. Provides adjacency queries and distance calculations. Does not contain search logic or AI processing.
+
+**camera_node.py** — Represents a single camera in the graph. Stores camera ID, metadata, connection state, and AI activity state. A node can be connected but dormant.
+
+**transition.py** — Data structure for a transition between two cameras. Stores source camera, destination camera, and transition metadata (direction, travel time, reliability).
+
+**search_manager.py** — Orchestrates the dynamic search. Expands and contracts the search radius based on timeouts. Activates and deactivates camera AI processing. Consumes search state and camera priorities.
+
+**search_state.py** — Data structure for the current search state. Stores current camera, search radius, timeout, active cameras, and recovery status. Pure data, no logic.
+
+**camera_priority.py** — Scores and ranks candidate cameras for the search. Initial implementation uses graph distance. Extensible to movement direction, historical transitions, expected travel time, camera reliability, and ReID similarity.
 
 ---
 
@@ -947,6 +1030,12 @@ Project/
 │   ├── database/
 │   ├── pipeline/
 │   ├── multi_camera/
+│   │   ├── camera_graph.py
+│   │   ├── camera_node.py
+│   │   ├── transition.py
+│   │   ├── search_manager.py
+│   │   ├── search_state.py
+│   │   └── camera_priority.py
 │   ├── inference/
 │   ├── visualization/
 │   ├── performance/

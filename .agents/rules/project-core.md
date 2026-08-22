@@ -103,7 +103,7 @@ Major modules include:
 - identity
 - database
 - pipeline
-- cameras
+- multi_camera
 - inference
 - visualization
 - performance
@@ -475,3 +475,14 @@ The system must support future camera prioritization using:
 - ReID similarity
 
 The initial implementation should use graph distance and configurable timeout/radius expansion.
+
+## Multi-Camera Module Structure
+
+The multi_camera module is organized as:
+
+- camera_graph.py — graph structure: nodes, edges, adjacency queries, distance calculations
+- camera_node.py — per-camera node: camera ID, metadata, connection state, AI activity state
+- transition.py — transition data: source camera, destination camera, transition metadata
+- search_manager.py — search orchestration: expand/contract search radius, manage timeouts, activate/deactivate camera AI processing
+- search_state.py — search state data: current camera, radius, timeout, active cameras, recovery status
+- camera_priority.py — priority scoring: rank candidate cameras for search (graph distance initially, extensible to direction/history/ReID)
