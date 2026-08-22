@@ -21,11 +21,70 @@ The system must prioritize:
 9. Replaceable AI components
 10. Minimal unnecessary complexity
 
-## Development Principles
+## Mandatory Development Principles
 
-For behavioral coding guidelines (think before coding, simplicity, surgical changes, goal-driven execution), load the `karpathy-guidelines` skill.
+### 1. Think Before Coding
 
-These guidelines apply to all non-trivial changes.
+Before implementing a non-trivial change:
+
+- Inspect only the relevant files.
+- Identify assumptions.
+- Identify ambiguities.
+- State the implementation plan briefly.
+- Identify success criteria.
+- Ask for clarification when ambiguity materially affects the design.
+
+Do not silently invent requirements.
+
+### 2. Simplicity First
+
+Use the smallest design that solves the actual problem.
+
+Do not add:
+
+- speculative features
+- unnecessary abstractions
+- unnecessary configuration
+- unnecessary dependencies
+- frameworks without a clear need
+- single-use abstractions without architectural value
+
+Prefer simple, explicit code.
+
+### 3. Surgical Changes
+
+Modify only what is required for the task.
+
+Do not:
+
+- refactor unrelated code
+- reformat unrelated files
+- rename unrelated files
+- delete unrelated code
+- "clean up" unrelated code
+- replace working components without justification
+
+Every changed line should have a clear relationship to the task.
+
+### 4. Goal-Driven Execution
+
+Define verifiable success criteria.
+
+For a bug:
+- reproduce it
+- fix it
+- verify the fix
+
+For a feature:
+- define expected behavior
+- implement it
+- test it
+
+For performance work:
+- measure before
+- change one important variable
+- measure after
+- keep changes only when they improve the desired metric without unacceptable regressions
 
 ---
 
@@ -33,32 +92,21 @@ These guidelines apply to all non-trivial changes.
 
 The project is modular.
 
-Each module must answer:
-
-- What does it do?
-- What does it receive?
-- What does it return?
-- Who calls it?
-- What does it depend on?
-- Does it use GPU?
-- What state does it maintain?
-- How can it be tested independently?
-
 Major modules include:
 
-- core — shared types, interfaces, base classes
-- camera — single camera source abstraction (CameraSource interface)
-- detection — person detection (Detector interface)
-- tracking — multi-object tracking (Tracker interface)
-- target — target selection, locking, loss, recovery
-- reid — appearance embedding generation (ReIDEngine interface)
-- identity — identity matching and management
-- database — vector storage abstraction (VectorStore interface)
-- pipeline — orchestration of detection → tracking → reid → identity
-- multi_camera — camera graph, transitions, cross-camera association
-- inference — shared GPU model loading and device management
-- visualization — display and output rendering
-- performance — metrics collection and reporting
+- core
+- camera
+- detection
+- tracking
+- target
+- reid
+- identity
+- database
+- pipeline
+- cameras
+- inference
+- visualization
+- performance
 
 Each module must have one clear responsibility.
 
@@ -67,41 +115,6 @@ Modules must communicate through explicit data types and interfaces.
 Do not pass loosely structured dictionaries throughout the application when a stable typed data structure is appropriate.
 
 Avoid circular dependencies.
-
----
-
-## Stable Contracts
-
-Important data must use explicit typed structures:
-
-- Frame
-- Detection
-- DetectionResult
-- Track
-- TrackResult
-- Embedding
-- Identity
-- Target
-- MatchResult
-- PersonCrop
-- CameraInfo
-- CameraTransition
-
-Avoid arbitrary dictionaries for stable domain concepts.
-
----
-
-## Replaceable Implementations
-
-Use stable interfaces around components likely to change:
-
-- Detector → YOLODetector
-- Tracker → ByteTrack
-- ReIDEngine → DINOv2
-- VectorStore → FAISSStore
-- CameraSource → Webcam / VideoFile / RTSP
-
-Changing an implementation must not require rewriting unrelated modules.
 
 ---
 
@@ -322,97 +335,6 @@ Keep visualization from unnecessarily blocking the processing pipeline.
 
 ---
 
-## Thread Safety Rules
-
-Define threading boundaries explicitly per module.
-
-Camera capture may run on a dedicated thread.
-
-Detection and tracking must document whether they are thread-safe.
-
-Shared model instances must document their threading contract.
-
-Do not assume a module is thread-safe unless explicitly documented.
-
-Prefer message-passing or queues over shared mutable state between threads.
-
----
-
-## Model Lifecycle Rules
-
-Model loading and unloading must have a single owner.
-
-The inference module is responsible for:
-
-- loading models onto the correct device
-- providing shared model references to consumers
-- unloading models during shutdown
-
-Modules must not independently load duplicate model instances.
-
-Model initialization should happen at startup, not on first inference call, to surface failures early.
-
----
-
-## Error Propagation Rules
-
-Errors must not be silently swallowed.
-
-Each module must define its failure modes:
-
-- Camera: connection failure, frame read failure, timeout
-- Detection: model failure, empty results, invalid input
-- Tracking: tracker state corruption, ID overflow
-- ReID: model failure, invalid crop dimensions
-- Identity: storage failure, corrupt index
-- Pipeline: component failure propagation
-
-Use explicit error types or return values rather than bare exceptions.
-
-Log errors with sufficient context to identify the failing module and input.
-
----
-
-## Configuration Rules
-
-Module configuration must be injected, not globally imported.
-
-Each module receives its configuration at construction time.
-
-Configuration files live under configs/.
-
-Do not scatter magic numbers, thresholds, or file paths throughout application code.
-
-Configurable values include:
-
-- model paths and device placement
-- detection confidence thresholds
-- tracking parameters
-- ReID inference interval
-- queue sizes and timeouts
-- camera connection parameters
-
----
-
-## Graceful Shutdown Rules
-
-The system must shut down cleanly when requested.
-
-Requirements:
-
-- release camera resources
-- stop inference threads
-- flush pending results
-- release GPU memory
-- close vector store connections
-- stop visualization
-
-Shutdown must not hang indefinitely.
-
-Use timeouts for blocking operations during shutdown.
-
----
-
 ## Debugging Rules
 
 Every major subsystem must be independently testable.
@@ -430,20 +352,6 @@ ReID can be tested using saved person crops.
 Identity can be tested with a mock vector store.
 
 A failure in one subsystem should be isolatable without running the entire application.
-
----
-
-## Collaboration Rules
-
-Keep module ownership boundaries clear.
-
-A teammate changing one module should not need to modify unrelated modules.
-
-Changes to shared interfaces require:
-
-- documentation update
-- affected tests updated
-- affected consumers updated
 
 ---
 
@@ -519,3 +427,51 @@ Before completion:
 - check performance impact when relevant
 - check GPU impact when relevant
 - mention known limitations
+
+## Multi-Camera Search Strategy
+
+The multi-camera subsystem must use a graph-based dynamic search strategy.
+
+Cameras form a graph where:
+
+- nodes represent cameras
+- edges represent possible physical/logical transitions
+
+The system must NOT actively run the full AI pipeline on every connected camera.
+
+When a target is confirmed on camera C:
+
+1. Camera C is the current active camera.
+2. Adjacent cameras form the initial search set.
+3. Non-adjacent cameras are ignored for expensive AI processing.
+4. If the target is not found within a configurable timeout, expand the search radius.
+5. Search radius may progress from 1-hop neighbors to 2-hop neighbors, then further if necessary.
+6. Stop expansion when the target is found or the configured maximum search radius is reached.
+
+The search manager must maintain:
+
+- current camera
+- search radius
+- search start time
+- search timeout
+- maximum radius
+- active search cameras
+- candidate priorities
+- target recovery state
+
+Camera connectivity and camera AI activity are separate concepts.
+
+A camera may remain connected while its expensive AI processing is inactive.
+
+Prefer shared inference/model instances rather than loading one model per camera.
+
+The system must support future camera prioritization using:
+
+- graph distance
+- target movement direction
+- historical transitions
+- expected travel time
+- camera reliability
+- ReID similarity
+
+The initial implementation should use graph distance and configurable timeout/radius expansion.
