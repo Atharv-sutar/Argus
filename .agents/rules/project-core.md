@@ -21,70 +21,11 @@ The system must prioritize:
 9. Replaceable AI components
 10. Minimal unnecessary complexity
 
-## Mandatory Development Principles
+## Development Principles
 
-### 1. Think Before Coding
+For behavioral coding guidelines (think before coding, simplicity, surgical changes, goal-driven execution), load the `karpathy-guidelines` skill.
 
-Before implementing a non-trivial change:
-
-- Inspect only the relevant files.
-- Identify assumptions.
-- Identify ambiguities.
-- State the implementation plan briefly.
-- Identify success criteria.
-- Ask for clarification when ambiguity materially affects the design.
-
-Do not silently invent requirements.
-
-### 2. Simplicity First
-
-Use the smallest design that solves the actual problem.
-
-Do not add:
-
-- speculative features
-- unnecessary abstractions
-- unnecessary configuration
-- unnecessary dependencies
-- frameworks without a clear need
-- single-use abstractions without architectural value
-
-Prefer simple, explicit code.
-
-### 3. Surgical Changes
-
-Modify only what is required for the task.
-
-Do not:
-
-- refactor unrelated code
-- reformat unrelated files
-- rename unrelated files
-- delete unrelated code
-- "clean up" unrelated code
-- replace working components without justification
-
-Every changed line should have a clear relationship to the task.
-
-### 4. Goal-Driven Execution
-
-Define verifiable success criteria.
-
-For a bug:
-- reproduce it
-- fix it
-- verify the fix
-
-For a feature:
-- define expected behavior
-- implement it
-- test it
-
-For performance work:
-- measure before
-- change one important variable
-- measure after
-- keep changes only when they improve the desired metric without unacceptable regressions
+These guidelines apply to all non-trivial changes.
 
 ---
 
@@ -92,21 +33,32 @@ For performance work:
 
 The project is modular.
 
+Each module must answer:
+
+- What does it do?
+- What does it receive?
+- What does it return?
+- Who calls it?
+- What does it depend on?
+- Does it use GPU?
+- What state does it maintain?
+- How can it be tested independently?
+
 Major modules include:
 
-- core
-- camera
-- detection
-- tracking
-- target
-- reid
-- identity
-- database
-- pipeline
-- cameras
-- inference
-- visualization
-- performance
+- core — shared types, interfaces, base classes
+- camera — single camera source abstraction (CameraSource interface)
+- detection — person detection (Detector interface)
+- tracking — multi-object tracking (Tracker interface)
+- target — target selection, locking, loss, recovery
+- reid — appearance embedding generation (ReIDEngine interface)
+- identity — identity matching and management
+- database — vector storage abstraction (VectorStore interface)
+- pipeline — orchestration of detection → tracking → reid → identity
+- multi_camera — camera graph, transitions, cross-camera association
+- inference — shared GPU model loading and device management
+- visualization — display and output rendering
+- performance — metrics collection and reporting
 
 Each module must have one clear responsibility.
 
@@ -115,6 +67,41 @@ Modules must communicate through explicit data types and interfaces.
 Do not pass loosely structured dictionaries throughout the application when a stable typed data structure is appropriate.
 
 Avoid circular dependencies.
+
+---
+
+## Stable Contracts
+
+Important data must use explicit typed structures:
+
+- Frame
+- Detection
+- DetectionResult
+- Track
+- TrackResult
+- Embedding
+- Identity
+- Target
+- MatchResult
+- PersonCrop
+- CameraInfo
+- CameraTransition
+
+Avoid arbitrary dictionaries for stable domain concepts.
+
+---
+
+## Replaceable Implementations
+
+Use stable interfaces around components likely to change:
+
+- Detector → YOLODetector
+- Tracker → ByteTrack
+- ReIDEngine → DINOv2
+- VectorStore → FAISSStore
+- CameraSource → Webcam / VideoFile / RTSP
+
+Changing an implementation must not require rewriting unrelated modules.
 
 ---
 
@@ -335,6 +322,97 @@ Keep visualization from unnecessarily blocking the processing pipeline.
 
 ---
 
+## Thread Safety Rules
+
+Define threading boundaries explicitly per module.
+
+Camera capture may run on a dedicated thread.
+
+Detection and tracking must document whether they are thread-safe.
+
+Shared model instances must document their threading contract.
+
+Do not assume a module is thread-safe unless explicitly documented.
+
+Prefer message-passing or queues over shared mutable state between threads.
+
+---
+
+## Model Lifecycle Rules
+
+Model loading and unloading must have a single owner.
+
+The inference module is responsible for:
+
+- loading models onto the correct device
+- providing shared model references to consumers
+- unloading models during shutdown
+
+Modules must not independently load duplicate model instances.
+
+Model initialization should happen at startup, not on first inference call, to surface failures early.
+
+---
+
+## Error Propagation Rules
+
+Errors must not be silently swallowed.
+
+Each module must define its failure modes:
+
+- Camera: connection failure, frame read failure, timeout
+- Detection: model failure, empty results, invalid input
+- Tracking: tracker state corruption, ID overflow
+- ReID: model failure, invalid crop dimensions
+- Identity: storage failure, corrupt index
+- Pipeline: component failure propagation
+
+Use explicit error types or return values rather than bare exceptions.
+
+Log errors with sufficient context to identify the failing module and input.
+
+---
+
+## Configuration Rules
+
+Module configuration must be injected, not globally imported.
+
+Each module receives its configuration at construction time.
+
+Configuration files live under configs/.
+
+Do not scatter magic numbers, thresholds, or file paths throughout application code.
+
+Configurable values include:
+
+- model paths and device placement
+- detection confidence thresholds
+- tracking parameters
+- ReID inference interval
+- queue sizes and timeouts
+- camera connection parameters
+
+---
+
+## Graceful Shutdown Rules
+
+The system must shut down cleanly when requested.
+
+Requirements:
+
+- release camera resources
+- stop inference threads
+- flush pending results
+- release GPU memory
+- close vector store connections
+- stop visualization
+
+Shutdown must not hang indefinitely.
+
+Use timeouts for blocking operations during shutdown.
+
+---
+
 ## Debugging Rules
 
 Every major subsystem must be independently testable.
@@ -352,6 +430,20 @@ ReID can be tested using saved person crops.
 Identity can be tested with a mock vector store.
 
 A failure in one subsystem should be isolatable without running the entire application.
+
+---
+
+## Collaboration Rules
+
+Keep module ownership boundaries clear.
+
+A teammate changing one module should not need to modify unrelated modules.
+
+Changes to shared interfaces require:
+
+- documentation update
+- affected tests updated
+- affected consumers updated
 
 ---
 

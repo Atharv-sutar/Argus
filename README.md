@@ -112,7 +112,6 @@ Current rules include:
 
 ```text
 .agents/rules/project-core.md
-.agents/rules/architecture.md
 ```
 
 These define project-wide engineering and architecture constraints.
@@ -947,7 +946,7 @@ Project/
 │   ├── identity/
 │   ├── database/
 │   ├── pipeline/
-│   ├── cameras/
+│   ├── multi_camera/
 │   ├── inference/
 │   ├── visualization/
 │   ├── performance/
@@ -1091,8 +1090,7 @@ Current foundation:
 ```text
 .agents/
 ├── rules/
-│   ├── project-core.md
-│   └── architecture.md
+│   └── project-core.md
 │
 ├── skills/
 │   └── karpathy-guidelines/
