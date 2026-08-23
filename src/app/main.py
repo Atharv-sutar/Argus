@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sys
 from pathlib import Path
 from typing import Optional
 
@@ -17,6 +16,7 @@ from src.camera.capture import OpenCVCamera, SyntheticCamera
 from src.core.config import AppConfig
 from src.detection.yolo_detector import YOLODetector
 from src.pipeline.single_camera import SingleCameraPipeline
+from src.target.manager import TargetManager
 from src.tracking.byte_tracker import ByteTracker
 from src.visualization.annotator import FrameAnnotator
 
@@ -32,6 +32,7 @@ def build_pipeline(
     source_override: Optional[str] = None,
     device_override: Optional[str] = None,
     use_synthetic: bool = False,
+    initial_target_id: Optional[int] = None,
 ) -> SingleCameraPipeline:
     """Constructs and wires all single-camera components according to configuration."""
 
@@ -71,7 +72,12 @@ def build_pipeline(
         min_box_area=config.tracking.min_box_area,
     )
 
-    # 4. Annotator
+    # 4. Target Manager
+    target_manager = TargetManager()
+    if initial_target_id is not None:
+        target_manager.select_by_track_id(initial_target_id)
+
+    # 5. Annotator
     annotator = FrameAnnotator(
         draw_fps=config.visualization.draw_fps,
         draw_boxes=config.visualization.draw_boxes,
@@ -84,6 +90,7 @@ def build_pipeline(
         camera=camera,
         detector=detector,
         tracker=tracker,
+        target_manager=target_manager,
         annotator=annotator,
         camera_id=config.camera.name,
     )
@@ -95,6 +102,7 @@ def run_app(
     device: Optional[str] = None,
     no_gui: bool = False,
     synthetic: bool = False,
+    target_id: Optional[int] = None,
 ) -> None:
     """Loads configuration and runs the live pipeline loop."""
     config_file = Path(config_path)
@@ -109,25 +117,41 @@ def run_app(
         source_override=source,
         device_override=device,
         use_synthetic=synthetic,
+        initial_target_id=target_id,
     )
 
     window_name = config.visualization.window_name
     show_window = config.visualization.show_window and not no_gui and (cv2 is not None)
 
-    logger.info("Starting Argus single-camera surveillance pipeline. Press 'q' to quit.")
+    # Mouse callback to allow clicking directly on targets in GUI window
+    def on_mouse(event, x, y, flags, param):
+        if event == cv2.EVENT_LBUTTONDOWN:
+            selected_id = pipeline.select_target_by_point(float(x), float(y))
+            if selected_id is not None:
+                logger.info(f"[USER ACTION] Clicked and locked onto Target ID: {selected_id}")
+
+    if show_window:
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.setMouseCallback(window_name, on_mouse)
+
+    logger.info("Starting Argus pipeline. Controls: Left-Click: Select Target | 'c': Clear Target | 'q': Quit")
 
     try:
-        for annotated_frame, track_result in pipeline.stream():
+        for annotated_frame, track_result, target in pipeline.stream():
             if show_window:
                 cv2.imshow(window_name, annotated_frame)
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord("q") or key == 27:  # 'q' or Esc
                     logger.info("Quit key pressed.")
                     break
+                elif key == ord("c"):
+                    logger.info("[USER ACTION] 'c' key pressed: Deselecting target.")
+                    pipeline.clear_target()
             else:
-                if track_result.count > 0:
+                if track_result.count > 0 or target.track_id is not None:
+                    target_info = f", Target ID {target.track_id} [{target.state.value}]" if target.track_id else ""
                     logger.info(
-                        f"Frame {track_result.frame_id}: Active Tracks = {track_result.count}"
+                        f"Frame {track_result.frame_id}: Active Tracks = {track_result.count}{target_info}"
                     )
     except KeyboardInterrupt:
         logger.info("Pipeline interrupted by user.")
@@ -142,6 +166,7 @@ def main() -> None:
     parser.add_argument("--config", type=str, default="configs/default.yaml", help="Path to config YAML")
     parser.add_argument("--source", type=str, default=None, help="Camera index, video file, or 'synthetic'")
     parser.add_argument("--device", type=str, default=None, help="Inference device ('auto', 'cuda', 'cpu')")
+    parser.add_argument("--target-id", type=int, default=None, help="Pre-select specific Track ID as target")
     parser.add_argument("--no-gui", action="store_true", help="Run without graphical display window")
     parser.add_argument("--synthetic", action="store_true", help="Run with synthetic frame generator")
 
@@ -152,6 +177,7 @@ def main() -> None:
         device=args.device,
         no_gui=args.no_gui,
         synthetic=args.synthetic,
+        target_id=args.target_id,
     )
 
 

@@ -125,3 +125,24 @@ class FrameData:
     frame_id: int = 0
     timestamp_ms: float = 0.0
     camera_id: str = "camera_0"
+
+
+class TargetState(str, Enum):
+    """Lifecycle state of the user-selected tracking target."""
+    UNSELECTED = "UNSELECTED"
+    LOCKED = "LOCKED"
+    TRACKING = "TRACKING"
+    LOST = "LOST"
+    RECOVERING = "RECOVERING"
+
+
+@dataclass
+class Target:
+    """Represents the user-selected focus target."""
+    track_id: Optional[int] = None
+    state: TargetState = TargetState.UNSELECTED
+    last_known_box: Optional[BoundingBox] = None
+    last_seen_frame: int = 0
+    last_seen_timestamp_ms: float = 0.0
+    lost_duration_ms: float = 0.0
+
