@@ -21,6 +21,8 @@ The system must prioritize:
 9. Replaceable AI components
 10. Minimal unnecessary complexity
 
+This ordering is intentional: maintainability and correctness are prioritized over raw throughput, except where real-time performance falls below the minimum viable threshold defined by the Performance Rules.
+
 ## Mandatory Development Principles
 
 ### 1. Think Before Coding
@@ -101,9 +103,9 @@ Major modules include:
 - target
 - reid
 - identity
+- multi_camera
 - database
 - pipeline
-- multi_camera
 - inference
 - visualization
 - performance
@@ -139,6 +141,8 @@ pipeline → ReID interface → DINOv2 implementation
 
 identity → VectorStore interface → FAISS implementation
 
+detection/reid → Inference layer → Shared execution/device management
+
 BAD:
 
 pipeline directly depending on FAISS internals
@@ -148,6 +152,30 @@ camera importing YOLO
 tracking importing visualization
 
 ReID importing application logic
+
+---
+
+## Core Rules
+
+Purpose:
+Provide shared types, contracts, and interfaces used across the system.
+
+Examples:
+- `Frame`
+- `Detection`
+- `DetectionResult`
+- `Track`
+- `TrackResult`
+- `Embedding`
+- `Identity`
+- `TargetState`
+- Camera-graph types
+- Interfaces such as `Tracker`, `ReID`, and `VectorStore`
+
+Constraints:
+- No detection, tracking, or ReID algorithm implementation.
+- No business workflow logic.
+- No direct dependency on infrastructure implementations.
 
 ---
 
@@ -182,7 +210,7 @@ Frame
 Output:
 DetectionResult
 
-The rest of the system must not depend directly on YOLO-specific result objects.
+The rest of the system must not depend directly on YOLO-specific result objects. Detection owns model-specific preprocessing and postprocessing.
 
 ---
 
@@ -260,15 +288,143 @@ Do not put FAISS-specific logic directly into identity logic.
 
 ---
 
+## Multi-Camera Search Strategy
+
+The multi-camera subsystem must use a graph-based dynamic search strategy.
+
+Cameras form a graph where:
+
+- nodes represent cameras
+- edges represent possible physical/logical transitions
+
+The system must NOT actively run the full AI pipeline on every connected camera.
+
+When a target is confirmed on camera C:
+
+1. Camera C is the current active camera.
+2. Adjacent cameras form the initial search set.
+3. Non-adjacent cameras are ignored for expensive AI processing.
+4. If the target is not found within a configurable timeout, expand the search radius.
+5. Search radius may progress from 1-hop neighbors to 2-hop neighbors, then further if necessary.
+6. Stop expansion immediately when the target is found or the configured maximum search radius is reached.
+7. Already-searched cameras must not be redundantly searched in the same recovery attempt.
+
+The search manager must maintain:
+
+- current camera
+- search radius
+- search start time
+- search timeout
+- maximum radius
+- active search cameras
+- candidate priorities
+- target recovery state
+
+Camera connectivity and camera AI activity are separate concepts.
+
+A camera may remain connected while its expensive AI processing is inactive.
+
+Search parameters must be configuration-driven rather than hardcoded constants (`search.initial_radius`, `search.radius_increment`, `search.per_radius_timeout`, `search.max_radius`, `search.total_recovery_timeout`).
+
+The system must support future camera prioritization using:
+
+- graph distance
+- target movement direction
+- historical transitions
+- expected travel time
+- camera reliability
+- ReID similarity
+
+The initial implementation should use graph distance and configurable timeout/radius expansion.
+
+### Multi-Camera Module Structure
+
+The multi_camera module is organized as:
+
+- `camera_graph.py` — graph structure: nodes, edges, adjacency queries, distance calculations
+- `camera_node.py` — per-camera node: camera ID, metadata, connection state, AI activity state
+- `transition.py` — transition data: source camera, destination camera, transition metadata
+- `search_manager.py` — search orchestration: expand/contract search radius, manage timeouts, activate/deactivate camera AI processing
+- `search_state.py` — search state data: current camera, radius, timeout, active cameras, recovery status
+- `camera_priority.py` — priority scoring: rank candidate cameras for search (graph distance initially, extensible to direction/history/ReID)
+
+---
+
 ## Database Rules
 
 Vector storage must be accessed through an abstraction such as:
 
-VectorStore
+`VectorStore`
 
 The application should not depend directly on FAISS internals.
 
-This allows future replacement of FAISS with another storage solution.
+This allows future replacement of FAISS with another storage solution. Domain modules depend on storage interfaces, not concrete database implementations.
+
+---
+
+## Pipeline Rules
+
+Purpose:
+Orchestrate the processing flow and coordinate domain modules.
+
+Primary flow:
+`camera → detection → tracking → target → reid/identity → visualization`
+
+For multi-camera recovery:
+`active camera → target loss → search manager → candidate cameras → detection/ReID → target recovery → active camera handoff`
+
+Constraints:
+- Owns queue/thread boundaries and orchestration.
+- May coordinate multiple domain modules.
+- Must not implement detection, tracking, ReID, or identity algorithms itself.
+- Must not contain camera-graph traversal algorithms that belong to the search component.
+- Should remain thin and orchestration-focused.
+
+---
+
+## Inference Rules
+
+Purpose:
+Provide a shared model-execution layer for executing AI models efficiently on shared compute/GPU resources.
+
+Responsibilities:
+- Model loading and lifecycle
+- Device placement (GPU / CPU)
+- Model caching
+- Batching where useful
+- Resource management and shared execution configuration
+
+Constraints:
+- Must not become a second `detection` or `reid` module.
+- Must not contain identity or target-management logic.
+- Model-specific preprocessing, postprocessing, and output interpretation remain in their respective domain modules (`detection`, `reid`).
+
+---
+
+## Visualization Rules
+
+Purpose:
+Render the current system state for human operators.
+
+Inputs:
+- Frame
+- Bounding boxes
+- Tracking IDs
+- Recognized identity
+- Target lock state
+- Camera ID
+- Search/recovery state
+- Confidence information
+
+Output:
+- Rendered frame
+- Display stream
+- Optional operator-facing visualization
+
+Constraints:
+- Display-only.
+- Must not perform detection, tracking, ReID, identity matching, or camera-graph decisions.
+- Must not block the processing pipeline.
 
 ---
 
@@ -301,7 +457,7 @@ Do not sacrifice tracking or identity quality merely to increase FPS.
 
 ## GPU Rules
 
-The development target includes limited VRAM.
+The development target includes limited VRAM (e.g., 4 GB GTX 1650 class).
 
 Avoid:
 
@@ -427,62 +583,3 @@ Before completion:
 - check performance impact when relevant
 - check GPU impact when relevant
 - mention known limitations
-
-## Multi-Camera Search Strategy
-
-The multi-camera subsystem must use a graph-based dynamic search strategy.
-
-Cameras form a graph where:
-
-- nodes represent cameras
-- edges represent possible physical/logical transitions
-
-The system must NOT actively run the full AI pipeline on every connected camera.
-
-When a target is confirmed on camera C:
-
-1. Camera C is the current active camera.
-2. Adjacent cameras form the initial search set.
-3. Non-adjacent cameras are ignored for expensive AI processing.
-4. If the target is not found within a configurable timeout, expand the search radius.
-5. Search radius may progress from 1-hop neighbors to 2-hop neighbors, then further if necessary.
-6. Stop expansion when the target is found or the configured maximum search radius is reached.
-
-The search manager must maintain:
-
-- current camera
-- search radius
-- search start time
-- search timeout
-- maximum radius
-- active search cameras
-- candidate priorities
-- target recovery state
-
-Camera connectivity and camera AI activity are separate concepts.
-
-A camera may remain connected while its expensive AI processing is inactive.
-
-Prefer shared inference/model instances rather than loading one model per camera.
-
-The system must support future camera prioritization using:
-
-- graph distance
-- target movement direction
-- historical transitions
-- expected travel time
-- camera reliability
-- ReID similarity
-
-The initial implementation should use graph distance and configurable timeout/radius expansion.
-
-## Multi-Camera Module Structure
-
-The multi_camera module is organized as:
-
-- camera_graph.py — graph structure: nodes, edges, adjacency queries, distance calculations
-- camera_node.py — per-camera node: camera ID, metadata, connection state, AI activity state
-- transition.py — transition data: source camera, destination camera, transition metadata
-- search_manager.py — search orchestration: expand/contract search radius, manage timeouts, activate/deactivate camera AI processing
-- search_state.py — search state data: current camera, radius, timeout, active cameras, recovery status
-- camera_priority.py — priority scoring: rank candidate cameras for search (graph distance initially, extensible to direction/history/ReID)

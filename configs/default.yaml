@@ -1,0 +1,34 @@
+# Argus Surveillance System - Default Configuration
+
+camera:
+  source: 0  # 0 for default webcam, or path/URL to video file or RTSP stream
+  name: "camera_0"
+  width: 1280
+  height: 720
+  fps: 30
+
+inference:
+  device: "auto"  # "auto", "cuda", or "cpu"
+  half_precision: false
+
+detection:
+  model_name: "yolov8n.pt"
+  confidence_threshold: 0.4
+  iou_threshold: 0.45
+  target_classes: [0]  # 0 = person in standard COCO models
+  image_size: 640
+
+tracking:
+  track_thresh: 0.4
+  match_thresh: 0.8
+  track_buffer: 30
+  min_box_area: 100.0
+
+visualization:
+  show_window: true
+  window_name: "Argus Surveillance"
+  draw_fps: true
+  draw_boxes: true
+  draw_ids: true
+  box_thickness: 2
+  font_scale: 0.6
