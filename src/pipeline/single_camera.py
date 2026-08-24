@@ -64,6 +64,7 @@ class SingleCameraPipeline:
         camera_id: str = "camera_0",
         reid_interval: int = 10,
         min_margin: float = 0.05,
+        identity_key: str = "target_0",
     ) -> None:
         self.camera = camera
         self.detector = detector
@@ -74,6 +75,7 @@ class SingleCameraPipeline:
         self.camera_id = camera_id
         self.reid_interval = reid_interval
         self.min_margin = min_margin
+        self._identity_key = identity_key
 
         self._frame_id = 0
         self._fps = 0.0
@@ -98,12 +100,12 @@ class SingleCameraPipeline:
         if selected_id is not None:
             self._register_target_appearance(selected_id)
 
-            ident = self.identity_manager.get_identity(_TARGET_IDENTITY_ID) if self.identity_manager else None
+            ident = self.identity_manager.get_identity(self._identity_key) if self.identity_manager else None
             ref_hash = get_embedding_hash(ident.reference_embedding) if (ident and ident.reference_embedding) else "None"
 
             log_reid_test(
                 f"\n[REID_TEST] TARGET_ASSIGNMENT\n"
-                f"LogicalTarget={_TARGET_IDENTITY_ID}\n"
+                f"LogicalTarget={self._identity_key}\n"
                 f"OldTracker={old_tr}\n"
                 f"NewTracker={selected_id}\n"
                 f"CurrentTargetState={self.target_manager.target.state.value}\n"
@@ -118,7 +120,7 @@ class SingleCameraPipeline:
 
             log_reid_test(
                 f"\n[REID_TEST] STATE_CHANGE\n"
-                f"LogicalTarget={_TARGET_IDENTITY_ID}\n"
+                f"LogicalTarget={self._identity_key}\n"
                 f"OldState={old_st}\n"
                 f"NewState={self.target_manager.target.state.value}\n"
                 f"TrackerID={selected_id}\n"
@@ -136,12 +138,12 @@ class SingleCameraPipeline:
         if result:
             self._register_target_appearance(track_id)
 
-            ident = self.identity_manager.get_identity(_TARGET_IDENTITY_ID) if self.identity_manager else None
+            ident = self.identity_manager.get_identity(self._identity_key) if self.identity_manager else None
             ref_hash = get_embedding_hash(ident.reference_embedding) if (ident and ident.reference_embedding) else "None"
 
             log_reid_test(
                 f"\n[REID_TEST] TARGET_ASSIGNMENT\n"
-                f"LogicalTarget={_TARGET_IDENTITY_ID}\n"
+                f"LogicalTarget={self._identity_key}\n"
                 f"OldTracker={old_tr}\n"
                 f"NewTracker={track_id}\n"
                 f"CurrentTargetState={self.target_manager.target.state.value}\n"
@@ -156,7 +158,7 @@ class SingleCameraPipeline:
 
             log_reid_test(
                 f"\n[REID_TEST] STATE_CHANGE\n"
-                f"LogicalTarget={_TARGET_IDENTITY_ID}\n"
+                f"LogicalTarget={self._identity_key}\n"
                 f"OldState={old_st}\n"
                 f"NewState={self.target_manager.target.state.value}\n"
                 f"TrackerID={track_id}\n"
@@ -180,16 +182,16 @@ class SingleCameraPipeline:
 
                     emb = self.identity_manager.register_new_target(
                         crop=crop,
-                        identity_id=_TARGET_IDENTITY_ID,
+                        identity_id=self._identity_key,
                         label="selected_target",
                     )
-                    ident = self.identity_manager.get_identity(_TARGET_IDENTITY_ID)
+                    ident = self.identity_manager.get_identity(self._identity_key)
                     dim = emb.dim if emb else 0
                     hsh = get_embedding_hash(emb)
                     gallery_count = len(ident.embeddings) if ident else 1
                     log_reid_test(
                         f"\n[REID_TEST] TARGET_SELECTED\n"
-                        f"LogicalTarget={_TARGET_IDENTITY_ID}\n"
+                        f"LogicalTarget={self._identity_key}\n"
                         f"Tracker={track_id}\n"
                         f"ReferenceEmbeddingCreated=true\n"
                         f"ReferenceEmbeddingDimension={dim}\n"
@@ -224,14 +226,14 @@ class SingleCameraPipeline:
         """
         if self.identity_manager is None:
             return None
-        ident = self.identity_manager.get_identity(_TARGET_IDENTITY_ID)
+        ident = self.identity_manager.get_identity(self._identity_key)
         if ident is None or (not ident.embeddings and ident.reference_embedding is None):
             return None
 
         im = self.identity_manager
 
         def verify(crop: np.ndarray) -> Tuple[bool, float]:
-            return im.verify_candidate_crop(crop, identity_id=_TARGET_IDENTITY_ID)
+            return im.verify_candidate_crop(crop, identity_id=self._identity_key)
 
         return verify
 
@@ -253,7 +255,10 @@ class SingleCameraPipeline:
         5. If no candidate passes or match is ambiguous, transitions to LOST.
         """
         target = self.target_manager.target
-        if not self.target_manager.is_active():
+        ident = self.identity_manager.get_identity(self._identity_key) if self.identity_manager else None
+        has_global_identity = ident is not None and (ident.reference_embedding is not None or bool(ident.embeddings))
+
+        if not self.target_manager.is_active() and not has_global_identity:
             return target
 
         if self.identity_manager is None:
@@ -267,22 +272,22 @@ class SingleCameraPipeline:
                 break
 
         # Auto-capture initial appearance if target was pre-selected (e.g. via CLI --target-id)
-        ident = self.identity_manager.get_identity(_TARGET_IDENTITY_ID)
-        if (ident is None or (not ident.embeddings and ident.reference_embedding is None)) and current_track is not None:
+        if not has_global_identity and current_track is not None:
             crop = self._extract_crop(frame, current_track.box)
             if crop is not None:
                 self.identity_manager.register_new_target(
                     crop=crop,
-                    identity_id=_TARGET_IDENTITY_ID,
+                    identity_id=self._identity_key,
                     label="selected_target",
                     timestamp_ms=timestamp_ms,
                 )
-                ident = self.identity_manager.get_identity(_TARGET_IDENTITY_ID)
+                ident = self.identity_manager.get_identity(self._identity_key)
+                has_global_identity = ident is not None and (ident.reference_embedding is not None or bool(ident.embeddings))
                 logger.info(
-                    f"[REID] Target initial appearance auto-captured | LogicalTarget={_TARGET_IDENTITY_ID} | Tracker={current_track_id}"
+                    f"[REID] Target initial appearance auto-captured | LogicalTarget={self._identity_key} | Tracker={current_track_id}"
                 )
 
-        if ident is None or (not ident.embeddings and ident.reference_embedding is None):
+        if not has_global_identity:
             return self.target_manager.update(track_result, frame=frame)
 
         ref_hash = get_embedding_hash(ident.reference_embedding) if (ident and ident.reference_embedding) else "None"
@@ -295,7 +300,7 @@ class SingleCameraPipeline:
                 query_emb = self.identity_manager.reid.extract(crop)
                 query_hash = get_embedding_hash(query_emb)
 
-                is_match, score = self.identity_manager.verify_candidate_crop(crop, _TARGET_IDENTITY_ID)
+                is_match, score = self.identity_manager.verify_candidate_crop(crop, self._identity_key)
 
                 ref_sim = ident.reference_embedding.cosine_similarity(query_emb) if (ident and ident.reference_embedding) else 0.0
                 gallery_sims = [emb.cosine_similarity(query_emb) for emb in ident.embeddings] if ident else []
@@ -305,7 +310,7 @@ class SingleCameraPipeline:
 
                 log_reid_test(
                     f"\n[REID_TEST] TARGET_VERIFICATION\n"
-                    f"LogicalTarget={_TARGET_IDENTITY_ID}\n"
+                    f"LogicalTarget={self._identity_key}\n"
                     f"Tracker={current_track_id}\n"
                     f"Frame={self._frame_id}\n"
                     f"State={target.state.value}\n"
@@ -324,7 +329,7 @@ class SingleCameraPipeline:
                     if old_state != new_state:
                         log_reid_test(
                             f"\n[REID_TEST] STATE_CHANGE\n"
-                            f"LogicalTarget={_TARGET_IDENTITY_ID}\n"
+                            f"LogicalTarget={self._identity_key}\n"
                             f"OldState={old_state}\n"
                             f"NewState={new_state}\n"
                             f"TrackerID={current_track.track_id}\n"
@@ -332,10 +337,10 @@ class SingleCameraPipeline:
                             f"ReIDScore={score:.3f}\n"
                         )
                     if self._frame_id % self.reid_interval == 0:
-                        self.identity_manager.verified_update(crop, _TARGET_IDENTITY_ID, timestamp_ms)
+                        self.identity_manager.verified_update(crop, self._identity_key, timestamp_ms)
                 else:
                     logger.warning(
-                        f"[REID] LogicalTarget={_TARGET_IDENTITY_ID} | CurrentTracker={current_track_id} | "
+                        f"[REID] LogicalTarget={self._identity_key} | CurrentTracker={current_track_id} | "
                         f"Similarity={score:.3f} (< {self.identity_manager.similarity_threshold:.2f}) | "
                         f"Decision=TARGET_IDENTITY_MISMATCH"
                     )
@@ -346,7 +351,7 @@ class SingleCameraPipeline:
 
             if current_track is None:
                 logger.info(
-                    f"[REID] LogicalTarget={_TARGET_IDENTITY_ID} | Tracker={current_track_id} | "
+                    f"[REID] LogicalTarget={self._identity_key} | Tracker={current_track_id} | "
                     f"Current target unavailable | State=LOST"
                 )
 
@@ -363,7 +368,7 @@ class SingleCameraPipeline:
 
             best_track = None
             if candidate_crops:
-                ranked = self.identity_manager.rank_candidate_crops(candidate_crops, _TARGET_IDENTITY_ID)
+                ranked = self.identity_manager.rank_candidate_crops(candidate_crops, self._identity_key)
                 for rank_idx, (cand_track, sim_score) in enumerate(ranked):
                     cand_crop = next(c for t, c in candidate_crops if t.track_id == cand_track.track_id)
                     cand_emb = self.identity_manager.reid.extract(cand_crop)
@@ -381,7 +386,7 @@ class SingleCameraPipeline:
 
                     log_reid_test(
                         f"\n[REID_TEST] CANDIDATE\n"
-                        f"LogicalTarget={_TARGET_IDENTITY_ID}\n"
+                        f"LogicalTarget={self._identity_key}\n"
                         f"CandidateTracker={cand_track.track_id}\n"
                         f"Crop: {cand_track.box.x1:.1f} {cand_track.box.y1:.1f} {cand_track.box.x2:.1f} {cand_track.box.y2:.1f}\n"
                         f"EmbeddingGenerated=true\n"
@@ -395,7 +400,7 @@ class SingleCameraPipeline:
                     )
 
                 best_item, best_score, second_score, margin = self.identity_manager.find_best_candidate(
-                    candidate_crops, _TARGET_IDENTITY_ID, min_margin=self.min_margin
+                    candidate_crops, self._identity_key, min_margin=self.min_margin
                 )
                 if best_item is not None:
                     best_track = best_item
@@ -408,7 +413,7 @@ class SingleCameraPipeline:
 
                 log_reid_test(
                     f"\n[REID_TEST] TARGET_ASSIGNMENT\n"
-                    f"LogicalTarget={_TARGET_IDENTITY_ID}\n"
+                    f"LogicalTarget={self._identity_key}\n"
                     f"OldTracker={old_tr}\n"
                     f"NewTracker={new_tr}\n"
                     f"CurrentTargetState={new_st}\n"
@@ -423,7 +428,7 @@ class SingleCameraPipeline:
 
                 log_reid_test(
                     f"\n[REID_TEST] STATE_CHANGE\n"
-                    f"LogicalTarget={_TARGET_IDENTITY_ID}\n"
+                    f"LogicalTarget={self._identity_key}\n"
                     f"OldState={old_st}\n"
                     f"NewState={new_st}\n"
                     f"TrackerID={new_tr}\n"
@@ -431,12 +436,13 @@ class SingleCameraPipeline:
                     f"ReIDScore={best_score:.3f}\n"
                 )
             else:
-                self.target_manager.mark_lost(timestamp_ms)
+                if old_st != TargetState.UNSELECTED.value:
+                    self.target_manager.mark_lost(timestamp_ms)
                 new_st = target.state.value
                 if old_st != new_st:
                     log_reid_test(
                         f"\n[REID_TEST] STATE_CHANGE\n"
-                        f"LogicalTarget={_TARGET_IDENTITY_ID}\n"
+                        f"LogicalTarget={self._identity_key}\n"
                         f"OldState={old_st}\n"
                         f"NewState={new_st}\n"
                         f"TrackerID={target.track_id}\n"
@@ -492,6 +498,35 @@ class SingleCameraPipeline:
         )
 
         return det_result, track_result, target, annotated_frame
+
+    def process_frame_headless(
+        self,
+        frame: np.ndarray,
+        timestamp_ms: float
+    ) -> Tuple[DetectionResult, TrackResult, Target]:
+        """
+        Process a single frame without visualization.
+
+        Used by the multi-camera coordinator for search cameras that
+        don't need annotation overhead.
+        """
+        self._frame_id += 1
+        self._last_frame = frame
+
+        det_result = self.detector.detect(
+            frame=frame,
+            frame_id=self._frame_id,
+            timestamp_ms=timestamp_ms
+        )
+
+        track_result = self.tracker.update(
+            detection_result=det_result,
+            frame=frame
+        )
+        self._last_track_result = track_result
+
+        target = self._manage_target_identity(track_result, frame, timestamp_ms)
+        return det_result, track_result, target
 
     def stream(self) -> Generator[Tuple[np.ndarray, TrackResult, Target], None, None]:
         """

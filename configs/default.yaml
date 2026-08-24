@@ -39,3 +39,16 @@ visualization:
   draw_ids: true
   box_thickness: 2
   font_scale: 0.6
+
+multi_camera:
+  enabled: false
+  graph_file: "configs/camera_graph.json"
+  search:
+    initial_radius: 1
+    radius_increment: 1
+    per_radius_timeout_s: 5.0
+    max_radius: 3
+    total_recovery_timeout_s: 30.0
+    confirmation_frames: 3
+  ui_port: 8765
+

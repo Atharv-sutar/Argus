@@ -61,6 +61,26 @@ class VisualizationConfig:
 
 
 @dataclass
+class SearchConfig:
+    """Configuration for multi-camera progressive search."""
+    initial_radius: int = 1
+    radius_increment: int = 1
+    per_radius_timeout_s: float = 5.0
+    max_radius: int = 3
+    total_recovery_timeout_s: float = 30.0
+    confirmation_frames: int = 3
+
+
+@dataclass
+class MultiCameraConfig:
+    """Configuration for the multi-camera graph system."""
+    enabled: bool = False
+    graph_file: str = "configs/camera_graph.json"
+    search: SearchConfig = field(default_factory=SearchConfig)
+    ui_port: int = 8765
+
+
+@dataclass
 class AppConfig:
     camera: CameraConfig = field(default_factory=CameraConfig)
     inference: InferenceConfig = field(default_factory=InferenceConfig)
@@ -68,6 +88,7 @@ class AppConfig:
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
     reid: ReIDConfig = field(default_factory=ReIDConfig)
     visualization: VisualizationConfig = field(default_factory=VisualizationConfig)
+    multi_camera: MultiCameraConfig = field(default_factory=MultiCameraConfig)
 
     @classmethod
     def from_yaml(cls, path: Union[str, Path]) -> AppConfig:
@@ -90,6 +111,11 @@ class AppConfig:
         tracking_data = data.get("tracking", {})
         reid_data = data.get("reid", {})
         vis_data = data.get("visualization", {})
+        mc_data = data.get("multi_camera", {})
+
+        search_data = mc_data.pop("search", {}) if isinstance(mc_data, dict) else {}
+        search_config = SearchConfig(**search_data) if search_data else SearchConfig()
+        mc_config = MultiCameraConfig(**mc_data, search=search_config) if mc_data else MultiCameraConfig()
 
         return cls(
             camera=CameraConfig(**camera_data),
@@ -98,4 +124,6 @@ class AppConfig:
             tracking=TrackingConfig(**tracking_data),
             reid=ReIDConfig(**reid_data),
             visualization=VisualizationConfig(**vis_data),
+            multi_camera=mc_config,
         )
+
