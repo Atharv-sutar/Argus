@@ -24,6 +24,13 @@ tracking:
   track_buffer: 30
   min_box_area: 100.0
 
+reid:
+  model_name: "mobilenet_v3_small"
+  similarity_threshold: 0.80
+  min_margin: 0.08
+  extract_interval_frames: 10
+  gallery_size: 5
+
 visualization:
   show_window: true
   window_name: "Argus Surveillance"

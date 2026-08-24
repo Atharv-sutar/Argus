@@ -67,7 +67,7 @@ class OpenCVCamera(BaseCamera):
         return self._cap is not None and self._cap.isOpened()
 
     def read(self) -> Tuple[bool, Optional[np.ndarray], float]:
-        if not self.is_opened():
+        if not self.is_opened() or self._cap is None:
             return False, None, 0.0
 
         success, frame = self._cap.read()
@@ -75,7 +75,14 @@ class OpenCVCamera(BaseCamera):
             return False, None, 0.0
 
         self._frame_count += 1
-        now_ms = (time.time() - (self._start_time or time.time())) * 1000.0
+
+        # Use video stream timestamp if available (for video files/streams), else wall-clock
+        pos_msec = self._cap.get(cv2.CAP_PROP_POS_MSEC) if (cv2 is not None and not isinstance(self.source, int)) else 0.0
+        if pos_msec > 0.0:
+            now_ms = float(pos_msec)
+        else:
+            now_ms = (time.time() - (self._start_time or time.time())) * 1000.0
+
         return True, frame, now_ms
 
     def release(self) -> None:

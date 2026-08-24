@@ -41,6 +41,15 @@ class TrackingConfig:
 
 
 @dataclass
+class ReIDConfig:
+    model_name: str = "mobilenet_v3_small"
+    similarity_threshold: float = 0.80
+    min_margin: float = 0.08
+    extract_interval_frames: int = 10
+    gallery_size: int = 5
+
+
+@dataclass
 class VisualizationConfig:
     show_window: bool = True
     window_name: str = "Argus Surveillance"
@@ -57,6 +66,7 @@ class AppConfig:
     inference: InferenceConfig = field(default_factory=InferenceConfig)
     detection: DetectionConfig = field(default_factory=DetectionConfig)
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
+    reid: ReIDConfig = field(default_factory=ReIDConfig)
     visualization: VisualizationConfig = field(default_factory=VisualizationConfig)
 
     @classmethod
@@ -78,6 +88,7 @@ class AppConfig:
         inference_data = data.get("inference", {})
         detection_data = data.get("detection", {})
         tracking_data = data.get("tracking", {})
+        reid_data = data.get("reid", {})
         vis_data = data.get("visualization", {})
 
         return cls(
@@ -85,5 +96,6 @@ class AppConfig:
             inference=InferenceConfig(**inference_data),
             detection=DetectionConfig(**detection_data),
             tracking=TrackingConfig(**tracking_data),
+            reid=ReIDConfig(**reid_data),
             visualization=VisualizationConfig(**vis_data),
         )

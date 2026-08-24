@@ -85,8 +85,17 @@ class YOLODetector(BaseDetector):
                     confs = boxes_obj.conf.cpu().numpy()
                     cls_ids = boxes_obj.cls.cpu().numpy().astype(int)
 
+                    h, w = frame.shape[:2]
                     for box_coords, conf, cid in zip(xyxy, confs, cls_ids):
                         x1, y1, x2, y2 = map(float, box_coords)
+                        # Clip coordinates strictly within frame boundaries
+                        x1 = max(0.0, min(float(w), x1))
+                        y1 = max(0.0, min(float(h), y1))
+                        x2 = max(0.0, min(float(w), x2))
+                        y2 = max(0.0, min(float(h), y2))
+                        if x2 <= x1 or y2 <= y1:
+                            continue
+
                         bbox = BoundingBox(
                             x1=x1,
                             y1=y1,

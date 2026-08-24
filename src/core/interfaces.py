@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from typing import Optional, Tuple
 import numpy as np
 
-from src.core.types import DetectionResult, TrackResult
+from src.core.types import DetectionResult, Embedding, TrackResult
 
 
 class BaseCamera(ABC):
@@ -85,3 +85,50 @@ class BaseTracker(ABC):
     def reset(self) -> None:
         """Reset internal tracker state (e.g. on stream restart)."""
         pass
+
+
+class BaseReID(ABC):
+    """Abstract interface for person Re-Identification feature extraction models."""
+
+    @abstractmethod
+    def extract(self, crop: np.ndarray) -> Embedding:
+        """
+        Extract an appearance feature embedding from a cropped person image.
+
+        Args:
+            crop: BGR image array of the cropped person observation.
+
+        Returns:
+            Embedding: Normalized feature vector.
+        """
+        pass
+
+    @abstractmethod
+    def extract_batch(self, crops: list[np.ndarray]) -> list[Embedding]:
+        """Extract appearance embeddings for a batch of person crops."""
+        pass
+
+
+class BaseVectorStore(ABC):
+    """Abstract storage interface for searching and storing identity appearance embeddings."""
+
+    @abstractmethod
+    def add(self, embedding: Embedding, identity_id: str) -> None:
+        """Add an embedding associated with an identity ID."""
+        pass
+
+    @abstractmethod
+    def search(self, embedding: Embedding, top_k: int = 1) -> list[Tuple[str, float]]:
+        """
+        Search for nearest matching identities by embedding similarity.
+
+        Returns:
+            list[Tuple[str, float]]: List of (identity_id, similarity_score) ranked by similarity.
+        """
+        pass
+
+    @abstractmethod
+    def clear(self) -> None:
+        """Clear all stored embeddings."""
+        pass
+

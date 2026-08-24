@@ -14,10 +14,12 @@ from src.core.types import Target, TargetState, TrackResult
 
 
 def _get_color(track_id: int) -> Tuple[int, int, int]:
-    """Generates a stable, visually distinct BGR color from track ID."""
-    np.random.seed(track_id * 101 % 2**32)
-    color = np.random.randint(64, 235, size=3).tolist()
-    return (int(color[0]), int(color[1]), int(color[2]))
+    """Generates a stable, visually distinct BGR color from track ID without mutating global random state."""
+    # Deterministic integer hash mapped to vivid BGR range [64, 235]
+    b = int(64 + ((track_id * 73 + 19) % 171))
+    g = int(64 + ((track_id * 151 + 43) % 171))
+    r = int(64 + ((track_id * 229 + 97) % 171))
+    return (b, g, r)
 
 
 class FrameAnnotator:
@@ -127,7 +129,7 @@ class FrameAnnotator:
         # 2. Draw Target Highlight (if active)
         if target is not None and target.state != TargetState.UNSELECTED:
             target_color = (0, 215, 255)  # Vibrant Gold / Yellow
-            if target.state == TargetState.LOST:
+            if target.state in (TargetState.LOST, TargetState.UNCERTAIN):
                 target_color = (0, 100, 255)  # Amber / Warning Orange
 
             # Find target track or use last known box
@@ -143,10 +145,16 @@ class FrameAnnotator:
 
             if target_box is not None:
                 tx1, ty1, tx2, ty2 = map(int, target_box.as_xyxy())
-                cv2.rectangle(canvas, (tx1, ty1), (tx2, ty2), target_color, self.box_thickness + 1)
-                self._draw_target_brackets(canvas, tx1, ty1, tx2, ty2, target_color)
+                if target.state == TargetState.LOST:
+                    # For LOST state, draw corner brackets only to indicate last known position
+                    self._draw_target_brackets(canvas, tx1, ty1, tx2, ty2, target_color, length=12, thickness=2)
+                else:
+                    cv2.rectangle(canvas, (tx1, ty1), (tx2, ty2), target_color, self.box_thickness + 1)
+                    self._draw_target_brackets(canvas, tx1, ty1, tx2, ty2, target_color)
 
-                status_text = f"[TARGET ID: {target.track_id}] {target.state.value}"
+                status_text = f"[TARGET] {target.state.value}"
+                if target.state != TargetState.LOST:
+                    status_text += f" (Tracker: {target.track_id})"
                 if target.state == TargetState.LOST and target.lost_duration_ms > 0:
                     status_text += f" ({target.lost_duration_ms / 1000.0:.1f}s)"
 
@@ -174,7 +182,7 @@ class FrameAnnotator:
         if track_result is not None:
             hud_lines.append(f"Visible: {track_result.count}")
         if target is not None and target.state != TargetState.UNSELECTED:
-            hud_lines.append(f"Target: ID {target.track_id} [{target.state.value}]")
+            hud_lines.append(f"Target: [{target.state.value}] Tracker: {target.track_id}")
         if self.draw_fps and fps is not None:
             hud_lines.append(f"FPS: {fps:.1f}")
 

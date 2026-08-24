@@ -1,5 +1,6 @@
-"""Unit tests for TargetManager."""
+"""Unit tests for TargetManager — comprehensive identity preservation & verification tests."""
 
+import numpy as np
 import pytest
 from src.core.types import BoundingBox, TargetState, Track, TrackResult, TrackState
 from src.target.manager import TargetManager
@@ -27,13 +28,11 @@ def test_target_selection_by_point():
     t2 = Track(track_id=20, box=box2)
     res = TrackResult(tracks=[t1, t2], frame_id=1, timestamp_ms=33.3)
 
-    # Click inside box 1
     selected_id = tm.select_by_point(100.0, 150.0, res)
     assert selected_id == 10
     assert tm.target.track_id == 10
     assert tm.target.state == TargetState.LOCKED
 
-    # Click empty space
     tm.clear()
     assert tm.target.state == TargetState.UNSELECTED
     empty_click = tm.select_by_point(500.0, 500.0, res)
@@ -47,44 +46,193 @@ def test_target_lifecycle_and_loss():
     t1 = Track(track_id=5, box=box)
     res1 = TrackResult(tracks=[t1], frame_id=1, timestamp_ms=100.0)
 
-    # Select target
     tm.select_by_track_id(5, res1)
     assert tm.target.state == TargetState.LOCKED
 
-    # Frame 2: Target visible -> TRACKING
     t1_moved = Track(track_id=5, box=BoundingBox(x1=105.0, y1=100.0, x2=205.0, y2=300.0))
     res2 = TrackResult(tracks=[t1_moved], frame_id=2, timestamp_ms=133.3)
     tm.update(res2)
     assert tm.target.state == TargetState.TRACKING
     assert tm.target.lost_duration_ms == 0.0
 
-    # Frame 3: Target lost temporarily
     res3 = TrackResult(tracks=[], frame_id=3, timestamp_ms=200.0)
     tm.update(res3)
     assert tm.target.state == TargetState.LOST
     assert tm.target.lost_duration_ms == pytest.approx(66.7, 0.01)
 
-    # Frame 4: Target exceeds lost timeout
     res4 = TrackResult(tracks=[], frame_id=4, timestamp_ms=700.0)
     tm.update(res4)
     assert tm.target.state == TargetState.LOST
     assert tm.target.lost_duration_ms >= 500.0
 
 
-def test_target_spatial_reassociation():
-    tm = TargetManager(reassociation_iou_thresh=0.3)
+# ═══════════════════════════════════════════════════════════════════
+# Test A: Same tracker ID but wrong person inside (mismatch detected)
+# ═══════════════════════════════════════════════════════════════════
+
+def test_same_tracker_id_wrong_person_rejected():
+    """
+    Tracker 52 continues to exist, but Person B walked in front and occupied Tracker 52.
+    ReID verification must detect mismatch and transition target to LOST (not track Person B).
+    """
+    tm = TargetManager(min_margin=0.05)
     box = BoundingBox(x1=100.0, y1=100.0, x2=200.0, y2=300.0)
-    t1 = Track(track_id=1, box=box)
+    t1 = Track(track_id=52, box=box)
     res1 = TrackResult(tracks=[t1], frame_id=1, timestamp_ms=100.0)
+    tm.select_by_track_id(52, res1)
+
+    frame = np.zeros((400, 400, 3), dtype=np.uint8)
+
+    # Verifier reports Tracker 52 occupant has low similarity (Person B)
+    def verify_wrong(crop: np.ndarray):
+        return (False, 0.28)
+
+    tm.update(res1, frame=frame, verify_fn=verify_wrong)
+
+    # Must NOT remain TRACKING on wrong person
+    assert tm.target.state == TargetState.LOST
+    assert tm.target.track_id == 52
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Test B: Wrong person nearby is rejected
+# ═══════════════════════════════════════════════════════════════════
+
+def test_nearby_wrong_person_rejected():
+    """
+    Person B is nearby with high IoU but poor ReID similarity.
+    The system must NOT switch to Person B.
+    """
+    tm = TargetManager(reassociation_iou_thresh=0.3, min_margin=0.05)
+
+    box_a = BoundingBox(x1=100.0, y1=100.0, x2=200.0, y2=300.0)
+    t_a = Track(track_id=1, box=box_a)
+    res1 = TrackResult(tracks=[t_a], frame_id=1, timestamp_ms=100.0)
     tm.select_by_track_id(1, res1)
-    tm.update(res1)
 
-    # Frame 2: Track ID 1 dropped, but new Track ID 2 appears with overlapping box
-    box_new = BoundingBox(x1=102.0, y1=101.0, x2=202.0, y2=301.0)
-    t2 = Track(track_id=2, box=box_new)
-    res2 = TrackResult(tracks=[t2], frame_id=2, timestamp_ms=133.3)
+    # Person B appears nearby — track 1 is gone, track 2 is visible
+    box_b = BoundingBox(x1=102.0, y1=101.0, x2=202.0, y2=301.0)
+    t_b = Track(track_id=2, box=box_b)
+    res2 = TrackResult(tracks=[t_b], frame_id=2, timestamp_ms=133.3)
 
-    tm.update(res2)
-    # Should re-associate target to ID 2
-    assert tm.target.track_id == 2
+    frame = np.zeros((400, 400, 3), dtype=np.uint8)
+
+    def reject_wrong_person(crop: np.ndarray):
+        return (False, 0.25)
+
+    tm.update(res2, frame=frame, verify_fn=reject_wrong_person)
+
+    assert tm.target.track_id == 1  # Must NOT switch to 2
+    assert tm.target.state == TargetState.LOST
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Test C: Target found in another tracker (52 becomes B, 53 is A)
+# ═══════════════════════════════════════════════════════════════════
+
+def test_target_found_in_another_tracker():
+    """
+    Tracker 52 has become Person B (mismatch).
+    Tracker 53 is Person A.
+    System must reject 52 and switch to 53!
+    """
+    tm = TargetManager(min_margin=0.05)
+    box_52 = BoundingBox(x1=100.0, y1=100.0, x2=200.0, y2=300.0)
+    box_53 = BoundingBox(x1=250.0, y1=100.0, x2=350.0, y2=300.0)
+    t52 = Track(track_id=52, box=box_52)
+    t53 = Track(track_id=53, box=box_53)
+    res = TrackResult(tracks=[t52, t53], frame_id=2, timestamp_ms=133.3)
+
+    tm.select_by_track_id(52, res)
+
+    frame = np.zeros((400, 400, 3), dtype=np.uint8)
+
+    def verify_by_crop_location(crop: np.ndarray):
+        # Tracker 53 is Person A, 52 is Person B
+        if crop.shape[1] > 0 and crop.shape[0] > 0:
+            # Distinguish based on dummy crop check or simulated mock
+            pass
+        return (True, 0.92)
+
+    # Let verify_fn distinguish: 52 is False, 53 is True (0.92)
+    call_records = []
+    def selective_verify(crop: np.ndarray):
+        # We can identify which track is being queried
+        # First query is 52 (current track) -> returns False
+        # Second query is 53 (candidate) -> returns True (0.92)
+        if len(call_records) == 0:
+            call_records.append(52)
+            return (False, 0.30)
+        else:
+            call_records.append(53)
+            return (True, 0.92)
+
+    tm.update(res, frame=frame, verify_fn=selective_verify)
+
+    assert tm.target.track_id == 53
     assert tm.target.state == TargetState.TRACKING
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Test D: Two plausible candidates with clear margin -> best selected
+# ═══════════════════════════════════════════════════════════════════
+
+def test_margin_based_candidate_selection():
+    """
+    Candidate 24 -> 0.70
+    Candidate 25 -> 0.91 (Margin = 0.21 >= 0.05)
+    System must choose candidate 25.
+    """
+    tm = TargetManager(min_margin=0.05)
+    t24 = Track(track_id=24, box=BoundingBox(10, 10, 50, 100))
+    t25 = Track(track_id=25, box=BoundingBox(60, 10, 100, 100))
+    res = TrackResult(tracks=[t24, t25], frame_id=2, timestamp_ms=133.3)
+
+    # Target 52 is missing
+    tm.select_by_track_id(52)
+
+    frame = np.zeros((400, 400, 3), dtype=np.uint8)
+
+    calls = [0]
+    def verify_two(crop: np.ndarray):
+        calls[0] += 1
+        if calls[0] == 1:
+            return (True, 0.70)  # track 24
+        return (True, 0.91)      # track 25
+
+    tm.update(res, frame=frame, verify_fn=verify_two)
+
+    assert tm.target.track_id == 25
+    assert tm.target.state == TargetState.TRACKING
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Test E: Ambiguous candidates (margin < min_margin) -> no switch
+# ═══════════════════════════════════════════════════════════════════
+
+def test_ambiguous_candidates_rejected():
+    """
+    Candidate 24 -> 0.73
+    Candidate 25 -> 0.71 (Margin = 0.02 < 0.05)
+    Ambiguous -> must NOT switch, must transition to LOST!
+    """
+    tm = TargetManager(min_margin=0.05)
+    t24 = Track(track_id=24, box=BoundingBox(10, 10, 50, 100))
+    t25 = Track(track_id=25, box=BoundingBox(60, 10, 100, 100))
+    res = TrackResult(tracks=[t24, t25], frame_id=2, timestamp_ms=133.3)
+
+    tm.select_by_track_id(52)
+
+    frame = np.zeros((400, 400, 3), dtype=np.uint8)
+
+    calls = [0]
+    def verify_ambiguous(crop: np.ndarray):
+        calls[0] += 1
+        if calls[0] == 1:
+            return (True, 0.73)
+        return (True, 0.71)
+
+    tm.update(res, frame=frame, verify_fn=verify_ambiguous)
+
+    # Ambiguous match must NOT be accepted
+    assert tm.target.state == TargetState.LOST

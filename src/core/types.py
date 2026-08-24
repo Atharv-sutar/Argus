@@ -132,6 +132,7 @@ class TargetState(str, Enum):
     UNSELECTED = "UNSELECTED"
     LOCKED = "LOCKED"
     TRACKING = "TRACKING"
+    UNCERTAIN = "UNCERTAIN"
     LOST = "LOST"
     RECOVERING = "RECOVERING"
 
@@ -145,4 +146,63 @@ class Target:
     last_seen_frame: int = 0
     last_seen_timestamp_ms: float = 0.0
     lost_duration_ms: float = 0.0
+
+
+@dataclass
+class Embedding:
+    """Represents a feature vector extracted from a person observation crop."""
+    vector: np.ndarray
+    dim: int = field(init=False)
+
+    def __post_init__(self) -> None:
+        flat = np.asarray(self.vector, dtype=np.float32).flatten()
+        norm = float(np.linalg.norm(flat))
+        if norm > 0.0:
+            self.vector = flat / norm
+        else:
+            self.vector = flat
+        object.__setattr__(self, "dim", self.vector.shape[0])
+
+    def cosine_similarity(self, other: Embedding) -> float:
+        """Computes cosine similarity between two normalized embedding vectors."""
+        if self.dim != other.dim:
+            raise ValueError(f"Embedding dimension mismatch: {self.dim} vs {other.dim}")
+        return float(np.dot(self.vector, other.vector))
+
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, Embedding):
+            return False
+        return bool(np.array_equal(self.vector, other.vector))
+
+
+@dataclass
+class Identity:
+    """Represents a unique known identity with an appearance gallery."""
+    identity_id: str
+    label: str = "target_0"
+    reference_embedding: Optional[Embedding] = None
+    embeddings: List[Embedding] = field(default_factory=list)
+    last_seen_timestamp_ms: float = 0.0
+
+    def compute_similarity(self, query: Embedding) -> float:
+        """
+        Returns similarity score against stored identity.
+        Gives primary weight to the immutable reference embedding while
+        allowing verified gallery observations to assist in pose/viewpoint shifts.
+        """
+        if self.reference_embedding is None:
+            return max(emb.cosine_similarity(query) for emb in self.embeddings) if self.embeddings else 0.0
+
+        ref_sim = self.reference_embedding.cosine_similarity(query)
+        if not self.embeddings:
+            return ref_sim
+
+        # Drift protection gate: query must have a minimum baseline similarity to reference
+        # to prevent matching against a contaminated/drifted gallery.
+        if ref_sim < 0.72:
+            return ref_sim
+
+        gallery_max = max(emb.cosine_similarity(query) for emb in self.embeddings)
+        return max(ref_sim, gallery_max)
+
 

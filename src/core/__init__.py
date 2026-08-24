@@ -4,7 +4,9 @@ from src.core.types import (
     BoundingBox,
     Detection,
     DetectionResult,
+    Embedding,
     FrameData,
+    Identity,
     Target,
     TargetState,
     Track,
@@ -14,14 +16,18 @@ from src.core.types import (
 from src.core.interfaces import (
     BaseCamera,
     BaseDetector,
+    BaseReID,
     BaseTracker,
+    BaseVectorStore,
 )
 
 __all__ = [
     "BoundingBox",
     "Detection",
     "DetectionResult",
+    "Embedding",
     "FrameData",
+    "Identity",
     "Target",
     "TargetState",
     "Track",
@@ -29,5 +35,7 @@ __all__ = [
     "TrackState",
     "BaseCamera",
     "BaseDetector",
+    "BaseReID",
     "BaseTracker",
+    "BaseVectorStore",
 ]

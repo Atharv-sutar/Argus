@@ -15,7 +15,9 @@ except ImportError:
 from src.camera.capture import OpenCVCamera, SyntheticCamera
 from src.core.config import AppConfig
 from src.detection.yolo_detector import YOLODetector
+from src.identity.manager import IdentityManager
 from src.pipeline.single_camera import SingleCameraPipeline
+from src.reid.extractor import PyTorchReIDExtractor
 from src.target.manager import TargetManager
 from src.tracking.byte_tracker import ByteTracker
 from src.visualization.annotator import FrameAnnotator
@@ -77,7 +79,19 @@ def build_pipeline(
     if initial_target_id is not None:
         target_manager.select_by_track_id(initial_target_id)
 
-    # 5. Annotator
+    # 5. ReID & Identity Manager
+    reid_extractor = PyTorchReIDExtractor(
+        model_name=config.reid.model_name,
+        device=dev,
+    )
+    identity_manager = IdentityManager(
+        reid_extractor=reid_extractor,
+        similarity_threshold=config.reid.similarity_threshold,
+        min_margin=config.reid.min_margin,
+        max_gallery_size=config.reid.gallery_size,
+    )
+
+    # 6. Annotator
     annotator = FrameAnnotator(
         draw_fps=config.visualization.draw_fps,
         draw_boxes=config.visualization.draw_boxes,
@@ -91,8 +105,11 @@ def build_pipeline(
         detector=detector,
         tracker=tracker,
         target_manager=target_manager,
+        identity_manager=identity_manager,
         annotator=annotator,
         camera_id=config.camera.name,
+        reid_interval=config.reid.extract_interval_frames,
+        min_margin=config.reid.min_margin,
     )
 
 

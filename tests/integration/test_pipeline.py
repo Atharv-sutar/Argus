@@ -1,11 +1,13 @@
-"""Integration tests for the single-camera pipeline with target tracking."""
+"""Integration tests for the single-camera pipeline with target tracking and ReID."""
 
 from typing import Optional
 import numpy as np
+import pytest
 
 from src.camera.capture import SyntheticCamera
-from src.core.interfaces import BaseDetector
-from src.core.types import BoundingBox, Detection, DetectionResult, TargetState
+from src.core.interfaces import BaseDetector, BaseReID
+from src.core.types import BoundingBox, Detection, DetectionResult, Embedding, TargetState
+from src.identity.manager import IdentityManager
 from src.pipeline.single_camera import SingleCameraPipeline
 from src.target.manager import TargetManager
 from src.tracking.byte_tracker import ByteTracker
@@ -21,7 +23,6 @@ class MockDetector(BaseDetector):
         frame_id: int = 0,
         timestamp_ms: float = 0.0
     ) -> DetectionResult:
-        # Detect a simulated person box in the frame
         cx = int(100 + (frame_id * 2) % 200)
         box = BoundingBox(
             x1=float(cx - 30),
@@ -32,6 +33,20 @@ class MockDetector(BaseDetector):
         )
         det = Detection(box=box, class_id=0, class_name="person", confidence=0.92)
         return DetectionResult(detections=[det], frame_id=frame_id, timestamp_ms=timestamp_ms)
+
+
+class MockReID(BaseReID):
+    """Deterministic mock ReID for integration testing."""
+
+    def extract(self, crop: np.ndarray) -> Embedding:
+        if crop is None or crop.size == 0:
+            return Embedding(vector=np.zeros(4, dtype=np.float32))
+        mean_val = float(np.mean(crop))
+        angle = (mean_val / 255.0) * (np.pi / 2.0)
+        return Embedding(vector=np.array([np.cos(angle), np.sin(angle), 0.0, 0.0], dtype=np.float32))
+
+    def extract_batch(self, crops: list[np.ndarray]) -> list[Embedding]:
+        return [self.extract(c) for c in crops]
 
 
 def test_single_camera_pipeline_with_target():
@@ -65,5 +80,130 @@ def test_single_camera_pipeline_with_target():
     for annotated_frame, track_result, target in pipeline.stream():
         assert target.state == TargetState.TRACKING
         assert target.track_id == track_id
+
+    pipeline.stop()
+
+
+def test_single_camera_pipeline_with_reid_recovery():
+    camera = SyntheticCamera(width=320, height=240, fps=30, max_frames=5)
+    detector = MockDetector()
+    tracker = ByteTracker(track_thresh=0.4, match_thresh=0.5)
+    target_manager = TargetManager()
+    reid = MockReID()
+    identity_manager = IdentityManager(reid_extractor=reid, similarity_threshold=0.8)
+
+    pipeline = SingleCameraPipeline(
+        camera=camera,
+        detector=detector,
+        tracker=tracker,
+        target_manager=target_manager,
+        identity_manager=identity_manager,
+        reid_interval=1,
+    )
+
+    # Frame 1: track target
+    success, frame, ts = camera.read()
+    det_res, track_res, target, annotated = pipeline.process_frame(frame, ts)
+    track_id = track_res.tracks[0].track_id
+    pipeline.select_target_by_point(100.0, 150.0)
+
+    # Immediate registration should have captured reference appearance
+    ident = identity_manager.get_identity("target_0")
+    assert ident is not None
+    assert ident.reference_embedding is not None
+    assert len(ident.embeddings) > 0
+
+    # Frame 2: process frame and verify target continues TRACKING
+    success, frame, ts = camera.read()
+    _, _, target, _ = pipeline.process_frame(frame, ts)
+    assert target.state == TargetState.TRACKING
+
+    pipeline.stop()
+
+
+def test_target_leaves_frame_b_rejected_a_recovered():
+    """
+    Direct verification of the manual failure scenario:
+    1. Frame 1: Person A and Person B are both visible. User selects Person A.
+    2. Frame 2: Person A leaves frame, only Person B remains.
+       Result: Target must be LOST. Person B must NEVER become target.
+    3. Frame 3: Person A returns (both A and B visible).
+       Result: Person A is recognized and recovered as target.
+    """
+    class TwoPersonDetector(BaseDetector):
+        def __init__(self):
+            self.mode = "BOTH_VISIBLE"
+
+        def detect(self, frame, frame_id=0, timestamp_ms=0.0):
+            dets = []
+            if self.mode in ("BOTH_VISIBLE", "ONLY_A"):
+                # Person A on left: (50, 50, 100, 200)
+                box_a = BoundingBox(50.0, 50.0, 100.0, 200.0, confidence=0.95)
+                dets.append(Detection(box=box_a, class_id=0, class_name="person", confidence=0.95))
+            if self.mode in ("BOTH_VISIBLE", "ONLY_B"):
+                # Person B on right: (200, 50, 250, 200)
+                box_b = BoundingBox(200.0, 50.0, 250.0, 200.0, confidence=0.95)
+                dets.append(Detection(box=box_b, class_id=0, class_name="person", confidence=0.95))
+            return DetectionResult(detections=dets, frame_id=frame_id, timestamp_ms=timestamp_ms)
+
+    class ColorDiscriminativeReID(BaseReID):
+        def extract(self, crop: np.ndarray) -> Embedding:
+            # Person A (left region) has distinct blue/green tone; Person B (right region) has dark tone
+            # Mean color of crop determines embedding
+            mean_c = np.mean(crop, axis=(0, 1)) if (crop is not None and crop.size > 0) else np.zeros(3)
+            # Create normalized vector where blue/green is distinct from dark/red
+            vec = np.array([mean_c[0], mean_c[1], mean_c[2], 100.0], dtype=np.float32)
+            return Embedding(vector=vec)
+
+        def extract_batch(self, crops: list[np.ndarray]) -> list[Embedding]:
+            return [self.extract(c) for c in crops]
+
+    camera = SyntheticCamera(width=320, height=240, fps=30, max_frames=10)
+    detector = TwoPersonDetector()
+    tracker = ByteTracker(track_thresh=0.4, match_thresh=0.5)
+    reid = ColorDiscriminativeReID()
+    identity_manager = IdentityManager(reid_extractor=reid, similarity_threshold=0.85, min_margin=0.08)
+
+    pipeline = SingleCameraPipeline(
+        camera=camera,
+        detector=detector,
+        tracker=tracker,
+        identity_manager=identity_manager,
+        reid_interval=1,
+    )
+
+    # Frame 1: Person A and B visible. Paint Person A blue and Person B red on frame
+    frame1 = np.zeros((240, 320, 3), dtype=np.uint8)
+    frame1[50:200, 50:100] = [255, 50, 50]   # Person A: Blue
+    frame1[50:200, 200:250] = [50, 50, 255]  # Person B: Red
+
+    det_res, track_res, target, _ = pipeline.process_frame(frame1, timestamp_ms=100.0)
+    assert track_res.count == 2
+    # Select Person A (x=75, y=100)
+    track_id_a = pipeline.select_target_by_point(75.0, 100.0)
+    assert track_id_a is not None
+    assert pipeline.current_target.state == TargetState.LOCKED
+
+    # Frame 2: Person A leaves. Only Person B is visible
+    detector.mode = "ONLY_B"
+    frame2 = np.zeros((240, 320, 3), dtype=np.uint8)
+    frame2[50:200, 200:250] = [50, 50, 255]  # Person B: Red
+
+    _, track_res2, target2, _ = pipeline.process_frame(frame2, timestamp_ms=133.3)
+    # Target MUST be LOST. Person B must NEVER be accepted!
+    assert target2.state == TargetState.LOST
+    assert target2.track_id == track_id_a  # Logical target still refers to A
+
+    # Frame 3: Person A enters again. Both A and B are visible
+    detector.mode = "BOTH_VISIBLE"
+    frame3 = np.zeros((240, 320, 3), dtype=np.uint8)
+    frame3[50:200, 50:100] = [255, 50, 50]   # Person A: Blue
+    frame3[50:200, 200:250] = [50, 50, 255]  # Person B: Red
+
+    _, track_res3, target3, _ = pipeline.process_frame(frame3, timestamp_ms=166.6)
+    # Person A MUST be recovered!
+    assert target3.state == TargetState.TRACKING
+    # Person A is tracked on left box
+    assert target3.last_known_box.x1 == pytest.approx(50.0, abs=5.0)
 
     pipeline.stop()
