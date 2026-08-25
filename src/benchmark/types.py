@@ -73,6 +73,15 @@ class BenchmarkObservation:
     is_hard_negative: bool = False
     hard_negative_target_id: Optional[str] = None
 
+    def get_crop(self) -> Optional[np.ndarray]:
+        if self.crop is not None:
+            return self.crop
+        if self.image_path:
+            import cv2
+            self.crop = cv2.imread(self.image_path)
+            return self.crop
+        return None
+
 
 @dataclass
 class EvaluationEvent:

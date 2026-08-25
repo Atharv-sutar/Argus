@@ -117,3 +117,66 @@ def test_target_identity_anchor_immutability_over_100_cycles():
     final_cluster_0 = ident.anchor.clusters[0].centroid.vector
     assert np.allclose(initial_cluster_0, final_cluster_0, atol=1e-6)
     assert len(ident.trusted_gallery) == 1
+
+
+def test_lone_bystander_during_target_loss_never_adopted():
+    """
+    Gap 4 Regression Test:
+    Target disappears and state transitions to LOST.
+    A lone bystander (Track 99) remains visible for 20 continuous frames.
+    Verify:
+    1. EvidenceEngine strictly marks the candidate NO_MATCH / is_confirmed=False.
+    2. No VerifiedIdentityDecision token is issued for the bystander.
+    3. TargetManager reassociate_target is never called with a valid token.
+    4. Target remains in LOST state with track_id unchanged.
+    """
+    reid = MockDeterministicReID()
+    im = IdentityManager(
+        reid_extractor=reid,
+        similarity_threshold=0.90,
+        reacquisition_threshold=0.95,
+        reference_threshold=0.92,
+    )
+
+    # 1. Enroll Target with high pixel brightness crop
+    target_crop = np.full((120, 60, 3), 240, dtype=np.uint8)
+    im.register_new_target(target_crop, identity_id="target_vip", label="VIP", timestamp_ms=100.0)
+
+    # 2. Setup TargetManager and simulate loss
+    tm = TargetManager()
+    tm.select_by_track_id(1)
+    tm.mark_lost(timestamp_ms=500.0)
+    assert tm.target.state == TargetState.LOST
+    assert tm.target.track_id == 1
+
+    # 3. Bystander enters (Track 99) with dark pixel brightness crop (distinct appearance)
+    bystander_crop = np.full((120, 60, 3), 20, dtype=np.uint8)
+    bystander_track = Track(track_id=99, box=BoundingBox(100, 100, 160, 220))
+
+    for frame_id in range(1, 25):
+        t_ms = 1000.0 + frame_id * 33.3
+        cand_eval = im.evaluate_candidate_crop(
+            crop=bystander_crop,
+            identity_id="target_vip",
+        )
+        assert cand_eval.is_match is False
+
+        decision = im.evidence_engine.evaluate_all_candidates(
+            candidate_evaluations=[(bystander_track, cand_eval.candidate_score, cand_eval.is_match, cand_eval.crop_quality_score)],
+            target_identity_id="target_vip",
+            current_tracked_id=None,
+            is_reacquisition=True,
+        )
+
+        # Bystander MUST NOT be confirmed and MUST NOT get a token
+        assert decision.is_confirmed is False
+        assert decision.verified_token is None
+        assert decision.best_track_id is None
+
+        if decision.verified_token is not None:
+            tm.reassociate_target(bystander_track, frame_id=frame_id, timestamp_ms=t_ms, decision=decision.verified_token)
+
+    # Target state MUST remain LOST and target.track_id must NOT become 99
+    assert tm.target.state == TargetState.LOST
+    assert tm.target.track_id == 1
+

@@ -17,24 +17,24 @@ from src.reid.quality import CropQualityEvaluator
 
 
 def run_production_benchmark(scratch_dir: str, device: str = "cpu"):
-    print("=" * 80)
-    print("                 ARGUS ReID PRODUCTION BENCHMARK SUITE")
-    print("=" * 80)
+    print("=" * 80, flush=True)
+    print("                 ARGUS ReID PRODUCTION BENCHMARK SUITE", flush=True)
+    print("=" * 80, flush=True)
 
-    print(f"\n[1/4] Loading and parsing real dataset archive from: {scratch_dir}...")
+    print(f"\n[1/4] Loading and parsing real dataset archive from: {scratch_dir}...", flush=True)
     dataset = BenchmarkDataset.from_scratch_archive(scratch_dir)
-    print(f"      Total Identities Identified: {len(dataset.identities)}")
-    print(f"      Total Sequences Identified:  {len(dataset.sequences)}")
-    print(f"      Total Observations Ingested: {len(dataset.observations)}")
+    print(f"      Total Identities Identified: {len(dataset.identities)}", flush=True)
+    print(f"      Total Sequences Identified:  {len(dataset.sequences)}", flush=True)
+    print(f"      Total Observations Ingested: {len(dataset.observations)}", flush=True)
 
-    print("\n[2/4] Executing sequence-based dataset split (50% Dev, 25% Val, 25% Held-Out Test)...")
+    print("\n[2/4] Executing sequence-based dataset split (50% Dev, 25% Val, 25% Held-Out Test)...", flush=True)
     dev_set, val_set, test_set = dataset.split_by_sequence(train_ratio=0.50, val_ratio=0.25)
-    print(f"      Dev Sequences:      {len(dev_set.sequences)} ({len(dev_set.observations)} obs)")
-    print(f"      Validation Seqs:    {len(val_set.sequences)} ({len(val_set.observations)} obs)")
-    print(f"      Held-Out Test Seqs: {len(test_set.sequences)} ({len(test_set.observations)} obs)")
+    print(f"      Dev Sequences:      {len(dev_set.sequences)} ({len(dev_set.observations)} obs)", flush=True)
+    print(f"      Validation Seqs:    {len(val_set.sequences)} ({len(val_set.observations)} obs)", flush=True)
+    print(f"      Held-Out Test Seqs: {len(test_set.sequences)} ({len(test_set.observations)} obs)", flush=True)
 
-    print(f"\n[3/4] Initializing Foundation DINOv2 Extractor on device '{device}'...")
-    extractor = PyTorchReIDExtractor(model_name="dinov2", device=device)
+    print(f"\n[3/4] Initializing Dedicated Person-ReID OSNet Extractor on device '{device}'...", flush=True)
+    extractor = PyTorchReIDExtractor(model_name="osnet_x0_25", device=device)
     quality = CropQualityEvaluator(min_height=35, min_width=16)
     identity_mgr = IdentityManager(
         reid_extractor=extractor,
@@ -48,13 +48,13 @@ def run_production_benchmark(scratch_dir: str, device: str = "cpu"):
 
     evaluator = ProductionReIDEvaluator(identity_manager=identity_mgr)
 
-    print("\n[4/4] Executing Full Multi-Scenario Evaluation on Held-Out Test Set...")
+    print("\n[4/4] Executing Full Multi-Scenario Evaluation on Held-Out Test Set...", flush=True)
     report = evaluator.evaluate_dataset(test_set if len(test_set.identities) >= 2 else dataset)
 
-    print("\n" + "=" * 80)
-    print("================================================================")
-    print("ARGUS ReID PRODUCTION BENCHMARK REPORT")
-    print("================================================================")
+    print("\n" + "=" * 80, flush=True)
+    print("================================================================", flush=True)
+    print("ARGUS ReID PRODUCTION BENCHMARK REPORT", flush=True)
+    print("================================================================", flush=True)
     print(f"Identities:              {report.num_identities}")
     print(f"Sequences:               {report.num_sequences}")
     print(f"Cameras:                 {report.num_cameras}")

@@ -59,10 +59,10 @@ class EvidenceEngine:
     def __init__(
         self,
         window_size: int = 4,
-        min_similarity_threshold: float = 0.78,
-        reacquisition_threshold: float = 0.82,
+        min_similarity_threshold: float = 0.90,
+        reacquisition_threshold: float = 0.95,
         reacquisition_min_frames: int = 4,
-        min_margin_threshold: float = 0.08,
+        min_margin_threshold: float = 0.06,
         min_consistency_ratio: float = 0.75,
         min_spatial_displacement_px: float = 0.0,
         min_time_gap_ms: float = 20.0,
@@ -169,7 +169,7 @@ class EvidenceEngine:
         scores = np.array([obs.similarity for obs in history], dtype=np.float32)
         weighted_mean = float(np.sum(scores * weights))
 
-        matches = sum(1 for obs in history if obs.similarity >= self.min_similarity_threshold)
+        matches = sum(1 for obs in history if obs.is_match and obs.similarity >= self.min_similarity_threshold)
         consistency_ratio = float(matches / n)
 
         return weighted_mean, consistency_ratio, n
@@ -224,12 +224,32 @@ class EvidenceEngine:
 
         diag_lines = [
             f"[EVIDENCE_ENGINE] Target={target_identity_id} | Candidates={len(scored_tracks)} | Mode={'REACQUISITION' if is_switching_or_reacquiring else 'TRACKING'}",
-            f"  Top Candidate: Track {top_track.track_id} (Score={top_score:.3f}, Consistency={top_ratio:.2f}, Samples={top_samples})",
+            f"  Top Candidate: Track {top_track.track_id} (Score={top_score:.3f}, Consistency={top_ratio:.2f}, Samples={top_samples}, Valid={top_valid})",
             f"  Second Candidate: Score={second_score:.3f} | Margin={margin:.3f}",
         ]
 
         # 3. REACQUISITION GATING (Strict Anti-Scoop & Anti-Adoption)
         if is_switching_or_reacquiring:
+            # Rule 0: Candidate MUST pass multi-crop reference matching
+            if not top_valid:
+                diag_lines.append(
+                    f"  Decision: NO_MATCH (Top candidate failed multi-crop reference verification | is_match=False)"
+                )
+                return EvidenceDecision(
+                    target_identity_id=target_identity_id,
+                    best_track_id=None,
+                    best_score=top_score,
+                    second_best_score=second_score,
+                    margin=margin,
+                    is_confirmed=False,
+                    is_uncertain=(top_score >= self.min_similarity_threshold),
+                    decision_state=MatchDecisionState.NO_MATCH,
+                    confidence=top_score,
+                    decision_reason="Candidate failed multi-crop reference verification",
+                    ranked_tracks=ranked_summary,
+                    diagnostic_log="\n".join(diag_lines),
+                )
+
             # Rule 1: High Absolute Threshold for Reacquisition
             if top_score < self.reacquisition_threshold:
                 diag_lines.append(

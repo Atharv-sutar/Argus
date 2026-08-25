@@ -218,8 +218,8 @@ class TargetIdentityAnchor:
     identity_id: str
     label: str = "selected_target"
     clusters: List[ViewCluster] = field(default_factory=list)
-    model_name: str = "dinov2"
-    feature_dim: int = 384
+    model_name: str = "osnet_x0_25"
+    feature_dim: int = 512
     created_timestamp_ms: float = 0.0
     anchor_hash: str = ""
 

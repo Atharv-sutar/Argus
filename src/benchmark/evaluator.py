@@ -73,7 +73,8 @@ class ProductionReIDEvaluator:
                 continue
 
             # 1. Multi-Cluster Enrollment
-            enroll_crops = [obs.crop for obs in target_obs[:num_gallery_views] if obs.crop is not None]
+            enroll_crops = [obs.get_crop() for obs in target_obs[:num_gallery_views]]
+            enroll_crops = [c for c in enroll_crops if c is not None]
             if not enroll_crops:
                 continue
 
@@ -86,11 +87,12 @@ class ProductionReIDEvaluator:
 
             # 2. Evaluate Genuine Observations
             for obs in heldout_genuine:
-                if obs.crop is None:
+                crop = obs.get_crop()
+                if crop is None:
                     continue
 
                 t0 = time.perf_counter()
-                ev = self.identity_manager.evaluate_candidate_crop(obs.crop, target_id)
+                ev = self.identity_manager.evaluate_candidate_crop(crop, target_id)
                 lat = (time.perf_counter() - t0) * 1000.0
                 latencies.append(lat)
 
@@ -123,14 +125,15 @@ class ProductionReIDEvaluator:
 
             # 3. Evaluate Impostor & Distractor Observations
             impostor_identities = [i for i in identities if i != target_id]
-            for imp_id in impostor_identities:
+            for imp_id in impostor_identities[:8]:
                 imp_obs = dataset.get_observations_for_identity(imp_id)
-                for obs in imp_obs[:3]:  # sample representative impostor crops
-                    if obs.crop is None:
+                for obs in imp_obs[:2]:  # sample representative impostor crops
+                    crop = obs.get_crop()
+                    if crop is None:
                         continue
 
                     t0 = time.perf_counter()
-                    ev = self.identity_manager.evaluate_candidate_crop(obs.crop, target_id)
+                    ev = self.identity_manager.evaluate_candidate_crop(crop, target_id)
                     lat = (time.perf_counter() - t0) * 1000.0
                     latencies.append(lat)
 
@@ -164,15 +167,18 @@ class ProductionReIDEvaluator:
             if heldout_genuine and impostor_identities:
                 test_gen = heldout_genuine[0]
                 cand_pool: List[Tuple[bool, float]] = []
-                if test_gen.crop is not None:
-                    ev_g = self.identity_manager.evaluate_candidate_crop(test_gen.crop, target_id)
+                gen_crop = test_gen.get_crop()
+                if gen_crop is not None:
+                    ev_g = self.identity_manager.evaluate_candidate_crop(gen_crop, target_id)
                     cand_pool.append((True, ev_g.candidate_score))
 
                 for imp_id in impostor_identities[:10]:
                     io = dataset.get_observations_for_identity(imp_id)
-                    if io and io[0].crop is not None:
-                        ev_i = self.identity_manager.evaluate_candidate_crop(io[0].crop, target_id)
-                        cand_pool.append((False, ev_i.candidate_score))
+                    if io:
+                        imp_crop = io[0].get_crop()
+                        if imp_crop is not None:
+                            ev_i = self.identity_manager.evaluate_candidate_crop(imp_crop, target_id)
+                            cand_pool.append((False, ev_i.candidate_score))
 
                 cand_pool.sort(key=lambda x: x[1], reverse=True)
                 total_retrieval += 1

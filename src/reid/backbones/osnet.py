@@ -182,7 +182,6 @@ class OSNet(nn.Module):
         return nn.Sequential(
             nn.Linear(in_dim, out_dim),
             nn.BatchNorm1d(out_dim),
-            nn.ReLU(inplace=True),
         )
 
     def _make_stage(
@@ -229,10 +228,30 @@ class Conv7x7(nn.Module):
         return self.relu(self.bn(self.conv(x)))
 
 
-def _load_pretrained_weights(model: nn.Module, url: str) -> None:
-    """Loads state dict from URL and maps parameters into the model."""
-    try:
-        state_dict = load_state_dict_from_url(url, map_location="cpu", progress=False)
+def _load_pretrained_weights(model: nn.Module, model_key: str) -> None:
+    """Loads state dict from local cache or URL and maps parameters into the model."""
+    import os
+    models_dir = os.path.join(torch.hub.get_dir(), "checkpoints")
+    os.makedirs(models_dir, exist_ok=True)
+    
+    local_path = os.path.join(models_dir, f"{model_key}.pt")
+    state_dict = None
+    
+    if os.path.exists(local_path):
+        try:
+            state_dict = torch.load(local_path, map_location="cpu", weights_only=False)
+        except Exception as e:
+            logger.warning(f"Failed loading local checkpoint {local_path}: {e}")
+            
+    if state_dict is None:
+        url = OSNET_URLS.get(model_key)
+        if url:
+            try:
+                state_dict = load_state_dict_from_url(url, map_location="cpu", progress=False)
+            except Exception as e:
+                logger.warning(f"Could not load OSNet weights from URL {url}: {e}")
+
+    if state_dict is not None:
         if "state_dict" in state_dict:
             state_dict = state_dict["state_dict"]
 
@@ -245,12 +264,12 @@ def _load_pretrained_weights(model: nn.Module, url: str) -> None:
 
         model_dict.update(filtered_dict)
         model.load_state_dict(model_dict)
-        logger.info(f"Loaded {len(filtered_dict)}/{len(model_dict)} pretrained OSNet weights from {url}")
-    except Exception as e:
-        logger.warning(f"Could not load OSNet pretrained weights from URL: {e}")
+        logger.info(f"Loaded {len(filtered_dict)}/{len(model_dict)} pretrained OSNet weights for '{model_key}'.")
+    else:
+        logger.warning(f"No pretrained weights loaded for '{model_key}'.")
 
 
-def osnet_x0_25(pretrained: bool = True, dataset: str = "market1501") -> OSNet:
+def osnet_x0_25(pretrained: bool = True, dataset: str = "msmt17") -> OSNet:
     """Instantiates lightweight OSNet-x0.25 model (~0.2M params, 512D output)."""
     model = OSNet(
         blocks=[2, 2, 2],
@@ -258,13 +277,11 @@ def osnet_x0_25(pretrained: bool = True, dataset: str = "market1501") -> OSNet:
         feature_dim=512,
     )
     if pretrained:
-        url_key = f"osnet_x0_25_{dataset}" if f"osnet_x0_25_{dataset}" in OSNET_URLS else "osnet_x0_25_market"
-        url = OSNET_URLS[url_key]
-        _load_pretrained_weights(model, url)
+        _load_pretrained_weights(model, f"osnet_x0_25_{dataset}")
     return model
 
 
-def osnet_x1_0(pretrained: bool = True, dataset: str = "market1501") -> OSNet:
+def osnet_x1_0(pretrained: bool = True, dataset: str = "msmt17") -> OSNet:
     """Instantiates standard OSNet-x1.0 model (~2.2M params, 512D output)."""
     model = OSNet(
         blocks=[2, 2, 2],
@@ -272,17 +289,17 @@ def osnet_x1_0(pretrained: bool = True, dataset: str = "market1501") -> OSNet:
         feature_dim=512,
     )
     if pretrained:
-        url_key = f"osnet_x1_0_{dataset}" if f"osnet_x1_0_{dataset}" in OSNET_URLS else "osnet_x1_0_market"
-        url = OSNET_URLS[url_key]
-        _load_pretrained_weights(model, url)
+        _load_pretrained_weights(model, f"osnet_x1_0_{dataset}")
     return model
 
 
 def build_osnet(model_name: str = "osnet_x0_25", pretrained: bool = True) -> OSNet:
     """Factory helper to build OSNet variants."""
-    if "x0_25" in model_name or "small" in model_name:
-        return osnet_x0_25(pretrained=pretrained)
-    elif "x1_0" in model_name:
-        return osnet_x1_0(pretrained=pretrained)
+    name = model_name.lower()
+    if "x1_0" in name or "x1.0" in name:
+        return osnet_x1_0(pretrained=pretrained, dataset="msmt17")
+    elif "x0_25" in name or "x0.25" in name or "small" in name:
+        return osnet_x0_25(pretrained=pretrained, dataset="msmt17")
     else:
-        return osnet_x0_25(pretrained=pretrained)
+        return osnet_x0_25(pretrained=pretrained, dataset="msmt17")
+

@@ -22,21 +22,21 @@ logger = logging.getLogger(__name__)
 class PyTorchReIDExtractor(BaseReID):
     """
     High-capacity Person Re-Identification feature extractor supporting:
-    1. Foundation Vision Transformer (DINOv2-ViT-S/14, 384D)
-    2. Omni-Scale Network (OSNet-x0.25, 512D)
-    3. Multi-crop representations (Full Body, Upper Torso, Lower Body)
-    4. Fast batch GPU/CPU inference with rich metadata
+    1. Omni-Scale Network (OSNet-x0.25 / OSNet-x1.0, 512D) - Primary ReID backbone
+    2. Multi-crop representations (Full Body, Upper Torso, Lower Body)
+    3. Fast batched GPU/CPU inference with rich metadata
     """
 
     def __init__(
         self,
-        model_name: str = "dinov2",
-        device: str = "cpu",
-        input_size: Tuple[int, int] = (252, 126),
+        model_name: str = "osnet_x0_25",
+        device: str = "auto",
+        input_size: Tuple[int, int] = (256, 128),
     ) -> None:
         self.model_name = model_name.lower()
         self.device_str = resolve_inference_device(device)
         self.input_size = input_size
+        self.feature_dim = 512 if "dino" not in self.model_name else 384
         self._model = None
         self._osnet_model = None
         self._device = None
@@ -49,33 +49,31 @@ class PyTorchReIDExtractor(BaseReID):
             self._device = torch.device(self.device_str)
             logger.info(f"Initializing ReID model '{self.model_name}' on device '{self.device_str}'...")
 
-            if "dino" in self.model_name:
-                self._model = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14").to(self._device).eval()
-            elif "osnet" in self.model_name:
+            if "osnet" in self.model_name or self.model_name in ("default", "reid"):
                 from src.reid.backbones.osnet import build_osnet
-                self._model = build_osnet("osnet_x0_25", pretrained=True).to(self._device).eval()
-            elif "ensemble" in self.model_name:
+                self._model = build_osnet(self.model_name if "x1_0" in self.model_name else "osnet_x0_25", pretrained=True).to(self._device).eval()
+                self.feature_dim = 512
+            elif "dino" in self.model_name:
                 self._model = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14").to(self._device).eval()
-                from src.reid.backbones.osnet import build_osnet
-                self._osnet_model = build_osnet("osnet_x0_25", pretrained=True).to(self._device).eval()
+                self.feature_dim = 384
             elif "mobilenet" in self.model_name:
                 import torchvision.models as models
                 backbone = models.mobilenet_v3_small(weights=models.MobileNet_V3_Small_Weights.DEFAULT)
                 backbone.classifier = torch.nn.Identity()
                 self._model = backbone.to(self._device).eval()
+                self.feature_dim = 576
             else:
-                try:
-                    self._model = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14").to(self._device).eval()
-                except Exception:
-                    from src.reid.backbones.osnet import build_osnet
-                    self._model = build_osnet("osnet_x0_25", pretrained=True).to(self._device).eval()
+                from src.reid.backbones.osnet import build_osnet
+                self._model = build_osnet("osnet_x0_25", pretrained=True).to(self._device).eval()
+                self.feature_dim = 512
 
-            logger.info(f"ReID model '{self.model_name}' initialized successfully.")
+            logger.info(f"ReID model '{self.model_name}' (dim={self.feature_dim}) initialized successfully on {self._device}.")
         except Exception as e:
             logger.warning(f"Could not load Person-ReID model ({e}). Attempting fallback...")
             try:
                 from src.reid.backbones.osnet import build_osnet
                 self._model = build_osnet("osnet_x0_25", pretrained=True).to(self._device).eval()
+                self.feature_dim = 512
             except Exception as e2:
                 logger.error(f"Fallback ReID initialization failed: {e2}")
                 self._model = None
@@ -120,18 +118,18 @@ class PyTorchReIDExtractor(BaseReID):
     def _extract_model_feature(self, crop: np.ndarray, model_override=None) -> np.ndarray:
         """Runs forward pass through the primary model to extract a single L2-normalized vector."""
         if crop is None or crop.size == 0 or cv2 is None:
-            return np.zeros(384, dtype=np.float32)
+            return np.zeros(self.feature_dim, dtype=np.float32)
 
         model = model_override or self._model
         if model is None:
-            return np.zeros(384, dtype=np.float32)
+            return np.zeros(self.feature_dim, dtype=np.float32)
 
         try:
             import torch
             prep = self._preprocess(crop)
             if prep is not None:
                 tensor = torch.from_numpy(prep).unsqueeze(0).to(self._device)
-                with torch.no_grad():
+                with torch.inference_mode():
                     feat = model(tensor).squeeze().cpu().numpy().astype(np.float32)
                 if len(feat.shape) > 1:
                     feat = feat.flatten()
@@ -140,7 +138,7 @@ class PyTorchReIDExtractor(BaseReID):
         except Exception as e:
             logger.debug(f"Error in deep feature extraction: {e}")
 
-        return np.zeros(384, dtype=np.float32)
+        return np.zeros(self.feature_dim, dtype=np.float32)
 
     def extract(self, crop: np.ndarray) -> Embedding:
         """Extracts primary full-body embedding."""
@@ -159,22 +157,19 @@ class PyTorchReIDExtractor(BaseReID):
         5. lower: Lower-body crop embedding (waist to feet)
         """
         if crop is None or crop.size == 0:
-            zero_vec = np.zeros(384, dtype=np.float32)
+            zero_vec = np.zeros(self.feature_dim, dtype=np.float32)
             z = Embedding(vector=zero_vec, model_name=self.model_name, version="2.0")
             return z, z, z, z, z
 
         h, w = crop.shape[:2]
+        upper_crop = crop[: max(1, int(0.55 * h)), :]
+        lower_crop = crop[int(0.45 * h) :, :]
 
-        # 1. Full Body Deep Embedding
-        if self._osnet_model is not None and self._model is not None:
-            # Ensemble mode: concatenate normalized DINOv2 and OSNet embeddings
-            dino_vec = self._extract_model_feature(crop, self._model)
-            osnet_vec = self._extract_model_feature(crop, self._osnet_model)
-            deep_vec = np.concatenate([dino_vec * 0.75, osnet_vec * 0.25])
-            norm = float(np.linalg.norm(deep_vec))
-            deep_vec = (deep_vec / norm) if norm > 0 else deep_vec
-        else:
-            deep_vec = self._extract_model_feature(crop)
+        # Batch forward pass for full, upper, and lower crops simultaneously
+        batch_embs = self.extract_batch([crop, upper_crop, lower_crop])
+        deep_vec = batch_embs[0].vector
+        upper_vec = batch_embs[1].vector
+        lower_vec = batch_embs[2].vector
 
         deep_emb = Embedding(
             vector=deep_vec,
@@ -182,20 +177,12 @@ class PyTorchReIDExtractor(BaseReID):
             version="2.0",
             crop_type="full",
         )
-
-        # 2. Multi-Crop: Upper Torso (top 55% of height)
-        upper_crop = crop[: max(1, int(0.55 * h)), :]
-        upper_vec = self._extract_model_feature(upper_crop)
         upper_emb = Embedding(
             vector=upper_vec,
             model_name=self.model_name,
             version="2.0",
             crop_type="upper",
         )
-
-        # 3. Multi-Crop: Lower Body (bottom 55% of height)
-        lower_crop = crop[int(0.45 * h) :, :]
-        lower_vec = self._extract_model_feature(lower_crop)
         lower_emb = Embedding(
             vector=lower_vec,
             model_name=self.model_name,
@@ -238,7 +225,7 @@ class PyTorchReIDExtractor(BaseReID):
 
                 if valid_preps:
                     batch_tensor = torch.from_numpy(np.stack(valid_preps)).to(self._device)
-                    with torch.no_grad():
+                    with torch.inference_mode():
                         feats = self._model(batch_tensor).cpu().numpy().astype(np.float32)
 
                     if len(feats.shape) > 2:

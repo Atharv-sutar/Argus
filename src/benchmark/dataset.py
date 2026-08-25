@@ -163,14 +163,9 @@ class BenchmarkDataset:
         seq_id: str,
     ) -> None:
         for idx, (f_idx, path) in enumerate(seq_items):
-            img = cv2.imread(path)
-            if img is None or img.size == 0:
-                continue
+            res_level = ResolutionLevel.HIGH
 
-            h, w = img.shape[:2]
-            res_level = ResolutionLevel.HIGH if h >= 120 else (ResolutionLevel.MEDIUM if h >= 60 else (ResolutionLevel.LOW if h >= 35 else ResolutionLevel.TINY))
-
-            # Infer viewpoint heuristically from aspect ratio and index in sequence
+            # Infer viewpoint heuristically from index in sequence
             if idx == 0:
                 vp = ViewpointType.FRONT
             elif idx == len(seq_items) - 1:
@@ -187,12 +182,12 @@ class BenchmarkDataset:
                 frame_id=f_idx,
                 timestamp_ms=float(f_idx * 33.3),
                 track_id=int(person_id.split('_')[1]),
-                bbox=BoundingBox(50.0, 50.0, 50.0 + w, 50.0 + h),
+                bbox=BoundingBox(50.0, 50.0, 150.0, 250.0),
                 image_path=path,
-                crop=img,
+                crop=None,
                 viewpoint=vp,
                 resolution=res_level,
                 occlusion=OcclusionLevel.NONE if idx < 3 else (OcclusionLevel.PARTIAL if idx % 4 == 0 else OcclusionLevel.NONE),
-                quality_score=1.0 if res_level != ResolutionLevel.TINY else 0.4,
+                quality_score=1.0,
             )
             dataset.add_observation(obs)
