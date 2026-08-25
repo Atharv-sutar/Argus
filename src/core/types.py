@@ -131,6 +131,7 @@ class TargetState(str, Enum):
     """Lifecycle state of the user-selected tracking target."""
     UNSELECTED = "UNSELECTED"
     LOCKED = "LOCKED"
+    ACQUIRING_REFERENCE = "ACQUIRING_REFERENCE"
     TRACKING = "TRACKING"
     UNCERTAIN = "UNCERTAIN"
     LOST = "LOST"
@@ -177,32 +178,69 @@ class Embedding:
 
 @dataclass
 class Identity:
-    """Represents a unique known identity with an appearance gallery."""
+    """
+    Represents a unique known identity with separate immutable reference
+    and adaptive observation galleries.
+    """
     identity_id: str
     label: str = "target_0"
-    reference_embedding: Optional[Embedding] = None
-    embeddings: List[Embedding] = field(default_factory=list)
+    reference_gallery: List[Embedding] = field(default_factory=list)
+    adaptive_gallery: List[Embedding] = field(default_factory=list)
     last_seen_timestamp_ms: float = 0.0
+
+    @property
+    def reference_embedding(self) -> Optional[Embedding]:
+        """Primary reference embedding (first sample in reference gallery)."""
+        return self.reference_gallery[0] if self.reference_gallery else None
+
+    @reference_embedding.setter
+    def reference_embedding(self, emb: Optional[Embedding]) -> None:
+        if emb is not None:
+            if not self.reference_gallery:
+                self.reference_gallery.append(emb)
+            else:
+                self.reference_gallery[0] = emb
+        else:
+            self.reference_gallery.clear()
+
+    @property
+    def embeddings(self) -> List[Embedding]:
+        """Combined list of all active embeddings (references + verified adaptive)."""
+        return self.reference_gallery + self.adaptive_gallery
+
+    @embeddings.setter
+    def embeddings(self, embs: List[Embedding]) -> None:
+        # Fallback compatibility setter
+        self.adaptive_gallery = list(embs)
+
+    def compute_detailed_similarity(self, query: Embedding) -> Tuple[float, float, float]:
+        """
+        Computes detailed similarity against reference and adaptive galleries.
+
+        Returns:
+            Tuple[best_ref_sim, best_adaptive_sim, top2_adaptive_mean]
+        """
+        best_ref_sim = 0.0
+        if self.reference_gallery:
+            best_ref_sim = max(emb.cosine_similarity(query) for emb in self.reference_gallery)
+
+        best_adaptive_sim = 0.0
+        top2_adaptive_mean = 0.0
+        if self.adaptive_gallery:
+            adaptive_sims = sorted([emb.cosine_similarity(query) for emb in self.adaptive_gallery], reverse=True)
+            best_adaptive_sim = adaptive_sims[0]
+            top2_adaptive_mean = sum(adaptive_sims[:2]) / len(adaptive_sims[:2])
+
+        return best_ref_sim, best_adaptive_sim, top2_adaptive_mean
 
     def compute_similarity(self, query: Embedding) -> float:
         """
-        Returns similarity score against stored identity.
-        Gives primary weight to the immutable reference embedding while
-        allowing verified gallery observations to assist in pose/viewpoint shifts.
+        Returns highest appearance similarity score against stored identity.
+        Checks both reference gallery and adaptive gallery.
         """
-        if self.reference_embedding is None:
-            return max(emb.cosine_similarity(query) for emb in self.embeddings) if self.embeddings else 0.0
+        best_ref, best_adapt, _ = self.compute_detailed_similarity(query)
+        return max(best_ref, best_adapt)
 
-        ref_sim = self.reference_embedding.cosine_similarity(query)
-        if not self.embeddings:
-            return ref_sim
 
-        # Drift protection gate: query must have a minimum baseline similarity to reference
-        # to prevent matching against a contaminated/drifted gallery.
-        if ref_sim < 0.72:
-            return ref_sim
-
-        gallery_max = max(emb.cosine_similarity(query) for emb in self.embeddings)
-        return max(ref_sim, gallery_max)
 
 

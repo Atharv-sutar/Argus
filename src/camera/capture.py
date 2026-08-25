@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 class OpenCVCamera(BaseCamera):
     """
     Acquires video frames from a webcam, video file, or RTSP stream using OpenCV.
+    Supports asynchronous threaded reading to prevent USB I/O blocking and maximize FPS.
     """
 
     def __init__(
@@ -28,28 +29,48 @@ class OpenCVCamera(BaseCamera):
         width: Optional[int] = None,
         height: Optional[int] = None,
         fps: Optional[int] = None,
+        use_thread: bool = True,
     ) -> None:
         self.source = source
         self.width = width
         self.height = height
         self.fps = fps
+        self.use_thread = use_thread
+
         self._cap: Optional[cv2.VideoCapture] = None
         self._frame_count = 0
         self._start_time: Optional[float] = None
+
+        # Threaded capture state
+        self._thread = None
+        self._running = False
+        self._lock = None
+        self._latest_frame: Optional[np.ndarray] = None
+        self._latest_timestamp_ms: float = 0.0
+        self._has_new_frame = False
+
         self._open_stream()
 
     def _open_stream(self) -> None:
         if cv2 is None:
             raise ImportError("OpenCV (cv2) is required for OpenCVCamera but is not installed.")
 
+        import threading
+        self._lock = threading.Lock()
+
         # Convert string digits to int if given e.g. "0"
         src = self.source
         if isinstance(src, str) and src.isdigit():
             src = int(src)
 
+        # Use standard VideoCapture backend (MSMF on Windows)
         self._cap = cv2.VideoCapture(src)
 
-        if not self._cap.isOpened():
+        if not self._cap or not self._cap.isOpened():
+            # Fallback to default if initial open failed
+            self._cap = cv2.VideoCapture(src, cv2.CAP_ANY)
+
+        if not self._cap or not self._cap.isOpened():
             logger.error(f"Failed to open video source: {self.source}")
             return
 
@@ -60,8 +81,41 @@ class OpenCVCamera(BaseCamera):
         if self.fps is not None and isinstance(src, int):
             self._cap.set(cv2.CAP_PROP_FPS, self.fps)
 
+
         self._start_time = time.time()
         logger.info(f"Successfully opened video source: {self.source}")
+
+        # Start background reader thread if enabled
+        if self.use_thread:
+            self._running = True
+            self._thread = threading.Thread(target=self._capture_loop, daemon=True)
+            self._thread.start()
+
+            # Block until the first frame arrives so read() never returns None
+            # on a healthy camera immediately after construction.
+            deadline = time.time() + 2.0
+            while self._latest_frame is None and time.time() < deadline:
+                time.sleep(0.01)
+            if self._latest_frame is None:
+                logger.warning(f"Camera '{self.source}' thread started but no frame received within 2s")
+
+
+    def _capture_loop(self) -> None:
+        """Background thread continuously pulling frames to prevent driver buffer buildup."""
+        while self._running and self._cap is not None and self._cap.isOpened():
+            success, frame = self._cap.read()
+            if not success or frame is None:
+                time.sleep(0.005)
+                continue
+
+            self._frame_count += 1
+            pos_msec = self._cap.get(cv2.CAP_PROP_POS_MSEC) if not isinstance(self.source, int) else 0.0
+            now_ms = float(pos_msec) if pos_msec > 0.0 else (time.time() - (self._start_time or time.time())) * 1000.0
+
+            with self._lock:
+                self._latest_frame = frame
+                self._latest_timestamp_ms = now_ms
+                self._has_new_frame = True
 
     def is_opened(self) -> bool:
         return self._cap is not None and self._cap.isOpened()
@@ -70,26 +124,34 @@ class OpenCVCamera(BaseCamera):
         if not self.is_opened() or self._cap is None:
             return False, None, 0.0
 
+        if self.use_thread:
+            # Non-blocking instant read from latest frame buffer
+            with self._lock:
+                if self._latest_frame is not None:
+                    return True, self._latest_frame.copy(), self._latest_timestamp_ms
+                return False, None, 0.0
+
         success, frame = self._cap.read()
         if not success or frame is None:
             return False, None, 0.0
 
         self._frame_count += 1
-
-        # Use video stream timestamp if available (for video files/streams), else wall-clock
         pos_msec = self._cap.get(cv2.CAP_PROP_POS_MSEC) if (cv2 is not None and not isinstance(self.source, int)) else 0.0
-        if pos_msec > 0.0:
-            now_ms = float(pos_msec)
-        else:
-            now_ms = (time.time() - (self._start_time or time.time())) * 1000.0
+        now_ms = float(pos_msec) if pos_msec > 0.0 else (time.time() - (self._start_time or time.time())) * 1000.0
 
         return True, frame, now_ms
 
     def release(self) -> None:
+        self._running = False
+        if self._thread is not None:
+            self._thread.join(timeout=0.5)
+            self._thread = None
+
         if self._cap is not None:
             self._cap.release()
             self._cap = None
             logger.info(f"Released video source: {self.source}")
+
 
 
 class SyntheticCamera(BaseCamera):

@@ -26,10 +26,21 @@ tracking:
 
 reid:
   model_name: "mobilenet_v3_small"
-  similarity_threshold: 0.80
-  min_margin: 0.08
+  similarity_threshold: 0.65
+  reference_threshold: 0.60
+  min_margin: 0.05
   extract_interval_frames: 10
   gallery_size: 5
+  reference_samples: 4
+  reference_window_frames: 20
+  adaptive_gallery_size: 5
+  min_crop_width: 30
+  min_crop_height: 80
+  min_sharpness: 35.0
+  redundancy_threshold: 0.90
+
+
+
 
 visualization:
   show_window: true
@@ -50,5 +61,7 @@ multi_camera:
     max_radius: 3
     total_recovery_timeout_s: 30.0
     confirmation_frames: 3
+    handoff_confirm_delay_s: 2.0
+
   ui_port: 8765
 

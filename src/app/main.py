@@ -4,17 +4,23 @@ from __future__ import annotations
 
 import argparse
 import logging
+import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
 
 try:
     import cv2
 except ImportError:
     cv2 = None
 
+
 from src.camera.capture import OpenCVCamera, SyntheticCamera
 from src.core.config import AppConfig
+from src.core.types import Target, TargetState, TrackResult
 from src.detection.yolo_detector import YOLODetector
+
 from src.identity.manager import IdentityManager
 from src.multi_camera.camera_graph import CameraGraph
 from src.multi_camera.ui_server import run_ui_server
@@ -135,6 +141,184 @@ def build_multi_camera_pipeline(
     )
 
 
+def _render_monitoring_grid(
+    frames: Dict[str, np.ndarray],
+    all_camera_ids: List[str],
+    tile_w: int = 640,
+    tile_h: int = 360,
+) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
+    """
+    Renders a security-camera monitoring grid from raw camera frames (no AI overlays).
+    Returns (canvas, tile_maps) where tile_maps allows mapping click coords to camera IDs.
+    """
+    n_cams = len(all_camera_ids)
+    if n_cams <= 1:
+        cols, rows = 1, 1
+    elif n_cams == 2:
+        cols, rows = 2, 1
+    elif n_cams <= 4:
+        cols, rows = 2, 2
+    elif n_cams <= 6:
+        cols, rows = 3, 2
+    else:
+        cols = 3
+        rows = int(np.ceil(n_cams / 3))
+
+    header_h = 40
+    grid_w = cols * tile_w
+    grid_h = header_h + (rows * tile_h)
+
+    canvas = np.zeros((grid_h, grid_w, 3), dtype=np.uint8)
+    canvas[:] = (12, 15, 23)
+
+    tile_maps: List[Dict[str, Any]] = []
+
+    for idx, cid in enumerate(all_camera_ids):
+        r = idx // cols
+        c = idx % cols
+        x_off = c * tile_w
+        y_off = header_h + (r * tile_h)
+
+        frame = frames.get(cid)
+        orig_w, orig_h = 640, 480
+
+        if frame is not None:
+            orig_h, orig_w = frame.shape[:2]
+            tile = cv2.resize(frame, (tile_w, tile_h), interpolation=cv2.INTER_LINEAR)
+        else:
+            tile = np.zeros((tile_h, tile_w, 3), dtype=np.uint8)
+            tile[:] = (20, 26, 38)
+            cv2.putText(tile, f"{cid} [NO SIGNAL]", (tile_w // 2 - 80, tile_h // 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 120, 140), 1, cv2.LINE_AA)
+
+        # Camera label badge
+        label = f"{cid}"
+        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        cv2.rectangle(tile, (4, 4), (12 + tw, 10 + th), (10, 14, 22), -1)
+        cv2.rectangle(tile, (4, 4), (12 + tw, 10 + th), (60, 200, 140), 1)
+        cv2.putText(tile, label, (8, 8 + th), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (60, 200, 140), 1, cv2.LINE_AA)
+
+        # Subtle border
+        cv2.rectangle(tile, (0, 0), (tile_w - 1, tile_h - 1), (40, 55, 70), 1)
+
+        canvas[y_off:y_off + tile_h, x_off:x_off + tile_w] = tile
+        tile_maps.append({
+            "camera_id": cid, "x1": x_off, "y1": y_off,
+            "x2": x_off + tile_w, "y2": y_off + tile_h,
+            "scale_x": orig_w / float(tile_w), "scale_y": orig_h / float(tile_h),
+        })
+
+    # Header
+    hud = f"ARGUS SURVEILLANCE  |  {n_cams} CAMERAS  |  MONITORING  |  Click a camera to focus"
+    cv2.putText(canvas, hud, (14, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 180), 1, cv2.LINE_AA)
+    cv2.line(canvas, (0, header_h - 2), (grid_w, header_h - 2), (0, 220, 180), 1)
+
+    return canvas, tile_maps
+
+
+def _render_search_grid(
+    camera_results: Dict[str, Tuple[Optional[np.ndarray], Optional[Any], Optional[Any]]],
+    active_cam_id: Optional[str],
+    search_cam_ids: List[str],
+    search_radius: int,
+    handoff_cam_id: Optional[str] = None,
+    tile_w: int = 640,
+    tile_h: int = 360,
+) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
+    """
+    Renders the SEARCH_VIEW: active camera + adjacent search cameras.
+    Returns (canvas, tile_maps).
+    """
+    cam_ids = []
+    if active_cam_id:
+        cam_ids.append(active_cam_id)
+    for cid in search_cam_ids:
+        if cid != active_cam_id:
+            cam_ids.append(cid)
+
+    n_cams = len(cam_ids)
+    if n_cams <= 1:
+        cols, rows = 1, 1
+    elif n_cams == 2:
+        cols, rows = 2, 1
+    elif n_cams <= 4:
+        cols, rows = 2, 2
+    else:
+        cols = 3
+        rows = int(np.ceil(n_cams / 3))
+
+    header_h = 40
+    grid_w = cols * tile_w
+    grid_h = header_h + (rows * tile_h)
+
+    canvas = np.zeros((grid_h, grid_w, 3), dtype=np.uint8)
+    canvas[:] = (12, 15, 23)
+
+    tile_maps: List[Dict[str, Any]] = []
+
+    for idx, cid in enumerate(cam_ids):
+        r = idx // cols
+        c = idx % cols
+        x_off = c * tile_w
+        y_off = header_h + (r * tile_h)
+
+        data = camera_results.get(cid)
+        frame = data[0] if (data and data[0] is not None) else None
+        orig_w, orig_h = 640, 480
+
+        if frame is not None:
+            orig_h, orig_w = frame.shape[:2]
+            tile = cv2.resize(frame, (tile_w, tile_h), interpolation=cv2.INTER_LINEAR)
+        else:
+            tile = np.zeros((tile_h, tile_w, 3), dtype=np.uint8)
+            tile[:] = (20, 26, 38)
+            cv2.putText(tile, f"{cid} [NO SIGNAL]", (tile_w // 2 - 80, tile_h // 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 120, 140), 1, cv2.LINE_AA)
+
+        # Status-dependent styling
+        is_active = (cid == active_cam_id)
+        is_handoff = (cid == handoff_cam_id)
+
+        if is_handoff:
+            border_color = (0, 255, 0)  # Green - TARGET FOUND
+            border_thick = 3
+            tag = f"{cid} [TARGET FOUND]"
+        elif is_active:
+            border_color = (0, 100, 255)  # Orange-red - LOST
+            border_thick = 3
+            tag = f"{cid} [ACTIVE - TARGET LOST]"
+        else:
+            border_color = (0, 165, 255)  # Amber - SEARCHING
+            border_thick = 2
+            tag = f"{cid} [SEARCHING R{search_radius}]"
+
+        cv2.rectangle(tile, (0, 0), (tile_w - 1, tile_h - 1), border_color, border_thick)
+
+        (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
+        cv2.rectangle(tile, (4, 4), (12 + tw, 10 + th), (10, 14, 22), -1)
+        cv2.rectangle(tile, (4, 4), (12 + tw, 10 + th), border_color, 1)
+        cv2.putText(tile, tag, (8, 8 + th), cv2.FONT_HERSHEY_SIMPLEX, 0.45, border_color, 1, cv2.LINE_AA)
+
+        canvas[y_off:y_off + tile_h, x_off:x_off + tile_w] = tile
+        tile_maps.append({
+            "camera_id": cid, "x1": x_off, "y1": y_off,
+            "x2": x_off + tile_w, "y2": y_off + tile_h,
+            "scale_x": orig_w / float(tile_w), "scale_y": orig_h / float(tile_h),
+        })
+
+    # Header
+    if handoff_cam_id:
+        hud = f"ARGUS  |  TARGET FOUND ON {handoff_cam_id}  |  Confirming handoff..."
+        hud_color = (0, 255, 0)
+    else:
+        hud = f"ARGUS  |  TARGET LOST  |  Searching adjacent cameras (Radius {search_radius})"
+        hud_color = (0, 165, 255)
+    cv2.putText(canvas, hud, (14, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.55, hud_color, 1, cv2.LINE_AA)
+    cv2.line(canvas, (0, header_h - 2), (grid_w, header_h - 2), hud_color, 1)
+
+    return canvas, tile_maps
+
+
 def run_multi_camera_app(
     config_path: str = "configs/default.yaml",
     graph_path: Optional[str] = None,
@@ -142,13 +326,21 @@ def run_multi_camera_app(
     serve_ui: bool = False,
     ui_port: int = 8765,
 ) -> None:
-    """Runs the multi-camera surveillance system with topology-aware tracking."""
+    """
+    Runs the multi-camera surveillance system with a state-driven UI.
+
+    UI States:
+    - MONITORING: Paginated grid of all camera live feeds (no AI).
+    - CAMERA_FOCUS: Single camera enlarged with detection/tracking overlays.
+    - TARGET_TRACKING: Single active camera tracking the target.
+    - SEARCH_VIEW: Active + adjacent cameras during target search.
+    - HANDOFF_CONFIRM: Search view with handoff confirmation indicator.
+    """
     config_file = Path(config_path)
     config = AppConfig.from_yaml(config_file) if config_file.is_file() else AppConfig()
 
     pipeline = build_multi_camera_pipeline(config, graph_path=graph_path)
 
-    # Optionally run background UI server for live monitor
     if serve_ui:
         run_ui_server(port=ui_port, graph_file=graph_path or config.multi_camera.graph_file, pipeline=pipeline, block=False)
         logger.info(f"Live Monitor web UI available at http://127.0.0.1:{ui_port}")
@@ -156,40 +348,213 @@ def run_multi_camera_app(
     show_window = config.visualization.show_window and not no_gui and (cv2 is not None)
     window_name = "Argus Multi-Camera Surveillance"
 
+    # --- UI State Machine ---
+    ui_state = "MONITORING"   # MONITORING | CAMERA_FOCUS | TARGET_TRACKING | SEARCH_VIEW | HANDOFF_CONFIRM
+    focused_camera_id: Optional[str] = None
+    handoff_new_cam_id: Optional[str] = None
+    current_tile_maps: List[Dict[str, Any]] = []
+    handoff_confirm_delay = config.multi_camera.search.handoff_confirm_delay_s
+
     def on_mouse(event, x, y, flags, param):
-        if event == cv2.EVENT_LBUTTONDOWN and pipeline.active_camera_id:
-            selected_id = pipeline.select_target_on_camera(pipeline.active_camera_id, float(x), float(y))
-            if selected_id is not None:
-                logger.info(f"[USER ACTION] Selected target on active camera '{pipeline.active_camera_id}' | Tracker={selected_id}")
+        nonlocal ui_state, focused_camera_id
+        if event != cv2.EVENT_LBUTTONDOWN:
+            return
+
+        if ui_state == "MONITORING":
+            # Click a camera tile → CAMERA_FOCUS
+            for tile in current_tile_maps:
+                if tile["x1"] <= x <= tile["x2"] and tile["y1"] <= y <= tile["y2"]:
+                    focused_camera_id = tile["camera_id"]
+                    ui_state = "CAMERA_FOCUS"
+                    logger.info(f"[UI] MONITORING → CAMERA_FOCUS on '{focused_camera_id}'")
+                    break
+
+        elif ui_state == "CAMERA_FOCUS":
+            # Click on person → select target → TARGET_TRACKING
+            if focused_camera_id:
+                selected_id = pipeline.select_target_on_camera(focused_camera_id, float(x), float(y))
+                if selected_id is not None:
+                    ui_state = "TARGET_TRACKING"
+                    logger.info(f"[UI] CAMERA_FOCUS → TARGET_TRACKING | Target selected on '{focused_camera_id}' Tracker={selected_id}")
+
+        elif ui_state == "TARGET_TRACKING":
+            # Re-select target on active camera
+            active_id = pipeline.active_camera_id
+            if active_id:
+                selected_id = pipeline.select_target_on_camera(active_id, float(x), float(y))
+                if selected_id is not None:
+                    logger.info(f"[UI] Re-selected target on '{active_id}' Tracker={selected_id}")
+
+        elif ui_state in ("SEARCH_VIEW", "HANDOFF_CONFIRM"):
+            # Click on a search camera tile
+            for tile in current_tile_maps:
+                if tile["x1"] <= x <= tile["x2"] and tile["y1"] <= y <= tile["y2"]:
+                    cam_id = tile["camera_id"]
+                    local_x = (x - tile["x1"]) * tile["scale_x"]
+                    local_y = (y - tile["y1"]) * tile["scale_y"]
+                    selected_id = pipeline.select_target_on_camera(cam_id, float(local_x), float(local_y))
+                    if selected_id is not None:
+                        ui_state = "TARGET_TRACKING"
+                        logger.info(f"[UI] Manual target selection on '{cam_id}' → TARGET_TRACKING")
+                    break
 
     if show_window:
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
         cv2.setMouseCallback(window_name, on_mouse)
 
-    logger.info("Starting Multi-Camera Pipeline. Controls: Left-Click: Select Target | 'c': Clear Target | 'q': Quit")
+    logger.info(f"Starting Argus Multi-Camera Surveillance. State: MONITORING")
 
     try:
-        for camera_results in pipeline.stream():
-            active_id = pipeline.active_camera_id
-            active_data = camera_results.get(active_id) if active_id else None
-
-            if show_window and active_data and active_data[0] is not None:
-                frame_to_show = active_data[0]
-                cv2.imshow(window_name, frame_to_show)
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord("q") or key == 27:
-                    break
-                elif key == ord("c"):
-                    logger.info("[USER ACTION] 'c' key pressed: Deselecting target across all cameras.")
-                    pipeline.clear_target()
-            elif not show_window:
+        while True:
+            if not show_window:
                 time.sleep(0.03)
+                continue
+
+            # ===== MONITORING STATE =====
+            if ui_state == "MONITORING":
+                frames = pipeline.read_monitoring_frames()
+                all_cams = sorted(list(pipeline.graph.all_camera_ids()))
+                if not all_cams:
+                    all_cams = sorted(list(frames.keys())) if frames else []
+
+                if all_cams:
+                    canvas, current_tile_maps = _render_monitoring_grid(frames, all_cams)
+                    cv2.imshow(window_name, canvas)
+                else:
+                    blank = np.zeros((400, 640, 3), dtype=np.uint8)
+                    cv2.putText(blank, "No cameras configured", (120, 200),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 120, 140), 1, cv2.LINE_AA)
+                    cv2.imshow(window_name, blank)
+
+            # ===== CAMERA_FOCUS STATE =====
+            elif ui_state == "CAMERA_FOCUS":
+                if focused_camera_id:
+                    result = pipeline.process_single_camera_frame(focused_camera_id)
+                    if result is not None:
+                        ann_frame, track_res, target = result
+                        # Draw focus header
+                        h, w = ann_frame.shape[:2]
+                        header_text = f"CAMERA: {focused_camera_id}  |  Click a person to select target  |  [Esc]: Back to grid"
+                        cv2.rectangle(ann_frame, (0, 0), (w, 32), (10, 14, 22), -1)
+                        cv2.putText(ann_frame, header_text, (12, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 180), 1, cv2.LINE_AA)
+                        cv2.line(ann_frame, (0, 32), (w, 32), (0, 220, 180), 1)
+                        cv2.imshow(window_name, ann_frame)
+                    else:
+                        blank = np.zeros((480, 640, 3), dtype=np.uint8)
+                        cv2.putText(blank, f"{focused_camera_id} - No frame", (160, 240),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 120, 140), 1, cv2.LINE_AA)
+                        cv2.imshow(window_name, blank)
+
+            # ===== TARGET_TRACKING STATE =====
+            elif ui_state == "TARGET_TRACKING":
+                results = pipeline.step()
+                active_id = pipeline.active_camera_id
+                active_data = results.get(active_id) if active_id else None
+
+                if active_data and active_data[0] is not None:
+                    frame = active_data[0]
+                    target = active_data[2]
+                    # Add tracking header
+                    h, w = frame.shape[:2]
+                    state_str = target.state.value if target else "UNKNOWN"
+                    header_text = f"TRACKING  |  Camera: {active_id}  |  Target: [{state_str}]  |  [C]: Clear  [Q]: Quit"
+                    cv2.rectangle(frame, (0, 0), (w, 32), (10, 14, 22), -1)
+                    cv2.putText(frame, header_text, (12, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 215, 255), 1, cv2.LINE_AA)
+                    cv2.line(frame, (0, 32), (w, 32), (0, 215, 255), 1)
+                    cv2.imshow(window_name, frame)
+
+                    # Check for target loss → transition to SEARCH_VIEW
+                    if target and target.state in (TargetState.LOST, TargetState.UNCERTAIN):
+                        if pipeline.search_manager.is_searching:
+                            ui_state = "SEARCH_VIEW"
+                            logger.info(f"[UI] TARGET_TRACKING → SEARCH_VIEW (Target lost on '{active_id}')")
+
+                # Check for handoff that happened during step()
+                if pipeline.handoff_timestamp > 0 and ui_state == "TARGET_TRACKING":
+                    # A handoff just completed, possibly from a previous search
+                    pass  # Stay in TARGET_TRACKING
+
+            # ===== SEARCH_VIEW STATE =====
+            elif ui_state == "SEARCH_VIEW":
+                results = pipeline.step()
+                active_id = pipeline.active_camera_id
+                progress = pipeline.get_search_progress()
+                search_cam_ids = list(progress.active_cameras)
+
+                canvas, current_tile_maps = _render_search_grid(
+                    results, active_id, search_cam_ids, progress.search_radius,
+                )
+                cv2.imshow(window_name, canvas)
+
+                # Check if handoff just happened
+                if pipeline.handoff_timestamp > 0:
+                    elapsed = time.time() - pipeline.handoff_timestamp
+                    if elapsed < handoff_confirm_delay:
+                        handoff_new_cam_id = pipeline.active_camera_id
+                        ui_state = "HANDOFF_CONFIRM"
+                        logger.info(f"[UI] SEARCH_VIEW → HANDOFF_CONFIRM (Target found on '{handoff_new_cam_id}')")
+
+                # Check if search timed out → back to TARGET_TRACKING (single camera, LOST state)
+                if not pipeline.search_manager.is_searching:
+                    ui_state = "TARGET_TRACKING"
+                    logger.info(f"[UI] SEARCH_VIEW → TARGET_TRACKING (search ended)")
+
+            # ===== HANDOFF_CONFIRM STATE =====
+            elif ui_state == "HANDOFF_CONFIRM":
+                results = pipeline.step()
+                active_id = pipeline.active_camera_id
+                progress = pipeline.get_search_progress()
+                search_cam_ids = list(progress.active_cameras)
+
+                canvas, current_tile_maps = _render_search_grid(
+                    results, active_id, search_cam_ids, progress.search_radius,
+                    handoff_cam_id=handoff_new_cam_id,
+                )
+                cv2.imshow(window_name, canvas)
+
+                # After confirmation delay, transition to TARGET_TRACKING
+                elapsed = time.time() - pipeline.handoff_timestamp
+                if elapsed >= handoff_confirm_delay:
+                    ui_state = "TARGET_TRACKING"
+                    handoff_new_cam_id = None
+                    logger.info(f"[UI] HANDOFF_CONFIRM → TARGET_TRACKING (confirmed on '{active_id}')")
+
+            # === Handle keyboard ===
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
+                break
+            elif key == 27:  # Esc
+                if ui_state == "CAMERA_FOCUS":
+                    ui_state = "MONITORING"
+                    focused_camera_id = None
+                    logger.info("[UI] CAMERA_FOCUS → MONITORING (Esc)")
+                elif ui_state in ("TARGET_TRACKING", "SEARCH_VIEW", "HANDOFF_CONFIRM"):
+                    pipeline.clear_target()
+                    ui_state = "MONITORING"
+                    focused_camera_id = None
+                    handoff_new_cam_id = None
+                    logger.info("[UI] → MONITORING (Esc, target cleared)")
+            elif key == ord("c"):
+                pipeline.clear_target()
+                ui_state = "MONITORING"
+                focused_camera_id = None
+                handoff_new_cam_id = None
+                logger.info("[UI] Target cleared → MONITORING")
+            elif key == ord("m"):
+                pipeline.clear_target()
+                ui_state = "MONITORING"
+                focused_camera_id = None
+                handoff_new_cam_id = None
+                logger.info("[UI] → MONITORING (m key)")
+
     except KeyboardInterrupt:
         logger.info("Multi-camera pipeline interrupted.")
     finally:
         pipeline.stop()
         if show_window:
             cv2.destroyAllWindows()
+
+
 
 
 def run_map_ui(

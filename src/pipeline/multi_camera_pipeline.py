@@ -25,6 +25,7 @@ from src.multi_camera.camera_node import CameraNode
 from src.multi_camera.search_manager import SearchManager
 from src.pipeline.single_camera import SingleCameraPipeline
 from src.reid.extractor import PyTorchReIDExtractor
+from src.reid.quality import CropQualityEvaluator
 from src.target.manager import TargetManager
 from src.tracking.byte_tracker import ByteTracker
 from src.visualization.annotator import FrameAnnotator
@@ -44,7 +45,7 @@ class MultiCameraPipeline:
     2. Only the active camera (and neighbor cameras during active search) run
        expensive AI inference. Standby cameras do not consume AI compute.
     3. Cross-camera handoff occurs only after multi-frame ReID confirmation
-       against the immutable global reference embedding.
+       against the immutable global reference gallery.
     """
 
     def __init__(
@@ -69,12 +70,22 @@ class MultiCameraPipeline:
                 model_name=config.reid.model_name,
                 device=config.inference.device,
             )
+            quality_eval = CropQualityEvaluator(
+                min_width=config.reid.min_crop_width,
+                min_height=config.reid.min_crop_height,
+                min_sharpness=config.reid.min_sharpness,
+            )
             self.identity_manager = IdentityManager(
                 reid_extractor=reid_extractor,
                 similarity_threshold=config.reid.similarity_threshold,
+                reference_threshold=config.reid.reference_threshold,
                 min_margin=config.reid.min_margin,
-                max_gallery_size=config.reid.gallery_size,
+                max_reference_samples=config.reid.reference_samples,
+                max_gallery_size=config.reid.adaptive_gallery_size,
+                redundancy_threshold=config.reid.redundancy_threshold,
+                quality_evaluator=quality_eval,
             )
+
 
         # Factories for per-camera pipeline construction
         self._shared_detector = shared_detector
@@ -93,7 +104,9 @@ class MultiCameraPipeline:
         # Active camera tracking
         self._active_camera_id: Optional[str] = None
         self._target_lost_timestamp: float = 0.0
+        self._handoff_timestamp: float = 0.0
         self._is_running: bool = False
+
 
         # Initialize camera nodes from graph
         self._sync_nodes_with_graph()
@@ -184,10 +197,12 @@ class MultiCameraPipeline:
             reid_interval=self.config.reid.extract_interval_frames,
             min_margin=self.config.reid.min_margin,
             identity_key=GLOBAL_TARGET_IDENTITY_ID,
+            reference_window_frames=self.config.reid.reference_window_frames,
         )
         self._pipelines[camera_id] = pipeline
         node.mark_online()
         return pipeline
+
 
     @property
     def active_camera_id(self) -> Optional[str]:
@@ -210,11 +225,17 @@ class MultiCameraPipeline:
             logger.warning(f"Cannot select target: camera '{camera_id}' unavailable")
             return None
 
-        # Deselect old active camera if different
+        # If pipeline has not processed a frame yet, capture and process one to get tracks
+        if pipeline._last_track_result is None and pipeline.camera.is_opened():
+            success, frame, ts_ms = pipeline.camera.read()
+            if success and frame is not None:
+                pipeline.process_frame(frame, ts_ms)
+
+        # Deselect old active camera if different (preserving shared global identity)
         if self._active_camera_id and self._active_camera_id != camera_id:
             old_p = self._pipelines.get(self._active_camera_id)
             if old_p:
-                old_p.clear_target()
+                old_p.clear_target(clear_identity=False)
             if self._active_camera_id in self._nodes:
                 self._nodes[self._active_camera_id].mark_online()
 
@@ -237,12 +258,18 @@ class MultiCameraPipeline:
         if pipeline is None:
             return False
 
+        if pipeline._last_track_result is None and pipeline.camera.is_opened():
+            success, frame, ts_ms = pipeline.camera.read()
+            if success and frame is not None:
+                pipeline.process_frame(frame, ts_ms)
+
         if self._active_camera_id and self._active_camera_id != camera_id:
             old_p = self._pipelines.get(self._active_camera_id)
             if old_p:
-                old_p.clear_target()
+                old_p.clear_target(clear_identity=False)
             if self._active_camera_id in self._nodes:
                 self._nodes[self._active_camera_id].mark_online()
+
 
         self._active_camera_id = camera_id
         self.search_manager.reset()
@@ -254,6 +281,7 @@ class MultiCameraPipeline:
                 f"[MULTI-CAM] Target selected by ID on camera '{camera_id}' | Tracker={track_id}"
             )
         return ok
+
 
     def clear_target(self) -> None:
         """Clear target across all cameras and reset search."""
@@ -268,15 +296,17 @@ class MultiCameraPipeline:
 
     def step(self) -> Dict[str, Tuple[Optional[np.ndarray], Optional[TrackResult], Optional[Target]]]:
         """
-        Execute one processing cycle across all active / search cameras.
+        Execute one processing cycle across the active camera and any search cameras.
 
         Returns a dictionary mapping camera_id -> (annotated_frame, track_result, target).
+        Only includes cameras that are actively being processed (active + search).
+        Monitoring-only frame reads are handled separately by read_monitoring_frames().
         """
         self._sync_nodes_with_graph()
         results: Dict[str, Tuple[Optional[np.ndarray], Optional[TrackResult], Optional[Target]]] = {}
         now = time.time()
 
-        # 1. If no active camera, pick the first available enabled camera as default monitoring
+        # 1. If no active camera, pick the first available enabled camera as default
         if not self._active_camera_id:
             enabled_ids = [cid for cid, n in self._nodes.items() if n.config.enabled]
             if enabled_ids:
@@ -359,9 +389,9 @@ class MultiCameraPipeline:
 
                 # Check if this search camera found the target
                 if s_target and s_target.state == TargetState.TRACKING:
-                    # Target verified in search camera!
-                    # Get verification similarity if available
-                    cand_crop = s_pipe._last_frame
+                    logger.info(
+                        f"[MULTI-CAM CANDIDATE] Candidate verified on '{search_cam_id}' (Tracker: {s_target.track_id})"
+                    )
                     is_confirmed = self.search_manager.on_candidate_found(search_cam_id, 0.85)
                     if is_confirmed:
                         candidate_recovered_camera = search_cam_id
@@ -374,6 +404,67 @@ class MultiCameraPipeline:
             self._perform_handoff(candidate_recovered_camera)
 
         return results
+
+    def read_monitoring_frames(self) -> Dict[str, np.ndarray]:
+        """
+        Grab a single live frame from each enabled camera WITHOUT running AI processing.
+
+        Used by the MONITORING UI state to show live feeds in the camera grid.
+        Cameras are lazily initialized on first call.
+        """
+        self._sync_nodes_with_graph()
+        frames: Dict[str, np.ndarray] = {}
+
+        for cid, node in self._nodes.items():
+            if not node.config.enabled:
+                continue
+            pipe = self._get_or_create_pipeline(cid)
+            if pipe and pipe.camera.is_opened():
+                success, frame, _ = pipe.camera.read()
+                if success and frame is not None:
+                    node.last_frame = frame
+                    frames[cid] = frame
+                    if not node.is_online:
+                        node.mark_online()
+
+        return frames
+
+    def read_camera_frame(self, camera_id: str) -> Optional[np.ndarray]:
+        """Read a single live frame from a specific camera without AI processing."""
+        pipe = self._get_or_create_pipeline(camera_id)
+        if pipe and pipe.camera.is_opened():
+            success, frame, _ = pipe.camera.read()
+            if success and frame is not None:
+                if camera_id in self._nodes:
+                    self._nodes[camera_id].last_frame = frame
+                return frame
+        return None
+
+    def process_single_camera_frame(self, camera_id: str) -> Optional[Tuple[np.ndarray, TrackResult, Target]]:
+        """
+        Process a single frame from a specific camera through the full AI pipeline.
+        Returns (annotated_frame, track_result, target) or None.
+        """
+        pipe = self._get_or_create_pipeline(camera_id)
+        if not pipe or not pipe.camera.is_opened():
+            return None
+
+        success, frame, ts_ms = pipe.camera.read()
+        if not success or frame is None:
+            return None
+
+        if camera_id in self._nodes:
+            self._nodes[camera_id].last_frame = frame
+
+        det_res, track_res, target, ann_frame = pipe.process_frame(frame, ts_ms)
+        if camera_id in self._nodes:
+            self._nodes[camera_id].fps = pipe._fps
+        return ann_frame, track_res, target
+
+    @property
+    def handoff_timestamp(self) -> float:
+        """Timestamp when the last handoff was performed (0.0 if none)."""
+        return self._handoff_timestamp
 
     def _activate_search_cameras(self, camera_ids: List[str]) -> None:
         """Activate AI processing on designated search camera nodes."""
@@ -396,17 +487,21 @@ class MultiCameraPipeline:
             f"Handing off active camera: '{old_camera_id}' -> '{new_camera_id}'"
         )
 
-        # Deactivate old camera
+        # Deactivate old camera (preserving global identity in shared IdentityManager)
         if old_camera_id and old_camera_id in self._nodes:
             self._nodes[old_camera_id].mark_online()
             old_p = self._pipelines.get(old_camera_id)
             if old_p:
-                old_p.clear_target()
+                old_p.clear_target(clear_identity=False)
+
 
         # Update active camera
         self._active_camera_id = new_camera_id
         if new_camera_id in self._nodes:
             self._nodes[new_camera_id].mark_active_target()
+
+        # Record handoff timestamp for UI confirmation delay
+        self._handoff_timestamp = time.time()
 
         # Reset search manager and deactivate search cameras
         self.search_manager.reset()
@@ -430,3 +525,4 @@ class MultiCameraPipeline:
             pipeline.stop()
         self._pipelines.clear()
         logger.info("MultiCameraPipeline stopped.")
+

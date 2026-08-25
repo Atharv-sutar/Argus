@@ -43,10 +43,21 @@ class TrackingConfig:
 @dataclass
 class ReIDConfig:
     model_name: str = "mobilenet_v3_small"
-    similarity_threshold: float = 0.80
-    min_margin: float = 0.08
+    similarity_threshold: float = 0.65
+    reference_threshold: float = 0.60
+    min_margin: float = 0.05
     extract_interval_frames: int = 10
     gallery_size: int = 5
+    reference_samples: int = 4
+    reference_window_frames: int = 20
+    adaptive_gallery_size: int = 5
+    min_crop_width: int = 30
+    min_crop_height: int = 80
+    min_sharpness: float = 35.0
+    redundancy_threshold: float = 0.90
+
+
+
 
 
 @dataclass
@@ -69,6 +80,8 @@ class SearchConfig:
     max_radius: int = 3
     total_recovery_timeout_s: float = 30.0
     confirmation_frames: int = 3
+    handoff_confirm_delay_s: float = 2.0
+
 
 
 @dataclass

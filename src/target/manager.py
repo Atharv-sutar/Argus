@@ -115,6 +115,16 @@ class TargetManager:
         self.select_by_track_id(selected.track_id, track_result)
         return selected.track_id
 
+    def mark_acquiring_reference(self, track: Track, frame_id: int, timestamp_ms: float) -> Target:
+        """Transitions target state to ACQUIRING_REFERENCE while building initial reference gallery."""
+        self._target.track_id = track.track_id
+        self._target.last_known_box = track.box
+        self._target.last_seen_frame = frame_id
+        self._target.last_seen_timestamp_ms = timestamp_ms
+        self._target.lost_duration_ms = 0.0
+        self._target.state = TargetState.ACQUIRING_REFERENCE
+        return self._target
+
     def mark_tracking(self, track: Track, frame_id: int, timestamp_ms: float) -> Target:
         """Transitions target state to confirmed TRACKING."""
         self._target.track_id = track.track_id
@@ -124,6 +134,7 @@ class TargetManager:
         self._target.lost_duration_ms = 0.0
         self._target.state = TargetState.TRACKING
         return self._target
+
 
     def mark_uncertain(self, timestamp_ms: float) -> Target:
         """Transitions target state to UNCERTAIN when verification is weak/pending."""

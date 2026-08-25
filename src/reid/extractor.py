@@ -119,13 +119,26 @@ class PyTorchReIDExtractor(BaseReID):
         return (combined / norm) if norm > 0 else combined
 
     def extract(self, crop: np.ndarray) -> Embedding:
+        fused, _, _ = self.extract_decomposed(crop)
+        return fused
+
+    def extract_decomposed(self, crop: np.ndarray) -> Tuple[Embedding, Embedding, Embedding]:
+        """
+        Extracts decomposed embeddings for fine-grained diagnostics.
+
+        Returns:
+            Tuple[Embedding, Embedding, Embedding]: (fused_embedding, deep_embedding, color_embedding)
+        """
         if crop is None or crop.size == 0:
-            return Embedding(vector=np.zeros(128, dtype=np.float32))
+            zero_vec = np.zeros(128, dtype=np.float32)
+            return Embedding(vector=zero_vec), Embedding(vector=zero_vec), Embedding(vector=zero_vec)
 
-        # 1. Color-spatial descriptor
+        # 1. Color-spatial descriptor (768D)
         color_vec = self._extract_spatial_color_descriptor(crop)
+        color_emb = Embedding(vector=color_vec)
 
-        # 2. Deep semantic feature
+        # 2. Deep semantic feature (576D)
+        deep_vec = np.zeros(576, dtype=np.float32)
         if self._model is not None:
             try:
                 import torch
@@ -135,18 +148,26 @@ class PyTorchReIDExtractor(BaseReID):
                     tensor = torch.from_numpy(prep).unsqueeze(0).to(self._device)
                     with torch.no_grad():
                         feat = self._model(tensor).squeeze().cpu().numpy()
-                    # Zero-center deep features to remove positive activation bias
-                    feat = feat - np.mean(feat)
                     norm = np.linalg.norm(feat)
                     if norm > 0:
-                        feat = feat / norm
-                    # Fuse deep features (80%) with spatial color features (20%)
-                    fused = np.concatenate([feat * 0.8944, color_vec * 0.4472])
-                    return Embedding(vector=fused)
+                        deep_vec = feat / norm
             except Exception as e:
                 logger.error(f"Error in deep ReID extraction: {e}")
 
-        return Embedding(vector=color_vec)
+        deep_emb = Embedding(vector=deep_vec)
+
+        # 3. Fused embedding (80% deep, 20% color)
+        if np.linalg.norm(deep_vec) > 0:
+            fused = np.concatenate([deep_vec * 0.8944, color_vec * 0.4472])
+            f_norm = np.linalg.norm(fused)
+            if f_norm > 0:
+                fused = fused / f_norm
+            fused_emb = Embedding(vector=fused)
+        else:
+            fused_emb = color_emb
+
+        return fused_emb, deep_emb, color_emb
+
 
     def extract_batch(self, crops: List[np.ndarray]) -> List[Embedding]:
         if not crops:
@@ -177,11 +198,13 @@ class PyTorchReIDExtractor(BaseReID):
                     for idx, orig_i in enumerate(indices):
                         feat = feats[idx]
                         c_vec = self._extract_spatial_color_descriptor(crops[orig_i])
-                        feat = feat - np.mean(feat)
                         norm = np.linalg.norm(feat)
                         if norm > 0:
                             feat = feat / norm
                         fused = np.concatenate([feat * 0.8944, c_vec * 0.4472])
+                        f_norm = np.linalg.norm(fused)
+                        if f_norm > 0:
+                            fused = fused / f_norm
                         embeddings[orig_i] = Embedding(vector=fused)
 
                     # Fallback for any invalid crops in the list
@@ -193,3 +216,4 @@ class PyTorchReIDExtractor(BaseReID):
                 logger.error(f"Error in deep ReID batch extraction: {e}")
 
         return [self.extract(c) for c in crops]
+
