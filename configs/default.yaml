@@ -25,11 +25,17 @@ tracking:
   min_box_area: 100.0
 
 reid:
-  model_name: "mobilenet_v3_small"
-  similarity_threshold: 0.65
-  reference_threshold: 0.60
+  model_name: "osnet_x0_25"
+  similarity_threshold: 0.75
+  reference_threshold: 0.70
+  upper_threshold: 0.55
   min_margin: 0.05
+  w_upper: 0.45
+  w_color: 0.25
+  w_deep: 0.15
+  w_lower: 0.15
   extract_interval_frames: 10
+
   gallery_size: 5
   reference_samples: 4
   reference_window_frames: 20
@@ -38,6 +44,7 @@ reid:
   min_crop_height: 80
   min_sharpness: 35.0
   redundancy_threshold: 0.90
+
 
 
 

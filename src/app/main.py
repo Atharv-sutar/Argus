@@ -96,8 +96,14 @@ def build_pipeline(
     identity_manager = IdentityManager(
         reid_extractor=reid_extractor,
         similarity_threshold=config.reid.similarity_threshold,
+        reference_threshold=config.reid.reference_threshold,
+        upper_threshold=config.reid.upper_threshold,
         min_margin=config.reid.min_margin,
         max_gallery_size=config.reid.gallery_size,
+        w_upper=config.reid.w_upper,
+        w_color=config.reid.w_color,
+        w_deep=config.reid.w_deep,
+        w_lower=config.reid.w_lower,
     )
 
     # 6. Annotator

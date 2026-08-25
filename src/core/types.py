@@ -180,17 +180,28 @@ class Embedding:
 class Identity:
     """
     Represents a unique known identity with separate immutable reference
-    and adaptive observation galleries.
+    and adaptive observation galleries and centralized decomposed reference prototypes.
     """
     identity_id: str
     label: str = "target_0"
     reference_gallery: List[Embedding] = field(default_factory=list)
     adaptive_gallery: List[Embedding] = field(default_factory=list)
+    reference_deep_gallery: List[Embedding] = field(default_factory=list)
+    reference_color_gallery: List[Embedding] = field(default_factory=list)
+    reference_upper_gallery: List[Embedding] = field(default_factory=list)
+    reference_lower_gallery: List[Embedding] = field(default_factory=list)
+    reference_prototype: Optional[Embedding] = None
+    reference_deep_proto: Optional[Embedding] = None
+    reference_color_proto: Optional[Embedding] = None
+    reference_upper_proto: Optional[Embedding] = None
+    reference_lower_proto: Optional[Embedding] = None
     last_seen_timestamp_ms: float = 0.0
 
     @property
     def reference_embedding(self) -> Optional[Embedding]:
-        """Primary reference embedding (first sample in reference gallery)."""
+        """Primary reference embedding (prototype or first reference anchor)."""
+        if self.reference_prototype is not None:
+            return self.reference_prototype
         return self.reference_gallery[0] if self.reference_gallery else None
 
     @reference_embedding.setter
@@ -200,8 +211,29 @@ class Identity:
                 self.reference_gallery.append(emb)
             else:
                 self.reference_gallery[0] = emb
+            self.update_prototype()
         else:
             self.reference_gallery.clear()
+            self.reference_prototype = None
+
+    @staticmethod
+    def _compute_centroid(gallery: List[Embedding]) -> Optional[Embedding]:
+        if not gallery:
+            return None
+        vectors = [emb.vector for emb in gallery]
+        mean_vec = np.mean(vectors, axis=0)
+        norm = np.linalg.norm(mean_vec)
+        if norm > 0:
+            mean_vec = mean_vec / norm
+        return Embedding(vector=mean_vec)
+
+    def update_prototype(self) -> None:
+        """Calculates and updates the normalized centroid prototypes for all reference representations."""
+        self.reference_prototype = self._compute_centroid(self.reference_gallery)
+        self.reference_deep_proto = self._compute_centroid(self.reference_deep_gallery)
+        self.reference_color_proto = self._compute_centroid(self.reference_color_gallery)
+        self.reference_upper_proto = self._compute_centroid(self.reference_upper_gallery)
+        self.reference_lower_proto = self._compute_centroid(self.reference_lower_gallery)
 
     @property
     def embeddings(self) -> List[Embedding]:
@@ -213,13 +245,21 @@ class Identity:
         # Fallback compatibility setter
         self.adaptive_gallery = list(embs)
 
-    def compute_detailed_similarity(self, query: Embedding) -> Tuple[float, float, float]:
+
+    def compute_detailed_similarity(self, query: Embedding) -> Tuple[float, float, float, float]:
         """
-        Computes detailed similarity against reference and adaptive galleries.
+        Computes detailed similarity against reference prototype, reference gallery,
+        and adaptive gallery.
 
         Returns:
-            Tuple[best_ref_sim, best_adaptive_sim, top2_adaptive_mean]
+            Tuple[proto_sim, best_ref_sim, best_adaptive_sim, top2_adaptive_mean]
         """
+        proto_sim = 0.0
+        if self.reference_prototype is not None:
+            proto_sim = self.reference_prototype.cosine_similarity(query)
+        elif self.reference_gallery:
+            proto_sim = self.reference_gallery[0].cosine_similarity(query)
+
         best_ref_sim = 0.0
         if self.reference_gallery:
             best_ref_sim = max(emb.cosine_similarity(query) for emb in self.reference_gallery)
@@ -231,15 +271,16 @@ class Identity:
             best_adaptive_sim = adaptive_sims[0]
             top2_adaptive_mean = sum(adaptive_sims[:2]) / len(adaptive_sims[:2])
 
-        return best_ref_sim, best_adaptive_sim, top2_adaptive_mean
+        return proto_sim, best_ref_sim, best_adaptive_sim, top2_adaptive_mean
 
     def compute_similarity(self, query: Embedding) -> float:
         """
         Returns highest appearance similarity score against stored identity.
-        Checks both reference gallery and adaptive gallery.
+        Checks prototype, reference gallery, and adaptive gallery.
         """
-        best_ref, best_adapt, _ = self.compute_detailed_similarity(query)
-        return max(best_ref, best_adapt)
+        proto_sim, best_ref, best_adapt, _ = self.compute_detailed_similarity(query)
+        return max(proto_sim, best_ref, best_adapt)
+
 
 
 

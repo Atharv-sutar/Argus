@@ -7,8 +7,8 @@
       "source": 1,
       "source_type": "webcam",
       "enabled": true,
-      "position_x": 356.9077125739478,
-      "position_y": 63.65999781545203,
+      "position_x": 328.0188236850589,
+      "position_y": 67.36370151915574,
       "floor": null,
       "zone": null,
       "description": null
@@ -19,8 +19,20 @@
       "source": 2,
       "source_type": "webcam",
       "enabled": true,
-      "position_x": 205.57771332841585,
-      "position_y": 177.43242770595197,
+      "position_x": 164.9110466617492,
+      "position_y": 72.7657610392853,
+      "floor": null,
+      "zone": null,
+      "description": null
+    },
+    {
+      "camera_id": "cam_0",
+      "name": "Webcam 0",
+      "source": 0,
+      "source_type": "webcam",
+      "enabled": true,
+      "position_x": 527.789091752147,
+      "position_y": 56.76688190425879,
       "floor": null,
       "zone": null,
       "description": null
@@ -30,6 +42,16 @@
     {
       "source_camera_id": "cam_2",
       "target_camera_id": "cam_1",
+      "edge_type": "adjacent",
+      "direction": "bidirectional",
+      "enabled": true,
+      "expected_min_transition_s": null,
+      "expected_typical_transition_s": null,
+      "expected_max_transition_s": null
+    },
+    {
+      "source_camera_id": "cam_1",
+      "target_camera_id": "cam_0",
       "edge_type": "adjacent",
       "direction": "bidirectional",
       "enabled": true,

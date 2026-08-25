@@ -79,12 +79,18 @@ class MultiCameraPipeline:
                 reid_extractor=reid_extractor,
                 similarity_threshold=config.reid.similarity_threshold,
                 reference_threshold=config.reid.reference_threshold,
+                upper_threshold=config.reid.upper_threshold,
                 min_margin=config.reid.min_margin,
                 max_reference_samples=config.reid.reference_samples,
                 max_gallery_size=config.reid.adaptive_gallery_size,
                 redundancy_threshold=config.reid.redundancy_threshold,
                 quality_evaluator=quality_eval,
+                w_upper=config.reid.w_upper,
+                w_color=config.reid.w_color,
+                w_deep=config.reid.w_deep,
+                w_lower=config.reid.w_lower,
             )
+
 
 
         # Factories for per-camera pipeline construction

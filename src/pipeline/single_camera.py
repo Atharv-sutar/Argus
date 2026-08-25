@@ -85,6 +85,8 @@ class SingleCameraPipeline:
         self._last_track_result: Optional[TrackResult] = None
         self._last_frame: Optional[np.ndarray] = None
         self._acquisition_start_frame: int = 0
+        self._consecutive_mismatches: int = 0
+        self._max_mismatches_before_lost: int = 3
 
     @property
     def current_target(self) -> Target:
@@ -252,49 +254,69 @@ class SingleCameraPipeline:
         if current_track is not None:
             crop = self._extract_crop(frame, current_track.box)
             if crop is not None:
-                eval_res: CandidateEvaluation = self.identity_manager.evaluate_candidate_crop(crop, self._identity_key)
-
-                decision = "ACCEPT" if eval_res.is_match else "REJECT"
-
-                log_reid_test(
-                    f"\n[REID_TEST] TARGET_VERIFICATION\n"
-                    f"LogicalTarget={self._identity_key}\n"
-                    f"Tracker={current_track_id}\n"
-                    f"Frame={self._frame_id}\n"
-                    f"State={target.state.value}\n"
-                    f"Quality: score={eval_res.crop_quality_score:.2f} reason={eval_res.quality_reason}\n"
-                    f"Decomposed: DeepSim={eval_res.deep_sim:.3f} ColorSim={eval_res.color_sim:.3f} FusedSim={eval_res.fused_sim:.3f}\n"
-                    f"Gallery: BestRefSim={eval_res.best_ref_sim:.3f} BestAdaptiveSim={eval_res.best_adaptive_sim:.3f} Top2AdaptiveMean={eval_res.top2_adaptive_mean:.3f}\n"
-                    f"CandidateScore={eval_res.candidate_score:.3f}\n"
-                    f"Decision={decision}\n"
+                should_run_reid = (
+                    target.state in (TargetState.LOCKED, TargetState.ACQUIRING_REFERENCE, TargetState.UNCERTAIN)
+                    or (self._frame_id % self.reid_interval == 0)
                 )
 
-                if eval_res.is_match or target.state in (TargetState.LOCKED, TargetState.ACQUIRING_REFERENCE):
-                    current_verified = True
-                    old_state = target.state.value
-                    self.target_manager.mark_tracking(current_track, track_result.frame_id, timestamp_ms)
-                    new_state = target.state.value
-                    if old_state != new_state:
-                        log_reid_test(
-                            f"\n[REID_TEST] STATE_CHANGE\n"
-                            f"LogicalTarget={self._identity_key}\n"
-                            f"OldState={old_state}\n"
-                            f"NewState={new_state}\n"
-                            f"TrackerID={current_track.track_id}\n"
-                            f"Reason=verification_passed\n"
-                            f"ReIDScore={eval_res.candidate_score:.3f}\n"
-                        )
-                    # Acquire diverse reference samples during initial window
-                    if not self.identity_manager.is_reference_complete(self._identity_key) and (self._frame_id - self._acquisition_start_frame) <= self.reference_window_frames:
-                        self.identity_manager.add_reference_sample(crop, self._identity_key, timestamp_ms)
-                    elif self._frame_id % self.reid_interval == 0 and target.state == TargetState.TRACKING:
-                        self.identity_manager.verified_update(crop, self._identity_key, timestamp_ms)
-                else:
-                    logger.warning(
-                        f"[REID] LogicalTarget={self._identity_key} | CurrentTracker={current_track_id} | "
-                        f"CandidateScore={eval_res.candidate_score:.3f} (RefSim={eval_res.best_ref_sim:.3f}) | "
-                        f"Decision=TARGET_IDENTITY_MISMATCH"
+                if should_run_reid:
+                    eval_res: CandidateEvaluation = self.identity_manager.evaluate_candidate_crop(crop, self._identity_key)
+                    decision = "ACCEPT" if eval_res.is_match else "REJECT"
+
+                    log_reid_test(
+                        f"\n[REID_TEST] TARGET_VERIFICATION\n"
+                        f"LogicalTarget={self._identity_key}\n"
+                        f"Tracker={current_track_id}\n"
+                        f"Frame={self._frame_id}\n"
+                        f"State={target.state.value}\n"
+                        f"Quality: score={eval_res.crop_quality_score:.2f} reason={eval_res.quality_reason}\n"
+                        f"Decomposed: DeepSim={eval_res.deep_sim:.3f} ColorSim={eval_res.color_sim:.3f} FusedSim={eval_res.fused_sim:.3f}\n"
+                        f"Parts: UpperSim={eval_res.upper_sim:.3f} LowerSim={eval_res.lower_sim:.3f} Agreement={eval_res.feature_agreement_passed}\n"
+                        f"Gallery: ProtoSim={eval_res.proto_sim:.3f} BestRefSim={eval_res.best_ref_sim:.3f} BestAdaptiveSim={eval_res.best_adaptive_sim:.3f} Top2AdaptiveMean={eval_res.top2_adaptive_mean:.3f}\n"
+                        f"CandidateScore={eval_res.candidate_score:.3f}\n"
+                        f"Decision={decision}\n"
                     )
+
+                    if eval_res.is_match or target.state in (TargetState.LOCKED, TargetState.ACQUIRING_REFERENCE):
+                        self._consecutive_mismatches = 0
+                        current_verified = True
+                        old_state = target.state.value
+                        self.target_manager.mark_tracking(current_track, track_result.frame_id, timestamp_ms)
+                        new_state = target.state.value
+                        if old_state != new_state:
+                            log_reid_test(
+                                f"\n[REID_TEST] STATE_CHANGE\n"
+                                f"LogicalTarget={self._identity_key}\n"
+                                f"OldState={old_state}\n"
+                                f"NewState={new_state}\n"
+                                f"TrackerID={current_track.track_id}\n"
+                                f"Reason=verification_passed\n"
+                                f"ReIDScore={eval_res.candidate_score:.3f}\n"
+                            )
+                        # Acquire diverse reference samples during initial window
+                        if not self.identity_manager.is_reference_complete(self._identity_key) and (self._frame_id - self._acquisition_start_frame) <= self.reference_window_frames:
+                            self.identity_manager.add_reference_sample(crop, self._identity_key, timestamp_ms)
+                        elif self._frame_id % self.reid_interval == 0 and target.state == TargetState.TRACKING:
+                            self.identity_manager.verified_update(crop, self._identity_key, timestamp_ms)
+                    else:
+                        self._consecutive_mismatches += 1
+                        if self._consecutive_mismatches < self._max_mismatches_before_lost:
+                            current_verified = True
+                            self.target_manager.mark_tracking(current_track, track_result.frame_id, timestamp_ms)
+                            logger.debug(
+                                f"[REID] Minor verification mismatch ({self._consecutive_mismatches}/{self._max_mismatches_before_lost}), keeping spatial tracking."
+                            )
+                        else:
+                            current_verified = False
+                            logger.warning(
+                                f"[REID] LogicalTarget={self._identity_key} | CurrentTracker={current_track_id} | "
+                                f"CandidateScore={eval_res.candidate_score:.3f} (RefSim={eval_res.best_ref_sim:.3f}) | "
+                                f"Mismatches={self._consecutive_mismatches} | Decision=TARGET_IDENTITY_MISMATCH"
+                            )
+                else:
+                    # Spatial tracking continuity maintained between ReID intervals
+                    current_verified = True
+                    self.target_manager.mark_tracking(current_track, track_result.frame_id, timestamp_ms)
 
 
         if not current_verified:
@@ -331,11 +353,13 @@ class SingleCameraPipeline:
                         f"Crop: {cand_track.box.x1:.1f} {cand_track.box.y1:.1f} {cand_track.box.x2:.1f} {cand_track.box.y2:.1f}\n"
                         f"Quality: score={cand_eval.crop_quality_score:.2f} reason={cand_eval.quality_reason}\n"
                         f"Decomposed: DeepSim={cand_eval.deep_sim:.3f} ColorSim={cand_eval.color_sim:.3f} FusedSim={cand_eval.fused_sim:.3f}\n"
-                        f"Gallery: BestRefSim={cand_eval.best_ref_sim:.3f} BestAdaptiveSim={cand_eval.best_adaptive_sim:.3f}\n"
+                        f"Parts: UpperSim={cand_eval.upper_sim:.3f} LowerSim={cand_eval.lower_sim:.3f} Agreement={cand_eval.feature_agreement_passed}\n"
+                        f"Gallery: ProtoSim={cand_eval.proto_sim:.3f} BestRefSim={cand_eval.best_ref_sim:.3f} BestAdaptiveSim={cand_eval.best_adaptive_sim:.3f}\n"
                         f"CandidateScore={cand_score:.3f}\n"
                         f"Rank={rank_idx + 1}\n"
                         f"Decision={cand_decision}\n"
                     )
+
 
                 if ranked:
                     top_cand, top_score, top_eval = ranked[0]
@@ -347,33 +371,37 @@ class SingleCameraPipeline:
 
             if best_track is not None:
                 new_tr = best_track.track_id
-                self.target_manager.select_by_track_id(best_track.track_id, track_result)
-                self.target_manager.mark_tracking(best_track, track_result.frame_id, timestamp_ms)
-                new_st = target.state.value
-
-                log_reid_test(
-                    f"\n[REID_TEST] TARGET_ASSIGNMENT\n"
-                    f"LogicalTarget={self._identity_key}\n"
-                    f"OldTracker={old_tr}\n"
-                    f"NewTracker={new_tr}\n"
-                    f"CurrentTargetState={new_st}\n"
-                    f"SourceFunction=_manage_target_identity\n"
-                    f"File=single_camera.py\n"
-                    f"ReIDDecision=ACCEPT\n"
-                    f"ReIDSimilarity={best_score:.3f}\n"
-                    f"ReferenceEmbeddingHash={ref_hash}\n"
-                    f"Reason=RECOVERY\n"
+                reassociated = self.target_manager.reassociate_target(
+                    best_track,
+                    track_result.frame_id,
+                    timestamp_ms,
+                    reid_verified=True,
                 )
+                if reassociated:
+                    new_st = target.state.value
+                    log_reid_test(
+                        f"\n[REID_TEST] TARGET_ASSIGNMENT\n"
+                        f"LogicalTarget={self._identity_key}\n"
+                        f"OldTracker={old_tr}\n"
+                        f"NewTracker={new_tr}\n"
+                        f"CurrentTargetState={new_st}\n"
+                        f"SourceFunction=_manage_target_identity\n"
+                        f"File=single_camera.py\n"
+                        f"ReIDDecision=ACCEPT\n"
+                        f"ReIDSimilarity={best_score:.3f}\n"
+                        f"ReferenceEmbeddingHash={ref_hash}\n"
+                        f"Reason=RECOVERY\n"
+                    )
 
-                log_reid_test(
-                    f"\n[REID_TEST] STATE_CHANGE\n"
-                    f"LogicalTarget={self._identity_key}\n"
-                    f"OldState={old_st}\n"
-                    f"NewState={new_st}\n"
-                    f"TrackerID={new_tr}\n"
-                    f"Reason=target_recovered\n"
-                    f"ReIDScore={best_score:.3f}\n"
-                )
+                    log_reid_test(
+                        f"\n[REID_TEST] STATE_CHANGE\n"
+                        f"LogicalTarget={self._identity_key}\n"
+                        f"OldState={old_st}\n"
+                        f"NewState={new_st}\n"
+                        f"TrackerID={new_tr}\n"
+                        f"Reason=target_recovered\n"
+                        f"ReIDScore={best_score:.3f}\n"
+                    )
             else:
                 if old_st != TargetState.UNSELECTED.value:
                     self.target_manager.mark_lost(timestamp_ms)
@@ -388,6 +416,7 @@ class SingleCameraPipeline:
                         f"Reason=no_candidate_passed_reid\n"
                         f"ReIDScore=0.000\n"
                     )
+
 
         return self.target_manager.target
 

@@ -161,6 +161,37 @@ class TargetManager:
         self._target = Target(state=TargetState.UNSELECTED)
         logger.info("LogicalTarget=cleared Decision=DESELECTED")
 
+    def reassociate_target(
+        self,
+        track: Track,
+        frame_id: int,
+        timestamp_ms: float,
+        reid_verified: bool = False,
+    ) -> bool:
+        """
+        Reassociates a lost target with a new tracker ID.
+        STRICT SAFETY INVARIANT: Reassociation MUST have positive ReID verification.
+        """
+        if not reid_verified:
+            logger.error(
+                f"[TARGET_SAFETY] Attempted to reassociate target '{self._target.track_id}' to "
+                f"new tracker '{track.track_id}' WITHOUT positive ReID verification! REJECTED."
+            )
+            return False
+
+        old_tr = self._target.track_id
+        self._target.track_id = track.track_id
+        self._target.last_known_box = track.box
+        self._target.last_seen_frame = frame_id
+        self._target.last_seen_timestamp_ms = timestamp_ms
+        self._target.lost_duration_ms = 0.0
+        self._target.state = TargetState.TRACKING
+        logger.info(
+            f"[TARGET_REASSOCIATE] Logical target reassociated: OldTracker={old_tr} -> "
+            f"NewTracker={track.track_id} | State=TRACKING | ReIDVerified=True"
+        )
+        return True
+
     def update(
         self,
         track_result: TrackResult,
@@ -169,30 +200,26 @@ class TargetManager:
         min_margin: Optional[float] = None,
     ) -> Target:
         """
-        Update the target state against the latest TrackResult.
-
-        When verify_fn is provided:
-        1. Checks if the currently assigned track ID still looks like the selected person.
-        2. If verified -> remains TRACKING.
-        3. If mismatched or missing -> searches all other candidate tracks in the frame,
-           ranks by appearance similarity, and requires a margin over the second-best candidate.
-        4. If no candidate qualifies -> transitions to LOST (never adopts the wrong person).
+        Updates the target state against the latest TrackResult.
+        If the current track is missing or fails verification:
+          - If verify_fn is provided, searches candidate tracks for a verified match with margin.
+          - Otherwise, transitions to LOST.
+        Never automatically assigns another tracker ID without explicit verified ReID.
         """
         if self._target.state == TargetState.UNSELECTED or self._target.track_id is None:
             return self._target
 
         margin_req = min_margin if min_margin is not None else self.min_margin
 
-        # --- Appearance-verified path ---
-        if verify_fn is not None and frame is not None:
-            current_track: Optional[Track] = None
-            for track in track_result.tracks:
-                if track.track_id == self._target.track_id:
-                    current_track = track
-                    break
+        # 1. Check current track if present
+        current_track: Optional[Track] = None
+        for track in track_result.tracks:
+            if track.track_id == self._target.track_id:
+                current_track = track
+                break
 
-            # 1. Verify current track first
-            if current_track is not None:
+        if current_track is not None:
+            if verify_fn is not None and frame is not None:
                 crop = self._extract_crop(frame, current_track.box)
                 if crop is not None:
                     is_match, score = verify_fn(crop)
@@ -200,15 +227,20 @@ class TargetManager:
                         return self.mark_tracking(current_track, track_result.frame_id, track_result.timestamp_ms)
                     else:
                         logger.warning(
-                            f"LogicalTarget=selected CurrentTracker={self._target.track_id} "
-                            f"VerificationSimilarity={score:.3f} Decision=TARGET_IDENTITY_MISMATCH"
+                            f"[TARGET] LogicalTarget={self._target.track_id} CurrentTracker={current_track.track_id} "
+                            f"Score={score:.3f} | Verification failed -> State=LOST"
                         )
+                        current_track = None
+            else:
+                return self.mark_tracking(current_track, track_result.frame_id, track_result.timestamp_ms)
 
-            # 2. Current track missing or failed verification: search all candidate tracks
+        # 2. If current track is missing or failed verification, search candidates with verify_fn if provided
+        if verify_fn is not None and frame is not None:
             candidate_tracks = [
                 t for t in track_result.tracks
-                if t.track_id != self._target.track_id or current_track is None
+                if t.track_id != self._target.track_id
             ]
+
             scored_candidates: List[Tuple[Track, float]] = []
             for t in candidate_tracks:
                 c = self._extract_crop(frame, t.box)
@@ -225,63 +257,13 @@ class TargetManager:
 
                 if len(scored_candidates) == 1 or margin >= margin_req:
                     logger.info(
-                        f"LogicalTarget=selected OldTracker={self._target.track_id} "
-                        f"NewTracker={best_track.track_id} BestSimilarity={best_score:.3f} "
-                        f"SecondBest={second_score:.3f} Margin={margin:.3f} Decision=REASSOCIATE"
+                        f"[TARGET] Reassociated to candidate tracker {best_track.track_id} (score={best_score:.3f}, margin={margin:.3f})"
                     )
                     return self.mark_tracking(best_track, track_result.frame_id, track_result.timestamp_ms)
-                else:
-                    logger.info(
-                        f"LogicalTarget=selected BestSimilarity={best_score:.3f} "
-                        f"SecondBest={second_score:.3f} Margin={margin:.3f} Decision=REJECT_AMBIGUOUS"
-                    )
 
-            return self.mark_lost(track_result.timestamp_ms)
+        return self.mark_lost(track_result.timestamp_ms)
 
-        # --- Legacy path without appearance verifier ---
-        found_track: Optional[Track] = None
-        for track in track_result.tracks:
-            if track.track_id == self._target.track_id:
-                found_track = track
-                break
 
-        if found_track is None and self._target.last_known_box is not None:
-            found_track = self._try_reassociate(track_result, frame, verify_fn)
-
-        if found_track is not None:
-            return self.mark_tracking(found_track, track_result.frame_id, track_result.timestamp_ms)
-        else:
-            return self.mark_lost(track_result.timestamp_ms)
-
-    def _try_reassociate(
-        self,
-        track_result: TrackResult,
-        frame: Optional[np.ndarray],
-        verify_fn: Optional[AppearanceVerifier],
-    ) -> Optional[Track]:
-        """Legacy spatial IoU re-association."""
-        if self._target.lost_duration_ms > self.lost_timeout_ms or self._target.last_known_box is None:
-            return None
-
-        candidates: list[Tuple[Track, float]] = []
-        for track in track_result.tracks:
-            iou = self._target.last_known_box.iou(track.box)
-            if iou >= self.reassociation_iou_thresh:
-                candidates.append((track, iou))
-
-        if not candidates:
-            return None
-
-        candidates.sort(key=lambda x: x[1], reverse=True)
-        best_track_legacy, best_iou = candidates[0]
-        logger.warning(
-            f"LogicalTarget=selected Tracker={self._target.track_id} "
-            f"CandidateTracker={best_track_legacy.track_id} "
-            f"IoU={best_iou:.2f} Decision=LEGACY_IOU_REASSOCIATE "
-            f"(no appearance verifier available)"
-        )
-        self._target.track_id = best_track_legacy.track_id
-        return best_track_legacy
 
     @staticmethod
     def _extract_crop(frame: np.ndarray, box: BoundingBox) -> Optional[np.ndarray]:

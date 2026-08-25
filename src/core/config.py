@@ -42,11 +42,17 @@ class TrackingConfig:
 
 @dataclass
 class ReIDConfig:
-    model_name: str = "mobilenet_v3_small"
-    similarity_threshold: float = 0.65
-    reference_threshold: float = 0.60
+    model_name: str = "osnet_x0_25"
+    similarity_threshold: float = 0.75
+    reference_threshold: float = 0.70
+    upper_threshold: float = 0.55
     min_margin: float = 0.05
+    w_upper: float = 0.45
+    w_color: float = 0.25
+    w_deep: float = 0.15
+    w_lower: float = 0.15
     extract_interval_frames: int = 10
+
     gallery_size: int = 5
     reference_samples: int = 4
     reference_window_frames: int = 20
@@ -55,6 +61,7 @@ class ReIDConfig:
     min_crop_height: int = 80
     min_sharpness: float = 35.0
     redundancy_threshold: float = 0.90
+
 
 
 
