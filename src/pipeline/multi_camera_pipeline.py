@@ -409,10 +409,9 @@ class MultiCameraPipeline:
                     logger.info(
                         f"[MULTI-CAM CANDIDATE] Candidate verified on '{search_cam_id}' (Tracker: {s_target.track_id})"
                     )
-                    is_confirmed = self.search_manager.on_candidate_found(search_cam_id, 0.85)
-                    if is_confirmed:
-                        candidate_recovered_camera = search_cam_id
-                        break
+                    self.search_manager.on_candidate_found(search_cam_id, 0.85)
+                    candidate_recovered_camera = search_cam_id
+                    break
                 else:
                     self.search_manager.on_candidate_lost(search_cam_id)
 

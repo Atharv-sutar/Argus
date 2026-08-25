@@ -125,10 +125,27 @@ class EvidenceEngine:
         if len(history) > self.window_size:
             history.pop(0)
 
-    def prune_stale_tracks(self, active_track_ids: List[int]) -> None:
-        """Removes history for tracks that are no longer active."""
+    def prune_stale_tracks(
+        self,
+        active_track_ids: List[Union[int, str]],
+        current_frame_id: int = 0,
+        max_stale_frames: int = 30,
+    ) -> None:
+        """
+        Removes history for tracks that have been inactive for more than max_stale_frames (grace window).
+        Prevents single-frame detection blips from resetting accumulated evidence.
+        """
         active_set = set(active_track_ids)
-        to_delete = [t_id for t_id in self._history if t_id not in active_set]
+        to_delete = []
+        for t_id, obs_list in self._history.items():
+            if t_id not in active_set:
+                if obs_list and current_frame_id > 0:
+                    last_seen_frame = obs_list[-1].frame_id
+                    if (current_frame_id - last_seen_frame) > max_stale_frames:
+                        to_delete.append(t_id)
+                elif current_frame_id == 0:
+                    to_delete.append(t_id)
+
         for t_id in to_delete:
             del self._history[t_id]
 
@@ -136,7 +153,7 @@ class EvidenceEngine:
         """Clears all accumulated history."""
         self._history.clear()
 
-    def get_track_evidence(self, track_id: int) -> Tuple[float, float, int]:
+    def get_track_evidence(self, track_id: Union[int, str]) -> Tuple[float, float, int]:
         """
         Returns:
             Tuple[weighted_mean_score, consistency_ratio, sample_count]

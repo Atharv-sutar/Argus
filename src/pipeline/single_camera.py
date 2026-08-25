@@ -86,9 +86,28 @@ class SingleCameraPipeline:
         self._last_track_result: Optional[TrackResult] = None
         self._last_frame: Optional[np.ndarray] = None
         self._acquisition_start_frame: int = 0
-        self._consecutive_mismatches: int = 0
         self._max_mismatches_before_lost: int = 3
         self.target_evaluation_enabled: bool = True
+
+        from src.identity.evidence import EvidenceEngine
+        if identity_manager and getattr(identity_manager, "evidence_engine", None):
+            ee = identity_manager.evidence_engine
+            self._evidence_engine = EvidenceEngine(
+                window_size=ee.window_size,
+                min_similarity_threshold=ee.min_similarity_threshold,
+                reacquisition_threshold=ee.reacquisition_threshold,
+                reacquisition_min_frames=ee.reacquisition_min_frames,
+                min_margin_threshold=ee.min_margin_threshold,
+                min_consistency_ratio=ee.min_consistency_ratio,
+                min_spatial_displacement_px=ee.min_spatial_displacement_px,
+                min_time_gap_ms=ee.min_time_gap_ms,
+            )
+        else:
+            self._evidence_engine = EvidenceEngine(
+                min_similarity_threshold=getattr(identity_manager, "similarity_threshold", 0.78),
+                reacquisition_threshold=getattr(identity_manager, "reacquisition_threshold", 0.82),
+                min_margin_threshold=min_margin,
+            )
 
     @property
     def current_target(self) -> Target:
@@ -301,59 +320,36 @@ class SingleCameraPipeline:
                     cand_margin = cand_score - second_s if rank_idx == 0 else (cand_score - ranked[0][1])
 
                     # Feed observation to temporal EvidenceEngine
-                    if self.identity_manager.evidence_engine:
-                        self.identity_manager.evidence_engine.register_observation(
-                            track_id=cand_track.track_id,
-                            frame_id=self._frame_id,
-                            timestamp_ms=timestamp_ms,
-                            crop_quality=cand_eval.crop_quality_score,
-                            similarity=cand_score,
-                            margin=cand_margin,
-                            is_match=cand_eval.is_match,
-                            box=cand_track.box,
-                        )
+                    self._evidence_engine.register_observation(
+                        track_id=cand_track.track_id,
+                        frame_id=self._frame_id,
+                        timestamp_ms=timestamp_ms,
+                        crop_quality=cand_eval.crop_quality_score,
+                        similarity=cand_score,
+                        margin=cand_margin,
+                        is_match=cand_eval.is_match,
+                        box=cand_track.box,
+                    )
 
                     cand_eval_records.append((cand_track, cand_score, cand_eval.is_match, cand_eval.crop_quality_score))
 
-                    log_reid_test(
-                        f"\n[REID_TEST] CANDIDATE\n"
-                        f"LogicalTarget={self._identity_key}\n"
-                        f"CandidateTracker={cand_track.track_id}\n"
-                        f"Crop: {cand_track.box.x1:.1f} {cand_track.box.y1:.1f} {cand_track.box.x2:.1f} {cand_track.box.y2:.1f}\n"
-                        f"Quality: score={cand_eval.crop_quality_score:.2f} reason={cand_eval.quality_reason}\n"
-                        f"Decomposed: DeepSim={cand_eval.deep_sim:.3f} ColorSim={cand_eval.color_sim:.3f} FusedSim={cand_eval.fused_sim:.3f}\n"
-                        f"Parts: UpperSim={cand_eval.upper_sim:.3f} LowerSim={cand_eval.lower_sim:.3f} Agreement={cand_eval.feature_agreement_passed}\n"
-                        f"Gallery: ProtoSim={cand_eval.proto_sim:.3f} BestRefSim={cand_eval.best_ref_sim:.3f} BestAdaptiveSim={cand_eval.best_adaptive_sim:.3f}\n"
-                        f"CandidateScore={cand_score:.3f}\n"
-                        f"Rank={rank_idx + 1}\n"
-                        f"Decision={cand_decision}\n"
-                    )
+                # Prune tracks that have been inactive beyond the grace window
+                self._evidence_engine.prune_stale_tracks(
+                    [t.track_id for t in track_result.tracks],
+                    current_frame_id=self._frame_id,
+                    max_stale_frames=30,
+                )
 
-                # Prune old tracks from evidence engine
-                if self.identity_manager.evidence_engine:
-                    self.identity_manager.evidence_engine.prune_stale_tracks([t.track_id for t in track_result.tracks])
-                    evidence_dec: EvidenceDecision = self.identity_manager.evidence_engine.evaluate_all_candidates(
-                        cand_eval_records,
-                        self._identity_key,
-                        current_tracked_id=current_track_id,
-                        is_reacquisition=(current_track is None or target.state in (TargetState.LOST, TargetState.UNCERTAIN)),
-                    )
-                else:
-                    top_cand, top_score, top_eval = ranked[0]
-                    second_score = ranked[1][1] if len(ranked) > 1 else 0.0
-                    margin = top_score - second_score
-                    is_conf = top_eval.is_match and (len(ranked) == 1 or margin >= self.min_margin)
-                    evidence_dec = EvidenceDecision(
-                        target_identity_id=self._identity_key,
-                        best_track_id=top_cand.track_id if is_conf else None,
-                        best_score=top_score,
-                        second_best_score=second_score,
-                        margin=margin,
-                        is_confirmed=is_conf,
-                        is_uncertain=not is_conf and top_eval.is_match,
-                        confidence=top_score,
-                        decision_reason="Instant evaluation fallback",
-                    )
+                evidence_dec: EvidenceDecision = self._evidence_engine.evaluate_all_candidates(
+                    cand_eval_records,
+                    self._identity_key,
+                    current_tracked_id=current_track_id,
+                    is_reacquisition=(current_track is None or target.state in (TargetState.LOST, TargetState.UNCERTAIN)),
+                )
+
+                # Ensure decision token has the correct source camera ID
+                if evidence_dec.verified_token is not None:
+                    evidence_dec.verified_token.source_camera_id = self.camera_id
 
                 if evidence_dec.is_confirmed and evidence_dec.best_track_id is not None:
                     # Find track object for best candidate
