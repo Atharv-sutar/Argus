@@ -133,6 +133,7 @@ class TargetState(str, Enum):
     LOCKED = "LOCKED"
     ACQUIRING_REFERENCE = "ACQUIRING_REFERENCE"
     TRACKING = "TRACKING"
+    OCCLUDED = "OCCLUDED"
     UNCERTAIN = "UNCERTAIN"
     LOST = "LOST"
     RECOVERING = "RECOVERING"
@@ -151,9 +152,15 @@ class Target:
 
 @dataclass
 class Embedding:
-    """Represents a feature vector extracted from a person observation crop."""
+    """Represents a normalized feature vector extracted from a person crop with rich metadata."""
     vector: np.ndarray
     dim: int = field(init=False)
+    model_name: str = "reid"
+    version: str = "2.0"
+    crop_type: str = "full"  # "full", "upper", "lower"
+    quality_score: float = 1.0
+    camera_id: str = "camera_0"
+    timestamp_ms: float = 0.0
 
     def __post_init__(self) -> None:
         flat = np.asarray(self.vector, dtype=np.float32).flatten()
@@ -177,44 +184,262 @@ class Embedding:
 
 
 @dataclass
+class ViewCluster:
+    """Discrete multi-modal viewpoint cluster (e.g. Front, Rear, Side, Upper Torso)."""
+    cluster_id: str
+    label: str = "general"
+    exemplars: List[Embedding] = field(default_factory=list)
+    centroid: Optional[Embedding] = None
+
+    def update_centroid(self) -> None:
+        if not self.exemplars:
+            self.centroid = None
+            return
+        mat = np.stack([e.vector for e in self.exemplars], axis=0)
+        mean_vec = np.mean(mat, axis=0)
+        self.centroid = Embedding(
+            vector=mean_vec,
+            model_name=self.exemplars[0].model_name,
+            version=self.exemplars[0].version,
+            crop_type=self.exemplars[0].crop_type,
+        )
+
+    def match_score(self, candidate_emb: Embedding) -> float:
+        """Computes max similarity against all exemplars in this cluster."""
+        if not self.exemplars:
+            return 0.0
+        scores = [e.cosine_similarity(candidate_emb) for e in self.exemplars if e.dim == candidate_emb.dim]
+        return max(scores) if scores else 0.0
+
+
+@dataclass
+class TargetIdentityAnchor:
+    """Immutable ground-truth identity anchor established at target selection."""
+    identity_id: str
+    label: str = "selected_target"
+    clusters: List[ViewCluster] = field(default_factory=list)
+    model_name: str = "dinov2"
+    feature_dim: int = 384
+    created_timestamp_ms: float = 0.0
+    anchor_hash: str = ""
+
+    def max_similarity(self, candidate_emb: Embedding) -> float:
+        """Finds max similarity across all discrete appearance clusters in the anchor."""
+        if not self.clusters:
+            return 0.0
+        scores = [c.match_score(candidate_emb) for c in self.clusters]
+        return max(scores) if scores else 0.0
+
+
+class MatchDecisionState(str, Enum):
+    MATCH = "MATCH"
+    NO_MATCH = "NO_MATCH"
+    AMBIGUOUS = "AMBIGUOUS"
+    INSUFFICIENT_QUALITY = "INSUFFICIENT_QUALITY"
+
+
+@dataclass
+class VerifiedIdentityDecision:
+    """Structurally authorized decision for target identity assignment and reassociation."""
+    target_identity_id: str
+    authorized_track_id: Optional[int]
+    decision_state: MatchDecisionState
+    confidence: float
+    margin: float
+    timestamp_ms: float
+    reason: str
+    decision_id: str = ""
+    source_camera_id: str = "camera_0"
+    model_name: str = "dinov2"
+    model_version: str = "2.0"
+    expires_at_ms: float = 0.0
+    evidence_hash: str = ""
+    decision_token: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.decision_id:
+            import uuid
+            self.decision_id = uuid.uuid4().hex[:12]
+        if self.expires_at_ms <= 0.0:
+            self.expires_at_ms = self.timestamp_ms + 1000.0  # 1.0 second authorization validity window
+        if not self.decision_token and self.authorized_track_id is not None:
+            import hashlib
+            raw = f"{self.decision_id}:{self.target_identity_id}:{self.authorized_track_id}:{self.source_camera_id}:{self.model_name}:{self.decision_state.value}:{self.confidence:.4f}:{self.timestamp_ms}:{self.expires_at_ms}"
+            self.decision_token = hashlib.sha256(raw.encode()).hexdigest()[:24]
+
+    def is_authorized_for(
+        self,
+        target_identity_id: str,
+        track_id: int,
+        current_timestamp_ms: float = 0.0,
+        camera_id: Optional[str] = None,
+    ) -> bool:
+        """
+        Validates that this token explicitly authorizes target_identity_id to bind to track_id,
+        is not expired, matches camera if specified, and has a valid decision token.
+        """
+        if self.decision_state != MatchDecisionState.MATCH:
+            return False
+        if self.target_identity_id != target_identity_id:
+            return False
+        if self.authorized_track_id != track_id:
+            return False
+        if not self.decision_token:
+            return False
+        if current_timestamp_ms > 0.0 and self.expires_at_ms > 0.0 and current_timestamp_ms > self.expires_at_ms:
+            return False
+        if camera_id is not None and self.source_camera_id != camera_id:
+            return False
+        return True
+
+
+@dataclass
 class Identity:
     """
-    Represents a unique known identity with separate immutable reference
-    and adaptive observation galleries and centralized decomposed reference prototypes.
+    Represents a unique known identity with dual-gallery memory architecture:
+    1. trusted_gallery: Immutable multi-view enrollment cluster (front, side, angle views).
+    2. provisional_gallery: Bounded rolling observations strictly verified against the trusted anchor.
+    3. rejected_gallery: Hard-negative impostor embeddings for negative evidence comparison.
     """
     identity_id: str
     label: str = "target_0"
-    reference_gallery: List[Embedding] = field(default_factory=list)
-    adaptive_gallery: List[Embedding] = field(default_factory=list)
-    reference_deep_gallery: List[Embedding] = field(default_factory=list)
-    reference_color_gallery: List[Embedding] = field(default_factory=list)
-    reference_upper_gallery: List[Embedding] = field(default_factory=list)
-    reference_lower_gallery: List[Embedding] = field(default_factory=list)
-    reference_prototype: Optional[Embedding] = None
-    reference_deep_proto: Optional[Embedding] = None
-    reference_color_proto: Optional[Embedding] = None
-    reference_upper_proto: Optional[Embedding] = None
-    reference_lower_proto: Optional[Embedding] = None
+    trusted_gallery: List[Embedding] = field(default_factory=list)
+    provisional_gallery: List[Embedding] = field(default_factory=list)
+    rejected_gallery: List[Embedding] = field(default_factory=list)
+
+    # Multi-crop galleries
+    trusted_upper_gallery: List[Embedding] = field(default_factory=list)
+    trusted_lower_gallery: List[Embedding] = field(default_factory=list)
+
+    # Immutable identity anchor & multi-view clusters
+    anchor: Optional[TargetIdentityAnchor] = None
+    view_clusters: List[ViewCluster] = field(default_factory=list)
+
+    # Normalized centroid prototypes
+    trusted_prototype: Optional[Embedding] = None
+    trusted_upper_proto: Optional[Embedding] = None
+    trusted_lower_proto: Optional[Embedding] = None
+
+    # Confidence and metadata
+    confidence: float = 0.0
     last_seen_timestamp_ms: float = 0.0
+    last_camera_id: str = "camera_0"
+
+    # Backward-compatible property aliases
+    @property
+    def reference_gallery(self) -> List[Embedding]:
+        return self.trusted_gallery
+
+    @reference_gallery.setter
+    def reference_gallery(self, val: List[Embedding]) -> None:
+        self.trusted_gallery = val
+
+    @property
+    def adaptive_gallery(self) -> List[Embedding]:
+        return self.provisional_gallery
+
+    @adaptive_gallery.setter
+    def adaptive_gallery(self, val: List[Embedding]) -> None:
+        self.provisional_gallery = val
+
+    @property
+    def reference_upper_gallery(self) -> List[Embedding]:
+        return self.trusted_upper_gallery
+
+    @reference_upper_gallery.setter
+    def reference_upper_gallery(self, val: List[Embedding]) -> None:
+        self.trusted_upper_gallery = val
+
+    @property
+    def reference_lower_gallery(self) -> List[Embedding]:
+        return self.trusted_lower_gallery
+
+    @reference_lower_gallery.setter
+    def reference_lower_gallery(self, val: List[Embedding]) -> None:
+        self.trusted_lower_gallery = val
+
+    @property
+    def reference_deep_gallery(self) -> List[Embedding]:
+        return self.trusted_gallery
+
+    @reference_deep_gallery.setter
+    def reference_deep_gallery(self, val: List[Embedding]) -> None:
+        self.trusted_gallery = val
+
+    @property
+    def reference_color_gallery(self) -> List[Embedding]:
+        return self.trusted_gallery
+
+    @reference_color_gallery.setter
+    def reference_color_gallery(self, val: List[Embedding]) -> None:
+        pass
+
+    @property
+    def reference_prototype(self) -> Optional[Embedding]:
+        return self.trusted_prototype
+
+    @reference_prototype.setter
+    def reference_prototype(self, val: Optional[Embedding]) -> None:
+        self.trusted_prototype = val
+
+    @property
+    def reference_deep_proto(self) -> Optional[Embedding]:
+        return self.trusted_prototype
+
+    @reference_deep_proto.setter
+    def reference_deep_proto(self, val: Optional[Embedding]) -> None:
+        pass
+
+    @property
+    def reference_color_proto(self) -> Optional[Embedding]:
+        return self.trusted_prototype
+
+    @reference_color_proto.setter
+    def reference_color_proto(self, val: Optional[Embedding]) -> None:
+        pass
+
+    @property
+    def reference_upper_proto(self) -> Optional[Embedding]:
+        return self.trusted_upper_proto
+
+    @reference_upper_proto.setter
+    def reference_upper_proto(self, val: Optional[Embedding]) -> None:
+        self.trusted_upper_proto = val
+
+    @property
+    def reference_lower_proto(self) -> Optional[Embedding]:
+        return self.trusted_lower_proto
+
+    @reference_lower_proto.setter
+    def reference_lower_proto(self, val: Optional[Embedding]) -> None:
+        self.trusted_lower_proto = val
 
     @property
     def reference_embedding(self) -> Optional[Embedding]:
-        """Primary reference embedding (prototype or first reference anchor)."""
-        if self.reference_prototype is not None:
-            return self.reference_prototype
-        return self.reference_gallery[0] if self.reference_gallery else None
+        if self.trusted_prototype is not None:
+            return self.trusted_prototype
+        return self.trusted_gallery[0] if self.trusted_gallery else None
 
     @reference_embedding.setter
     def reference_embedding(self, emb: Optional[Embedding]) -> None:
         if emb is not None:
-            if not self.reference_gallery:
-                self.reference_gallery.append(emb)
+            if not self.trusted_gallery:
+                self.trusted_gallery.append(emb)
             else:
-                self.reference_gallery[0] = emb
+                self.trusted_gallery[0] = emb
             self.update_prototype()
         else:
-            self.reference_gallery.clear()
-            self.reference_prototype = None
+            self.trusted_gallery.clear()
+            self.trusted_prototype = None
+
+    @property
+    def embeddings(self) -> List[Embedding]:
+        """Combined list of all active embeddings (trusted references + verified provisional)."""
+        return self.trusted_gallery + self.provisional_gallery
+
+    @embeddings.setter
+    def embeddings(self, embs: List[Embedding]) -> None:
+        self.provisional_gallery = list(embs)
 
     @staticmethod
     def _compute_centroid(gallery: List[Embedding]) -> Optional[Embedding]:
@@ -222,64 +447,57 @@ class Identity:
             return None
         vectors = [emb.vector for emb in gallery]
         mean_vec = np.mean(vectors, axis=0)
-        norm = np.linalg.norm(mean_vec)
+        norm = float(np.linalg.norm(mean_vec))
         if norm > 0:
             mean_vec = mean_vec / norm
-        return Embedding(vector=mean_vec)
+        return Embedding(
+            vector=mean_vec,
+            model_name=gallery[0].model_name,
+            version=gallery[0].version,
+            crop_type=gallery[0].crop_type,
+        )
 
     def update_prototype(self) -> None:
-        """Calculates and updates the normalized centroid prototypes for all reference representations."""
-        self.reference_prototype = self._compute_centroid(self.reference_gallery)
-        self.reference_deep_proto = self._compute_centroid(self.reference_deep_gallery)
-        self.reference_color_proto = self._compute_centroid(self.reference_color_gallery)
-        self.reference_upper_proto = self._compute_centroid(self.reference_upper_gallery)
-        self.reference_lower_proto = self._compute_centroid(self.reference_lower_gallery)
-
-    @property
-    def embeddings(self) -> List[Embedding]:
-        """Combined list of all active embeddings (references + verified adaptive)."""
-        return self.reference_gallery + self.adaptive_gallery
-
-    @embeddings.setter
-    def embeddings(self, embs: List[Embedding]) -> None:
-        # Fallback compatibility setter
-        self.adaptive_gallery = list(embs)
-
+        """Calculates and updates normalized centroid prototypes for all trusted representations."""
+        self.trusted_prototype = self._compute_centroid(self.trusted_gallery)
+        self.trusted_upper_proto = self._compute_centroid(self.trusted_upper_gallery)
+        self.trusted_lower_proto = self._compute_centroid(self.trusted_lower_gallery)
 
     def compute_detailed_similarity(self, query: Embedding) -> Tuple[float, float, float, float]:
         """
-        Computes detailed similarity against reference prototype, reference gallery,
-        and adaptive gallery.
+        Computes detailed similarity against trusted prototype, trusted gallery,
+        and provisional rolling gallery.
 
         Returns:
-            Tuple[proto_sim, best_ref_sim, best_adaptive_sim, top2_adaptive_mean]
+            Tuple[proto_sim, best_trusted_sim, best_provisional_sim, top2_provisional_mean]
         """
         proto_sim = 0.0
-        if self.reference_prototype is not None:
-            proto_sim = self.reference_prototype.cosine_similarity(query)
-        elif self.reference_gallery:
-            proto_sim = self.reference_gallery[0].cosine_similarity(query)
+        if self.trusted_prototype is not None and self.trusted_prototype.dim == query.dim:
+            proto_sim = self.trusted_prototype.cosine_similarity(query)
+        elif self.trusted_gallery and self.trusted_gallery[0].dim == query.dim:
+            proto_sim = self.trusted_gallery[0].cosine_similarity(query)
 
-        best_ref_sim = 0.0
-        if self.reference_gallery:
-            best_ref_sim = max(emb.cosine_similarity(query) for emb in self.reference_gallery)
+        best_trusted_sim = 0.0
+        if self.trusted_gallery:
+            valid_trusted = [emb for emb in self.trusted_gallery if emb.dim == query.dim]
+            if valid_trusted:
+                best_trusted_sim = max(emb.cosine_similarity(query) for emb in valid_trusted)
 
-        best_adaptive_sim = 0.0
-        top2_adaptive_mean = 0.0
-        if self.adaptive_gallery:
-            adaptive_sims = sorted([emb.cosine_similarity(query) for emb in self.adaptive_gallery], reverse=True)
-            best_adaptive_sim = adaptive_sims[0]
-            top2_adaptive_mean = sum(adaptive_sims[:2]) / len(adaptive_sims[:2])
+        best_provisional_sim = 0.0
+        top2_provisional_mean = 0.0
+        if self.provisional_gallery:
+            valid_prov = [emb for emb in self.provisional_gallery if emb.dim == query.dim]
+            if valid_prov:
+                prov_sims = sorted([emb.cosine_similarity(query) for emb in valid_prov], reverse=True)
+                best_provisional_sim = prov_sims[0]
+                top2_provisional_mean = sum(prov_sims[:2]) / len(prov_sims[:2])
 
-        return proto_sim, best_ref_sim, best_adaptive_sim, top2_adaptive_mean
+        return proto_sim, best_trusted_sim, best_provisional_sim, top2_provisional_mean
 
     def compute_similarity(self, query: Embedding) -> float:
-        """
-        Returns highest appearance similarity score against stored identity.
-        Checks prototype, reference gallery, and adaptive gallery.
-        """
-        proto_sim, best_ref, best_adapt, _ = self.compute_detailed_similarity(query)
-        return max(proto_sim, best_ref, best_adapt)
+        """Returns highest appearance similarity score against stored identity."""
+        proto_sim, best_trust, best_prov, _ = self.compute_detailed_similarity(query)
+        return max(proto_sim, best_trust, best_prov)
 
 
 

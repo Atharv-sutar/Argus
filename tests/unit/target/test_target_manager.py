@@ -169,20 +169,38 @@ def test_target_found_in_another_tracker():
 
     tm.update(res, frame=frame, verify_fn=selective_verify)
 
+    # Invariant: TargetManager alone never silently switches ID; it transitions to LOST
+    assert tm.target.state == TargetState.LOST
+
+    # Explicit authorized reassociation via token
+    from src.core.types import MatchDecisionState, VerifiedIdentityDecision
+    token = VerifiedIdentityDecision(
+        target_identity_id="target_0",
+        authorized_track_id=53,
+        decision_state=MatchDecisionState.MATCH,
+        confidence=0.92,
+        margin=0.62,
+        timestamp_ms=133.3,
+        reason="Verified candidate 53",
+    )
+    ok = tm.reassociate_target(t53, frame_id=2, timestamp_ms=133.3, decision=token)
+    assert ok is True
     assert tm.target.track_id == 53
     assert tm.target.state == TargetState.TRACKING
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Test D: Two plausible candidates with clear margin -> best selected
+# Test D: Two plausible candidates with clear margin -> token reassociation
 # ═══════════════════════════════════════════════════════════════════
 
 def test_margin_based_candidate_selection():
     """
     Candidate 24 -> 0.70
     Candidate 25 -> 0.91 (Margin = 0.21 >= 0.05)
-    System must choose candidate 25.
+    Reassociation requires authorized verification decision.
     """
+    from src.core.types import MatchDecisionState, VerifiedIdentityDecision
+
     tm = TargetManager(min_margin=0.05)
     t24 = Track(track_id=24, box=BoundingBox(10, 10, 50, 100))
     t25 = Track(track_id=25, box=BoundingBox(60, 10, 100, 100))
@@ -201,7 +219,20 @@ def test_margin_based_candidate_selection():
         return (True, 0.91)      # track 25
 
     tm.update(res, frame=frame, verify_fn=verify_two)
+    assert tm.target.state == TargetState.LOST
 
+    # Reassociate with token
+    token = VerifiedIdentityDecision(
+        target_identity_id="target_0",
+        authorized_track_id=25,
+        decision_state=MatchDecisionState.MATCH,
+        confidence=0.91,
+        margin=0.21,
+        timestamp_ms=133.3,
+        reason="Winner with margin",
+    )
+    ok = tm.reassociate_target(t25, frame_id=2, timestamp_ms=133.3, decision=token)
+    assert ok is True
     assert tm.target.track_id == 25
     assert tm.target.state == TargetState.TRACKING
 

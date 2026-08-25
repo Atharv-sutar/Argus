@@ -159,3 +159,40 @@ def test_register_new_target_cleanly_replaces_identity():
     # Must be Person B's embedding, not Person A's!
     assert ref_b != ref_a
     assert ref_b.cosine_similarity(ref_a) < 0.80
+
+
+def test_adaptive_gallery_anti_poisoning_and_flush():
+    """
+    Verifies that:
+    1. Dissimilar scooper crops are rejected by verified_update() (anti-poisoning).
+    2. Legitimate matching crops are accepted into adaptive gallery.
+    3. flush_adaptive_gallery() cleanly wipes adaptive observations back to pure immutable reference.
+    """
+    reid = MockReID()
+    store = InMemoryVectorStore()
+    im = IdentityManager(reid_extractor=reid, vector_store=store, similarity_threshold=0.75, reference_threshold=0.70)
+
+    # 1. Register Target (mean 200)
+    crop_target = np.full((50, 50, 3), 200, dtype=np.uint8)
+    im.register_new_target(crop_target, identity_id="target_0")
+    ident = im.get_identity("target_0")
+    assert len(ident.reference_gallery) == 1
+    assert len(ident.adaptive_gallery) == 0
+
+    # 2. Try to add Scooper crop (mean 20 -> dissimilar)
+    crop_scooper = np.full((50, 50, 3), 20, dtype=np.uint8)
+    accepted_scooper = im.verified_update(crop_scooper, identity_id="target_0")
+    assert accepted_scooper is False
+    assert len(ident.adaptive_gallery) == 0  # Rejection protected!
+
+    # 3. Add legitimate matching crop (mean 202)
+    crop_legit = np.full((50, 50, 3), 202, dtype=np.uint8)
+    accepted_legit = im.verified_update(crop_legit, identity_id="target_0")
+    assert accepted_legit is True
+    assert len(ident.adaptive_gallery) == 1
+
+    # 4. Flush adaptive gallery
+    im.flush_adaptive_gallery("target_0")
+    assert len(ident.adaptive_gallery) == 0
+    assert len(ident.reference_gallery) == 1
+

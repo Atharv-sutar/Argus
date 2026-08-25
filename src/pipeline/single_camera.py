@@ -15,6 +15,7 @@ except ImportError:
 from src.core.interfaces import BaseCamera, BaseDetector, BaseTracker
 from src.core.types import DetectionResult, Target, TargetState, Track, TrackResult
 from src.identity.manager import CandidateEvaluation, IdentityManager
+from src.identity.evidence import EvidenceDecision
 from src.target.manager import TargetManager
 from src.visualization.annotator import FrameAnnotator
 
@@ -201,7 +202,7 @@ class SingleCameraPipeline:
             return None
         return frame[y1:y2, x1:x2]
 
-    def _is_occluded(self, track: Track, all_tracks: List[Track], iou_threshold: float = 0.08) -> bool:
+    def _is_occluded(self, track: Track, all_tracks: List[Track], iou_threshold: float = 0.30) -> bool:
         """Detects whether a track's bounding box significantly overlaps with any other track."""
         if not all_tracks or len(all_tracks) <= 1:
             return False
@@ -222,9 +223,8 @@ class SingleCameraPipeline:
         Evaluates the selected target's identity against the current frame tracks.
 
         1. Handles reference acquisition over initial window to build diverse 3-5 sample reference gallery.
-        2. Evaluates active track with decomposed deep/color/fused similarities and reference safeguards.
-        3. Protects against occlusion and path-crossing box swaps.
-        4. Recovers lost targets with candidate-level scoring and margin requirements.
+        2. Performs competitive all-candidate ReID sweeps on interval and post-occlusion to prevent ID-swaps / scoops.
+        3. Protects against heavy occlusion and recovers lost targets with margin requirements.
         """
         if not self.target_evaluation_enabled:
             # Passive monitoring camera: purely update spatial tracker without running global target re-association
@@ -267,106 +267,54 @@ class SingleCameraPipeline:
         ref_hash = get_embedding_hash(ident.reference_embedding) if (ident and ident.reference_embedding) else "None"
 
         current_verified = False
-        if current_track is not None:
-            is_occluded = self._is_occluded(current_track, track_result.tracks)
-            crop = self._extract_crop(frame, current_track.box)
+        should_run_reid = (
+            current_track is None
+            or target.state in (TargetState.UNSELECTED, TargetState.LOST, TargetState.LOCKED, TargetState.ACQUIRING_REFERENCE, TargetState.UNCERTAIN, TargetState.OCCLUDED)
+            or (self._frame_id % self.reid_interval == 0)
+        )
 
-            if is_occluded:
-                # Occlusion / Path Crossing detected: freeze gallery updates, rely on spatial Kalman tracking
-                current_verified = True
-                self.target_manager.mark_tracking(current_track, track_result.frame_id, timestamp_ms)
-                logger.debug(
-                    f"[REID] Target ID {current_track.track_id} is occluded by another person. "
-                    f"Freezing gallery update and maintaining spatial tracking lock."
-                )
-            elif crop is not None:
-                should_run_reid = (
-                    target.state in (TargetState.LOCKED, TargetState.ACQUIRING_REFERENCE, TargetState.UNCERTAIN)
-                    or (self._frame_id % self.reid_interval == 0)
-                )
+        is_occluded = self._is_occluded(current_track, track_result.tracks, iou_threshold=0.35) if current_track is not None else False
 
-                if should_run_reid:
-                    eval_res: CandidateEvaluation = self.identity_manager.evaluate_candidate_crop(crop, self._identity_key)
-                    decision = "ACCEPT" if eval_res.is_match else "REJECT"
-
-                    log_reid_test(
-                        f"\n[REID_TEST] TARGET_VERIFICATION\n"
-                        f"LogicalTarget={self._identity_key}\n"
-                        f"Tracker={current_track_id}\n"
-                        f"Frame={self._frame_id}\n"
-                        f"State={target.state.value}\n"
-                        f"Quality: score={eval_res.crop_quality_score:.2f} reason={eval_res.quality_reason}\n"
-                        f"Decomposed: DeepSim={eval_res.deep_sim:.3f} ColorSim={eval_res.color_sim:.3f} FusedSim={eval_res.fused_sim:.3f}\n"
-                        f"Parts: UpperSim={eval_res.upper_sim:.3f} LowerSim={eval_res.lower_sim:.3f} Agreement={eval_res.feature_agreement_passed}\n"
-                        f"Gallery: ProtoSim={eval_res.proto_sim:.3f} BestRefSim={eval_res.best_ref_sim:.3f} BestAdaptiveSim={eval_res.best_adaptive_sim:.3f} Top2AdaptiveMean={eval_res.top2_adaptive_mean:.3f}\n"
-                        f"CandidateScore={eval_res.candidate_score:.3f}\n"
-                        f"Decision={decision}\n"
-                    )
-
-                    if eval_res.is_match or target.state in (TargetState.LOCKED, TargetState.ACQUIRING_REFERENCE):
-                        self._consecutive_mismatches = 0
-                        current_verified = True
-                        old_state = target.state.value
-                        self.target_manager.mark_tracking(current_track, track_result.frame_id, timestamp_ms)
-                        new_state = target.state.value
-                        if old_state != new_state:
-                            log_reid_test(
-                                f"\n[REID_TEST] STATE_CHANGE\n"
-                                f"LogicalTarget={self._identity_key}\n"
-                                f"OldState={old_state}\n"
-                                f"NewState={new_state}\n"
-                                f"TrackerID={current_track.track_id}\n"
-                                f"Reason=verification_passed\n"
-                                f"ReIDScore={eval_res.candidate_score:.3f}\n"
-                            )
-                    else:
-                        self._consecutive_mismatches += 1
-                        if self._consecutive_mismatches < self._max_mismatches_before_lost:
-                            current_verified = True
-                            self.target_manager.mark_tracking(current_track, track_result.frame_id, timestamp_ms)
-                            logger.debug(
-                                f"[REID] Minor verification mismatch ({self._consecutive_mismatches}/{self._max_mismatches_before_lost}), keeping spatial tracking."
-                            )
-                        else:
-                            current_verified = False
-                            logger.warning(
-                                f"[REID] LogicalTarget={self._identity_key} | CurrentTracker={current_track_id} | "
-                                f"CandidateScore={eval_res.candidate_score:.3f} (RefSim={eval_res.best_ref_sim:.3f}) | "
-                                f"Mismatches={self._consecutive_mismatches} | Decision=TARGET_IDENTITY_MISMATCH"
-                            )
-                else:
-                    # Spatial tracking continuity maintained between ReID intervals
-                    current_verified = True
-                    self.target_manager.mark_tracking(current_track, track_result.frame_id, timestamp_ms)
-
-        if not current_verified:
-            old_tr = target.track_id
-            old_st = target.state.value
-
-            if current_track is None:
-                logger.info(
-                    f"[REID] LogicalTarget={self._identity_key} | Tracker={current_track_id} | "
-                    f"Current target unavailable | State=LOST"
-                )
-
-            # Search candidate tracks in the frame, filtering out occluded/overlapping tracks
-            candidate_tracks = [
-                t for t in track_result.tracks
-                if (t.track_id != current_track_id or current_track is None)
-                and not self._is_occluded(t, track_result.tracks)
-            ]
-            candidate_crops = []
-            for t in candidate_tracks:
+        if is_occluded and current_track is not None:
+            # Active heavy occlusion / path crossing: freeze gallery updates, rely on spatial Kalman tracking
+            current_verified = True
+            self.target_manager.mark_tracking(current_track, track_result.frame_id, timestamp_ms)
+            self.target_manager.target.state = TargetState.OCCLUDED
+            logger.debug(
+                f"[REID] Target ID {current_track.track_id} is occluded by another person. "
+                f"Entering OCCLUDED state, freezing gallery update and maintaining spatial tracking lock."
+            )
+        elif should_run_reid:
+            # Multi-Candidate Evaluation Sweep
+            all_candidate_crops = []
+            cand_eval_records = []
+            for t in track_result.tracks:
                 c = self._extract_crop(frame, t.box)
                 if c is not None and c.size > 0:
-                    candidate_crops.append((t, c))
+                    all_candidate_crops.append((t, c))
 
-            best_track = None
-            best_score = 0.0
-            if candidate_crops:
-                ranked = self.identity_manager.rank_candidate_crops(candidate_crops, self._identity_key)
+            if all_candidate_crops:
+                ranked = self.identity_manager.rank_candidate_crops(all_candidate_crops, self._identity_key)
                 for rank_idx, (cand_track, cand_score, cand_eval) in enumerate(ranked):
                     cand_decision = "ACCEPT" if cand_eval.is_match else "REJECT"
+                    second_s = ranked[1][1] if len(ranked) > 1 and rank_idx == 0 else (ranked[0][1] if len(ranked) > 1 else 0.0)
+                    cand_margin = cand_score - second_s if rank_idx == 0 else (cand_score - ranked[0][1])
+
+                    # Feed observation to temporal EvidenceEngine
+                    if self.identity_manager.evidence_engine:
+                        self.identity_manager.evidence_engine.register_observation(
+                            track_id=cand_track.track_id,
+                            frame_id=self._frame_id,
+                            timestamp_ms=timestamp_ms,
+                            crop_quality=cand_eval.crop_quality_score,
+                            similarity=cand_score,
+                            margin=cand_margin,
+                            is_match=cand_eval.is_match,
+                            box=cand_track.box,
+                        )
+
+                    cand_eval_records.append((cand_track, cand_score, cand_eval.is_match, cand_eval.crop_quality_score))
+
                     log_reid_test(
                         f"\n[REID_TEST] CANDIDATE\n"
                         f"LogicalTarget={self._identity_key}\n"
@@ -381,48 +329,146 @@ class SingleCameraPipeline:
                         f"Decision={cand_decision}\n"
                     )
 
-                if ranked:
+                # Prune old tracks from evidence engine
+                if self.identity_manager.evidence_engine:
+                    self.identity_manager.evidence_engine.prune_stale_tracks([t.track_id for t in track_result.tracks])
+                    evidence_dec: EvidenceDecision = self.identity_manager.evidence_engine.evaluate_all_candidates(
+                        cand_eval_records,
+                        self._identity_key,
+                        current_tracked_id=current_track_id,
+                        is_reacquisition=(current_track is None or target.state in (TargetState.LOST, TargetState.UNCERTAIN)),
+                    )
+                else:
                     top_cand, top_score, top_eval = ranked[0]
                     second_score = ranked[1][1] if len(ranked) > 1 else 0.0
                     margin = top_score - second_score
-                    if top_eval.is_match and (len(ranked) == 1 or margin >= self.min_margin):
-                        best_track = top_cand
-                        best_score = top_score
-
-            if best_track is not None:
-                new_tr = best_track.track_id
-                reassociated = self.target_manager.reassociate_target(
-                    best_track,
-                    track_result.frame_id,
-                    timestamp_ms,
-                    reid_verified=True,
-                )
-                if reassociated:
-                    new_st = target.state.value
-                    log_reid_test(
-                        f"\n[REID_TEST] TARGET_ASSIGNMENT\n"
-                        f"LogicalTarget={self._identity_key}\n"
-                        f"OldTracker={old_tr}\n"
-                        f"NewTracker={new_tr}\n"
-                        f"CurrentTargetState={new_st}\n"
-                        f"SourceFunction=_manage_target_identity\n"
-                        f"File=single_camera.py\n"
-                        f"ReIDDecision=ACCEPT\n"
-                        f"ReIDSimilarity={best_score:.3f}\n"
-                        f"ReferenceEmbeddingHash={ref_hash}\n"
-                        f"Reason=RECOVERY\n"
+                    is_conf = top_eval.is_match and (len(ranked) == 1 or margin >= self.min_margin)
+                    evidence_dec = EvidenceDecision(
+                        target_identity_id=self._identity_key,
+                        best_track_id=top_cand.track_id if is_conf else None,
+                        best_score=top_score,
+                        second_best_score=second_score,
+                        margin=margin,
+                        is_confirmed=is_conf,
+                        is_uncertain=not is_conf and top_eval.is_match,
+                        confidence=top_score,
+                        decision_reason="Instant evaluation fallback",
                     )
 
-                    log_reid_test(
-                        f"\n[REID_TEST] STATE_CHANGE\n"
-                        f"LogicalTarget={self._identity_key}\n"
-                        f"OldState={old_st}\n"
-                        f"NewState={new_st}\n"
-                        f"TrackerID={new_tr}\n"
-                        f"Reason=target_recovered\n"
-                        f"ReIDScore={best_score:.3f}\n"
-                    )
+                if evidence_dec.is_confirmed and evidence_dec.best_track_id is not None:
+                    # Find track object for best candidate
+                    top_track_obj = next((t for t in track_result.tracks if t.track_id == evidence_dec.best_track_id), None)
+                    if top_track_obj is not None:
+                        if top_track_obj.track_id == current_track_id:
+                            # Current track verified
+                            self._consecutive_mismatches = 0
+                            current_verified = True
+                            old_state = target.state.value
+                            self.target_manager.mark_tracking(top_track_obj, track_result.frame_id, timestamp_ms)
+                            new_state = target.state.value
+                            if old_state != new_state:
+                                log_reid_test(
+                                    f"\n[REID_TEST] STATE_CHANGE\n"
+                                    f"LogicalTarget={self._identity_key}\n"
+                                    f"OldState={old_state}\n"
+                                    f"NewState={new_state}\n"
+                                    f"TrackerID={top_track_obj.track_id}\n"
+                                    f"Reason=verification_passed\n"
+                                    f"ReIDScore={evidence_dec.best_score:.3f}\n"
+                                )
+                            c_top = self._extract_crop(frame, top_track_obj.box)
+                            if not self.identity_manager.is_reference_complete(self._identity_key):
+                                # Multi-view reference auto-acquisition during enrollment window
+                                if not is_occluded and c_top is not None:
+                                    self.identity_manager.add_reference_sample(c_top, self._identity_key, timestamp_ms)
+                            else:
+                                # Rolling observation gallery update with strict anti-poisoning safeguards
+                                if not is_occluded and evidence_dec.margin >= 0.08 and evidence_dec.best_score >= 0.70 and c_top is not None:
+                                    self.identity_manager.verified_update(c_top, self._identity_key, timestamp_ms)
+                        else:
+                            # Target recovered on different track ID (ANTI-SCOOP CORRECTION / HANDOFF)
+                            self._consecutive_mismatches = 0
+                            current_verified = True
+                            old_tr = target.track_id
+                            old_st = target.state.value
+                            self.identity_manager.flush_adaptive_gallery(self._identity_key)
+                            reassociated = self.target_manager.reassociate_target(
+                                top_track_obj,
+                                track_result.frame_id,
+                                timestamp_ms,
+                                decision=evidence_dec.verified_token,
+                                reid_verified=True,
+                            )
+                            if reassociated:
+                                new_st = target.state.value
+                                log_reid_test(
+                                    f"\n[REID_TEST] TARGET_ASSIGNMENT\n"
+                                    f"LogicalTarget={self._identity_key}\n"
+                                    f"OldTracker={old_tr}\n"
+                                    f"NewTracker={top_track_obj.track_id}\n"
+                                    f"CurrentTargetState={new_st}\n"
+                                    f"SourceFunction=_manage_target_identity\n"
+                                    f"File=single_camera.py\n"
+                                    f"ReIDDecision=ACCEPT\n"
+                                    f"ReIDSimilarity={evidence_dec.best_score:.3f}\n"
+                                    f"ReferenceEmbeddingHash={ref_hash}\n"
+                                    f"Reason=ANTI_SCOOP_CORRECTION\n"
+                                )
+                                log_reid_test(
+                                    f"\n[REID_TEST] STATE_CHANGE\n"
+                                    f"LogicalTarget={self._identity_key}\n"
+                                    f"OldState={old_st}\n"
+                                    f"NewState={new_st}\n"
+                                    f"TrackerID={top_track_obj.track_id}\n"
+                                    f"Reason=anti_scoop_target_recovered\n"
+                                    f"ReIDScore={evidence_dec.best_score:.3f}\n"
+                                )
+                elif evidence_dec.is_uncertain:
+                    # Ambiguous / close candidates -> enter UNCERTAIN state without switching targets
+                    if current_track is not None:
+                        current_verified = True
+                        self.target_manager.mark_tracking(current_track, track_result.frame_id, timestamp_ms)
+                        self.target_manager.target.state = TargetState.UNCERTAIN
+                    else:
+                        current_verified = False
+                else:
+                    current_verified = False
             else:
+                current_verified = False
+        else:
+            # Spatial tracking continuity maintained between ReID intervals
+            if current_track is not None:
+                current_verified = True
+                self.target_manager.mark_tracking(current_track, track_result.frame_id, timestamp_ms)
+            else:
+                current_verified = False
+
+        if not current_verified:
+            if current_track is not None:
+                self._consecutive_mismatches += 1
+                if self._consecutive_mismatches < self._max_mismatches_before_lost:
+                    self.target_manager.mark_tracking(current_track, track_result.frame_id, timestamp_ms)
+                    logger.debug(
+                        f"[REID] Minor verification mismatch ({self._consecutive_mismatches}/{self._max_mismatches_before_lost}), keeping spatial tracking."
+                    )
+                else:
+                    self.identity_manager.flush_adaptive_gallery(self._identity_key)
+                    old_st = target.state.value
+                    self.target_manager.mark_lost(timestamp_ms)
+                    new_st = target.state.value
+                    if old_st != new_st:
+                        log_reid_test(
+                            f"\n[REID_TEST] STATE_CHANGE\n"
+                            f"LogicalTarget={self._identity_key}\n"
+                            f"OldState={old_st}\n"
+                            f"NewState={new_st}\n"
+                            f"TrackerID={target.track_id}\n"
+                            f"Reason=consecutive_mismatches_exceeded\n"
+                            f"ReIDScore=0.000\n"
+                        )
+            else:
+                self.identity_manager.flush_adaptive_gallery(self._identity_key)
+                old_st = target.state.value
                 if old_st != TargetState.UNSELECTED.value:
                     self.target_manager.mark_lost(timestamp_ms)
                 new_st = target.state.value
@@ -436,7 +482,6 @@ class SingleCameraPipeline:
                         f"Reason=no_candidate_passed_reid\n"
                         f"ReIDScore=0.000\n"
                     )
-
 
         return self.target_manager.target
 

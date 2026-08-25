@@ -8,8 +8,9 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from src.core.interfaces import BaseReID, BaseVectorStore
-from src.core.types import Embedding, Identity
+from src.core.types import Embedding, Identity, TargetIdentityAnchor, ViewCluster
 from src.identity.store import InMemoryVectorStore
+from src.identity.evidence import EvidenceEngine
 from src.reid.quality import CropQualityEvaluator
 
 logger = logging.getLogger(__name__)
@@ -38,8 +39,8 @@ class CandidateEvaluation:
 
 class IdentityManager:
     """
-    Manages identity association, separate immutable reference & adaptive galleries,
-    score-level component consensus, and robust multi-camera candidate matching.
+    Manages identity association, separate immutable trusted & provisional galleries,
+    temporal evidence accumulation, and robust multi-camera candidate matching.
     """
 
     def __init__(
@@ -47,32 +48,44 @@ class IdentityManager:
         reid_extractor: BaseReID,
         vector_store: Optional[BaseVectorStore] = None,
         similarity_threshold: float = 0.78,
-        reference_threshold: float = 0.72,
+        reacquisition_threshold: float = 0.82,
+        reference_threshold: float = 0.75,
         upper_threshold: float = 0.60,
-        min_margin: float = 0.06,
+        min_margin: float = 0.08,
         max_reference_samples: int = 4,
-        max_gallery_size: int = 5,
+        max_gallery_size: int = 6,
+        reacquisition_min_frames: int = 4,
         redundancy_threshold: float = 0.90,
         quality_evaluator: Optional[CropQualityEvaluator] = None,
-        w_upper: float = 0.45,
-        w_color: float = 0.25,
-        w_deep: float = 0.15,
-        w_lower: float = 0.15,
+        w_upper: float = 0.40,
+        w_color: float = 0.15,
+        w_deep: float = 0.35,
+        w_lower: float = 0.10,
+        evidence_engine: Optional[EvidenceEngine] = None,
     ) -> None:
         self.reid = reid_extractor
         self.vector_store = vector_store or InMemoryVectorStore()
         self.similarity_threshold = similarity_threshold
+        self.reacquisition_threshold = reacquisition_threshold
         self.reference_threshold = reference_threshold
         self.upper_threshold = upper_threshold
         self.min_margin = min_margin
         self.max_reference_samples = max_reference_samples
         self.max_gallery_size = max_gallery_size
+        self.reacquisition_min_frames = reacquisition_min_frames
         self.redundancy_threshold = redundancy_threshold
         self.quality = quality_evaluator or CropQualityEvaluator()
         self.w_upper = w_upper
         self.w_color = w_color
         self.w_deep = w_deep
         self.w_lower = w_lower
+        self.evidence_engine = evidence_engine or EvidenceEngine(
+            window_size=4,
+            min_similarity_threshold=similarity_threshold,
+            reacquisition_threshold=reacquisition_threshold,
+            reacquisition_min_frames=reacquisition_min_frames,
+            min_margin_threshold=min_margin,
+        )
         self._identities: Dict[str, Identity] = {}
 
     def get_identity(self, identity_id: str) -> Optional[Identity]:
@@ -97,7 +110,7 @@ class IdentityManager:
         timestamp_ms: float = 0.0,
     ) -> Optional[Embedding]:
         """
-        Registers a fresh target identity, initializes decomposed reference galleries,
+        Registers a fresh target identity, initializes trusted reference galleries,
         and computes normalized reference prototypes.
         """
         if crop is None or crop.size == 0:
@@ -105,25 +118,43 @@ class IdentityManager:
 
         # Clean previous vector store entries for this identity
         self.vector_store.remove_identity(identity_id)
+        if self.evidence_engine:
+            self.evidence_engine.clear()
 
-        fused, deep, color, upper, lower = self._extract_all_representations(crop)
+        fused, deep, global_v, upper, lower = self._extract_all_representations(crop)
+
+        # Create initial view cluster and TargetIdentityAnchor
+        initial_cluster = ViewCluster(
+            cluster_id=f"{identity_id}_view_0",
+            label="initial_enrollment",
+            exemplars=[fused],
+            centroid=fused,
+        )
+        anchor = TargetIdentityAnchor(
+            identity_id=identity_id,
+            label=label or identity_id,
+            clusters=[initial_cluster],
+            model_name=fused.model_name,
+            feature_dim=fused.dim,
+            created_timestamp_ms=timestamp_ms,
+        )
 
         ident = Identity(
             identity_id=identity_id,
             label=label or identity_id,
-            reference_gallery=[fused],
-            reference_deep_gallery=[deep],
-            reference_color_gallery=[color],
-            reference_upper_gallery=[upper],
-            reference_lower_gallery=[lower],
-            adaptive_gallery=[],
+            trusted_gallery=[fused],
+            trusted_upper_gallery=[upper],
+            trusted_lower_gallery=[lower],
+            anchor=anchor,
+            view_clusters=[initial_cluster],
+            provisional_gallery=[],
             last_seen_timestamp_ms=timestamp_ms,
         )
         ident.update_prototype()
         self._identities[identity_id] = ident
         self.vector_store.add(fused, identity_id)
         logger.info(
-            f"[IDENTITY] Registered new target identity '{identity_id}' ({ident.label}) with initial reference prototypes"
+            f"[IDENTITY] Registered new target identity '{identity_id}' ({ident.label}) with immutable TargetIdentityAnchor"
         )
         return fused
 
@@ -134,9 +165,7 @@ class IdentityManager:
         label: Optional[str] = None,
         timestamp_ms: float = 0.0,
     ) -> Optional[Embedding]:
-        """
-        Registers target appearance if not yet registered, or updates gallery if already registered.
-        """
+        """Registers target appearance if not yet registered, or updates gallery if already registered."""
         if crop is None or crop.size == 0:
             return None
 
@@ -148,16 +177,16 @@ class IdentityManager:
         ident.last_seen_timestamp_ms = timestamp_ms
 
         if len(ident.embeddings) < self.max_gallery_size:
-            ident.adaptive_gallery.append(emb)
+            ident.provisional_gallery.append(emb)
             self.vector_store.add(emb, identity_id)
         else:
-            if ident.adaptive_gallery:
-                ident.adaptive_gallery.pop(0)
-            ident.adaptive_gallery.append(emb)
+            if ident.provisional_gallery:
+                ident.provisional_gallery.pop(0)
+            ident.provisional_gallery.append(emb)
             self.vector_store.remove_identity(identity_id)
-            for r_emb in ident.reference_gallery:
+            for r_emb in ident.trusted_gallery:
                 self.vector_store.add(r_emb, identity_id)
-            for a_emb in ident.adaptive_gallery:
+            for a_emb in ident.provisional_gallery:
                 self.vector_store.add(a_emb, identity_id)
 
         return emb
@@ -169,14 +198,14 @@ class IdentityManager:
         timestamp_ms: float = 0.0,
     ) -> bool:
         """
-        Adds a new diverse, high-quality observation to the immutable reference galleries
-        and updates the reference prototype centroids.
+        Adds a new diverse, high-quality observation to the immutable trusted galleries
+        and updates discrete ViewClusters within the TargetIdentityAnchor.
         """
         ident = self._identities.get(identity_id)
         if ident is None or crop is None or crop.size == 0:
             return False
 
-        if len(ident.reference_gallery) >= self.max_reference_samples:
+        if len(ident.trusted_gallery) >= self.max_reference_samples:
             return False
 
         is_valid, q_score, reason = self.quality.evaluate(crop)
@@ -184,28 +213,49 @@ class IdentityManager:
             logger.debug(f"[IDENTITY] Reference sample rejected for '{identity_id}': {reason}")
             return False
 
-        fused, deep, color, upper, lower = self._extract_all_representations(crop)
+        fused, deep, global_v, upper, lower = self._extract_all_representations(crop)
 
-        # Diversity check against existing reference samples
-        for existing_ref in ident.reference_gallery:
-            sim = existing_ref.cosine_similarity(fused)
-            if sim > self.redundancy_threshold:
-                logger.debug(
-                    f"[IDENTITY] Reference sample rejected for '{identity_id}': redundant (sim={sim:.3f} > {self.redundancy_threshold:.2f})"
-                )
-                return False
+        # Diversity check against existing trusted samples
+        for existing_ref in ident.trusted_gallery:
+            if existing_ref.dim == fused.dim:
+                sim = existing_ref.cosine_similarity(fused)
+                if sim > self.redundancy_threshold:
+                    logger.debug(
+                        f"[IDENTITY] Reference sample rejected for '{identity_id}': redundant (sim={sim:.3f} > {self.redundancy_threshold:.2f})"
+                    )
+                    return False
 
-        ident.reference_gallery.append(fused)
-        ident.reference_deep_gallery.append(deep)
-        ident.reference_color_gallery.append(color)
-        ident.reference_upper_gallery.append(upper)
-        ident.reference_lower_gallery.append(lower)
+        ident.trusted_gallery.append(fused)
+        ident.trusted_upper_gallery.append(upper)
+        ident.trusted_lower_gallery.append(lower)
         ident.update_prototype()
+
+        # Update or add new view cluster in TargetIdentityAnchor
+        if ident.anchor is not None:
+            # Check if this sample matches an existing cluster (> 0.85) or forms a new cluster
+            matched_cluster = False
+            for cluster in ident.anchor.clusters:
+                c_sim = cluster.match_score(fused)
+                if c_sim > 0.85:
+                    cluster.exemplars.append(fused)
+                    cluster.update_centroid()
+                    matched_cluster = True
+                    break
+            if not matched_cluster:
+                new_c = ViewCluster(
+                    cluster_id=f"{identity_id}_view_{len(ident.anchor.clusters)}",
+                    label=f"viewpoint_{len(ident.anchor.clusters)}",
+                    exemplars=[fused],
+                    centroid=fused,
+                )
+                ident.anchor.clusters.append(new_c)
+                ident.view_clusters.append(new_c)
+
         ident.last_seen_timestamp_ms = timestamp_ms
         self.vector_store.add(fused, identity_id)
         logger.info(
-            f"[IDENTITY] Added diverse reference sample {len(ident.reference_gallery)}/{self.max_reference_samples} "
-            f"for '{identity_id}' (quality={q_score:.2f}, prototypes updated)"
+            f"[IDENTITY] Added diverse reference sample {len(ident.trusted_gallery)}/{self.max_reference_samples} "
+            f"for '{identity_id}' (quality={q_score:.2f}, clusters={len(ident.view_clusters)})"
         )
         return True
 
@@ -214,7 +264,7 @@ class IdentityManager:
         ident = self._identities.get(identity_id)
         if ident is None:
             return False
-        return len(ident.reference_gallery) >= self.max_reference_samples
+        return len(ident.trusted_gallery) >= self.max_reference_samples
 
     def verified_update(
         self,
@@ -223,16 +273,16 @@ class IdentityManager:
         timestamp_ms: float = 0.0,
     ) -> bool:
         """
-        Updates the adaptive observation gallery only if:
+        Updates the provisional observation gallery only if:
         1. Crop passes image quality evaluation.
-        2. Candidate is confirmed to match the logical identity and prototype.
+        2. Candidate is confirmed to match the logical identity and trusted prototype anchor.
         3. Crop provides appearance diversity (not redundant).
         """
         if crop is None or crop.size == 0:
             return False
 
         ident = self._identities.get(identity_id)
-        if ident is None or not ident.reference_gallery:
+        if ident is None or not ident.trusted_gallery:
             return False
 
         is_valid, q_score, reason = self.quality.evaluate(crop)
@@ -251,48 +301,58 @@ class IdentityManager:
         fused_emb = self.reid.extract(crop)
 
         # Diversity check
-        for existing_emb in ident.adaptive_gallery:
-            sim = existing_emb.cosine_similarity(fused_emb)
-            if sim > self.redundancy_threshold:
-                logger.debug(
-                    f"[IDENTITY] Adaptive update SKIPPED for '{identity_id}': redundant (sim={sim:.3f} > {self.redundancy_threshold:.2f})"
-                )
-                return False
+        for existing_emb in ident.provisional_gallery:
+            if existing_emb.dim == fused_emb.dim:
+                sim = existing_emb.cosine_similarity(fused_emb)
+                if sim > self.redundancy_threshold:
+                    logger.debug(
+                        f"[IDENTITY] Adaptive update SKIPPED for '{identity_id}': redundant (sim={sim:.3f} > {self.redundancy_threshold:.2f})"
+                    )
+                    return False
 
         ident.last_seen_timestamp_ms = timestamp_ms
 
-        if len(ident.adaptive_gallery) < self.max_gallery_size:
-            ident.adaptive_gallery.append(fused_emb)
+        if len(ident.provisional_gallery) < self.max_gallery_size:
+            ident.provisional_gallery.append(fused_emb)
         else:
-            ident.adaptive_gallery.pop(0)
-            ident.adaptive_gallery.append(fused_emb)
+            ident.provisional_gallery.pop(0)
+            ident.provisional_gallery.append(fused_emb)
 
-        # Re-sync vector store with prototype + references + adaptive galleries
+        # Re-sync vector store with prototype + references + provisional galleries
         self.vector_store.remove_identity(identity_id)
-        if ident.reference_prototype is not None:
-            self.vector_store.add(ident.reference_prototype, identity_id)
-        for ref_emb in ident.reference_gallery:
+        if ident.trusted_prototype is not None:
+            self.vector_store.add(ident.trusted_prototype, identity_id)
+        for ref_emb in ident.trusted_gallery:
             self.vector_store.add(ref_emb, identity_id)
-        for ad_emb in ident.adaptive_gallery:
+        for ad_emb in ident.provisional_gallery:
             self.vector_store.add(ad_emb, identity_id)
 
         logger.debug(
             f"[IDENTITY] Added adaptive observation for '{identity_id}' (candidate_score={eval_res.candidate_score:.3f}, "
-            f"adaptive_count={len(ident.adaptive_gallery)}/{self.max_gallery_size})"
+            f"adaptive_count={len(ident.provisional_gallery)}/{self.max_gallery_size})"
         )
         return True
+
+    def flush_adaptive_gallery(self, identity_id: str) -> None:
+        """Flushes all rolling provisional observations, resetting back to the immutable trusted gallery."""
+        ident = self._identities.get(identity_id)
+        if ident is not None and ident.provisional_gallery:
+            ident.provisional_gallery.clear()
+            self.vector_store.remove_identity(identity_id)
+            if ident.trusted_prototype is not None:
+                self.vector_store.add(ident.trusted_prototype, identity_id)
+            for ref_emb in ident.trusted_gallery:
+                self.vector_store.add(ref_emb, identity_id)
+            logger.info(f"[IDENTITY] Flushed provisional observation gallery for '{identity_id}'. Pure trusted gallery active.")
 
     def evaluate_candidate_crop(
         self,
         crop: np.ndarray,
         identity_id: str,
     ) -> CandidateEvaluation:
-        """
-        Performs decomposed ReID extraction, score-level component consensus scoring,
-        and clean gate validation without artificial substitutions.
-        """
+        """Performs multi-crop ReID extraction and calibrated candidate evaluation."""
         ident = self.get_identity(identity_id)
-        if ident is None or crop is None or crop.size == 0 or not ident.reference_gallery:
+        if ident is None or crop is None or crop.size == 0 or not ident.trusted_gallery:
             return CandidateEvaluation(
                 is_match=False,
                 decision="NO_MATCH",
@@ -314,95 +374,68 @@ class IdentityManager:
 
         is_valid, q_score, q_reason = self.quality.evaluate(crop)
 
-        # Decomposed feature extraction
-        fused_emb, deep_emb, color_emb, upper_emb, lower_emb = self._extract_all_representations(crop)
+        # Multi-crop feature extraction
+        fused_emb, deep_emb, global_emb, upper_emb, lower_emb = self._extract_all_representations(crop)
 
-        # 1. Component similarities against individual prototypes & reference galleries (no cross-fallbacks)
-        # Deep
-        if ident.reference_deep_proto is not None and ident.reference_deep_proto.dim == deep_emb.dim:
-            deep_proto_sim = ident.reference_deep_proto.cosine_similarity(deep_emb)
-        else:
-            deep_proto_sim = 0.0
-
-        if ident.reference_deep_gallery and ident.reference_deep_gallery[0].dim == deep_emb.dim:
-            best_ref_deep = max(r.cosine_similarity(deep_emb) for r in ident.reference_deep_gallery)
-        else:
-            best_ref_deep = deep_proto_sim
-        deep_sim = max(deep_proto_sim, best_ref_deep)
-
-        # Upper Body
-        if ident.reference_upper_proto is not None and ident.reference_upper_proto.dim == upper_emb.dim:
-            upper_proto_sim = ident.reference_upper_proto.cosine_similarity(upper_emb)
-        else:
-            upper_proto_sim = 0.0
-
-        if ident.reference_upper_gallery and ident.reference_upper_gallery[0].dim == upper_emb.dim:
-            best_ref_upper = max(r.cosine_similarity(upper_emb) for r in ident.reference_upper_gallery)
-        else:
-            best_ref_upper = upper_proto_sim
-        upper_sim = max(upper_proto_sim, best_ref_upper)
-
-        # Lower Body
-        if ident.reference_lower_proto is not None and ident.reference_lower_proto.dim == lower_emb.dim:
-            lower_proto_sim = ident.reference_lower_proto.cosine_similarity(lower_emb)
-        else:
-            lower_proto_sim = 0.0
-
-        if ident.reference_lower_gallery and ident.reference_lower_gallery[0].dim == lower_emb.dim:
-            best_ref_lower = max(r.cosine_similarity(lower_emb) for r in ident.reference_lower_gallery)
-        else:
-            best_ref_lower = lower_proto_sim
-        lower_sim = max(lower_proto_sim, best_ref_lower)
-
-        # Color & Texture
-        if ident.reference_color_proto is not None and ident.reference_color_proto.dim == color_emb.dim:
-            color_proto_sim = ident.reference_color_proto.cosine_similarity(color_emb)
-        else:
-            color_proto_sim = 0.0
-
-        if ident.reference_color_gallery and ident.reference_color_gallery[0].dim == color_emb.dim:
-            best_ref_color = max(r.cosine_similarity(color_emb) for r in ident.reference_color_gallery)
-        else:
-            best_ref_color = color_proto_sim
-        color_sim = max(color_proto_sim, best_ref_color)
-
-        # Fused & Adaptive Gallery similarities
-        proto_sim = ident.reference_prototype.cosine_similarity(fused_emb) if (ident.reference_prototype and ident.reference_prototype.dim == fused_emb.dim) else 0.0
-        ref_fused_sims = [ref.cosine_similarity(fused_emb) for ref in ident.reference_gallery if ref.dim == fused_emb.dim]
+        # 1. Prototype & Gallery similarities
+        proto_sim = ident.trusted_prototype.cosine_similarity(fused_emb) if (ident.trusted_prototype and ident.trusted_prototype.dim == fused_emb.dim) else 0.0
+        ref_fused_sims = [ref.cosine_similarity(fused_emb) for ref in ident.trusted_gallery if ref.dim == fused_emb.dim]
         best_ref_sim = max(ref_fused_sims) if ref_fused_sims else proto_sim
+
+        # Upper Body similarity
+        if ident.trusted_upper_proto is not None and ident.trusted_upper_proto.dim == upper_emb.dim:
+            upper_sim = ident.trusted_upper_proto.cosine_similarity(upper_emb)
+        elif ident.trusted_upper_gallery and ident.trusted_upper_gallery[0].dim == upper_emb.dim:
+            upper_sim = max(u.cosine_similarity(upper_emb) for u in ident.trusted_upper_gallery)
+        else:
+            upper_sim = proto_sim
+
+        # Lower Body similarity
+        if ident.trusted_lower_proto is not None and ident.trusted_lower_proto.dim == lower_emb.dim:
+            lower_sim = ident.trusted_lower_proto.cosine_similarity(lower_emb)
+        elif ident.trusted_lower_gallery and ident.trusted_lower_gallery[0].dim == lower_emb.dim:
+            lower_sim = max(l.cosine_similarity(lower_emb) for l in ident.trusted_lower_gallery)
+        else:
+            lower_sim = proto_sim
+
+        deep_sim = proto_sim
+        color_sim = proto_sim
         fused_sim = proto_sim
 
         best_adaptive_sim = 0.0
         top2_adaptive_mean = 0.0
-        if ident.adaptive_gallery:
+        if ident.provisional_gallery:
             adaptive_sims = sorted(
-                [ad.cosine_similarity(fused_emb) for ad in ident.adaptive_gallery if ad.dim == fused_emb.dim],
+                [ad.cosine_similarity(fused_emb) for ad in ident.provisional_gallery if ad.dim == fused_emb.dim],
                 reverse=True,
             )
             if adaptive_sims:
                 best_adaptive_sim = adaptive_sims[0]
                 top2_adaptive_mean = sum(adaptive_sims[:2]) / len(adaptive_sims[:2])
 
-        # 2. Score-Level Consensus
+        # Multi-cluster anchor similarity across discrete view clusters
+        anchor_sim = ident.anchor.max_similarity(fused_emb) if ident.anchor else best_ref_sim
+        ref_anchor_score = max(proto_sim, best_ref_sim, anchor_sim)
+
+        # 2. Score-Level Multi-Crop Consensus (Multi-Modal Cluster Aware)
         component_score = (
-            self.w_upper * upper_sim
-            + self.w_color * color_sim
-            + self.w_deep * deep_sim
-            + self.w_lower * lower_sim
+            0.35 * max(anchor_sim, proto_sim)
+            + 0.40 * upper_sim
+            + 0.15 * best_ref_sim
+            + 0.10 * lower_sim
         )
 
-        if ident.adaptive_gallery and top2_adaptive_mean > 0:
+        if ident.provisional_gallery and top2_adaptive_mean > 0:
             candidate_score = 0.70 * component_score + 0.30 * top2_adaptive_mean
         else:
             candidate_score = component_score
 
         # 3. Decision Evaluation
         reasons: List[str] = []
-        ref_anchor_score = max(proto_sim, best_ref_sim, deep_sim)
 
-        is_ref_pass = (ref_anchor_score >= self.reference_threshold or deep_sim >= self.reference_threshold)
+        is_ref_pass = (ref_anchor_score >= self.reference_threshold)
         is_score_pass = (candidate_score >= self.similarity_threshold)
-        is_upper_pass = (upper_sim >= self.upper_threshold)
+        is_upper_pass = (upper_sim >= self.upper_threshold or candidate_score >= self.similarity_threshold + 0.04)
         is_qual_pass = is_valid
 
         if not is_qual_pass:
@@ -451,51 +484,52 @@ class IdentityManager:
         identity_id: str,
     ) -> List[Tuple[Any, float, CandidateEvaluation]]:
         """
-        Ranks candidates by candidate_score descending.
-
-        Returns:
-            List of (candidate_object, candidate_score, CandidateEvaluation).
+        Evaluates a list of candidate (object, crop) tuples against identity_id,
+        returning them sorted by score descending.
         """
-        ident = self.get_identity(identity_id)
-        if ident is None or not candidate_crops:
+        if not candidate_crops:
             return []
 
-        ranked: List[Tuple[Any, float, CandidateEvaluation]] = []
-        for item, crop in candidate_crops:
-            eval_res = self.evaluate_candidate_crop(crop, identity_id)
-            ranked.append((item, eval_res.candidate_score, eval_res))
+        evaluations = []
+        for obj, crop in candidate_crops:
+            ev = self.evaluate_candidate_crop(crop, identity_id)
+            evaluations.append((obj, ev.candidate_score, ev))
 
-        ranked.sort(key=lambda x: x[1], reverse=True)
-        return ranked
+        evaluations.sort(key=lambda x: x[1], reverse=True)
+        return evaluations
 
     def find_best_candidate(
         self,
-        candidate_crops: List[Tuple[Any, np.ndarray]],
+        candidates: List[Tuple[Any, np.ndarray]],
         identity_id: str,
-        threshold: Optional[float] = None,
-        min_margin: Optional[float] = None,
     ) -> Tuple[Optional[Any], float, float, float]:
         """
-        Finds the unambiguous best matching candidate from a list of crops.
-
+        Finds the best matching candidate crop for a given identity.
         Returns:
             Tuple[best_candidate, best_score, second_best_score, margin]
         """
-        thresh = threshold if threshold is not None else self.similarity_threshold
-        margin_req = min_margin if min_margin is not None else self.min_margin
+        if not candidates:
+            return None, 0.0, 0.0, 0.0
 
-        ranked = self.rank_candidate_crops(candidate_crops, identity_id)
+        ranked = self.rank_candidate_crops(candidates, identity_id)
         if not ranked:
             return None, 0.0, 0.0, 0.0
 
-        best_item, best_score, best_eval = ranked[0]
-        second_best_score = ranked[1][1] if len(ranked) > 1 else 0.0
-        margin = best_score - second_best_score
+        best_cand, best_score, best_eval = ranked[0]
+        second_score = ranked[1][1] if len(ranked) > 1 else 0.0
+        margin = best_score - second_score
 
-        if best_eval.is_match and best_score >= thresh and (len(ranked) == 1 or margin >= margin_req):
-            return best_item, best_score, second_best_score, margin
-        else:
-            return None, best_score, second_best_score, margin
+        if not best_eval.is_match:
+            return None, best_score, second_score, margin
+
+        if len(ranked) > 1 and margin < self.min_margin:
+            logger.debug(
+                f"[IDENTITY] Candidate for '{identity_id}' rejected by margin: "
+                f"margin={margin:.3f} < min_margin={self.min_margin:.3f}"
+            )
+            return None, best_score, second_score, margin
+
+        return best_cand, best_score, second_score, margin
 
     def clear(self) -> None:
         self._identities.clear()

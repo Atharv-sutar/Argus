@@ -165,21 +165,13 @@ class OSNet(nn.Module):
         self.maxpool = nn.MaxPool2d(3, stride=2, padding=1)
 
         # Stage 1
-        self.conv2 = self._make_stage(channels[0], channels[1], blocks[0])
-        self.transition1 = nn.Sequential(
-            Conv1x1(channels[1], channels[1]),
-            nn.AvgPool2d(2, stride=2),
-        )
+        self.conv2 = self._make_stage(channels[0], channels[1], blocks[0], is_last=False)
 
         # Stage 2
-        self.conv3 = self._make_stage(channels[1], channels[2], blocks[1])
-        self.transition2 = nn.Sequential(
-            Conv1x1(channels[2], channels[2]),
-            nn.AvgPool2d(2, stride=2),
-        )
+        self.conv3 = self._make_stage(channels[1], channels[2], blocks[1], is_last=False)
 
         # Stage 3
-        self.conv4 = self._make_stage(channels[2], channels[3], blocks[2])
+        self.conv4 = self._make_stage(channels[2], channels[3], blocks[2], is_last=True)
 
         # Final projection layers
         self.conv5 = Conv1x1(channels[3], channels[3])
@@ -193,16 +185,29 @@ class OSNet(nn.Module):
             nn.ReLU(inplace=True),
         )
 
-    def _make_stage(self, in_channels: int, out_channels: int, num_blocks: int) -> nn.Sequential:
-        layers = [OSBlock(in_channels, out_channels)]
+    def _make_stage(
+        self,
+        in_channels: int,
+        out_channels: int,
+        num_blocks: int,
+        is_last: bool = False,
+    ) -> nn.Sequential:
+        layers: List[nn.Module] = [OSBlock(in_channels, out_channels)]
         for _ in range(1, num_blocks):
             layers.append(OSBlock(out_channels, out_channels))
+        if not is_last:
+            layers.append(
+                nn.Sequential(
+                    Conv1x1(out_channels, out_channels),
+                    nn.AvgPool2d(2, stride=2),
+                )
+            )
         return nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.maxpool(self.conv1(x))
-        x = self.transition1(self.conv2(x))
-        x = self.transition2(self.conv3(x))
+        x = self.conv2(x)
+        x = self.conv3(x)
         x = self.conv4(x)
         x = self.conv5(x)
         v = self.global_avgpool(x)

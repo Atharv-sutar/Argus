@@ -42,25 +42,28 @@ class TrackingConfig:
 
 @dataclass
 class ReIDConfig:
-    model_name: str = "osnet_x0_25"
+    model_name: str = "dinov2"
     similarity_threshold: float = 0.78
-    reference_threshold: float = 0.72
+    reacquisition_threshold: float = 0.82
+    reference_threshold: float = 0.75
     upper_threshold: float = 0.60
-    min_margin: float = 0.06
-    w_upper: float = 0.45
-    w_color: float = 0.25
-    w_deep: float = 0.15
-    w_lower: float = 0.15
-    extract_interval_frames: int = 10
+    min_margin: float = 0.08
+    w_upper: float = 0.40
+    w_color: float = 0.15
+    w_deep: float = 0.35
+    w_lower: float = 0.10
+    extract_interval_frames: int = 5
 
-    gallery_size: int = 5
+    gallery_size: int = 6
     reference_samples: int = 4
-    reference_window_frames: int = 20
-    adaptive_gallery_size: int = 5
-    min_crop_width: int = 30
-    min_crop_height: int = 80
-    min_sharpness: float = 35.0
+    reference_window_frames: int = 30
+    adaptive_gallery_size: int = 6
+    min_crop_width: int = 24
+    min_crop_height: int = 60
+    min_sharpness: float = 25.0
     redundancy_threshold: float = 0.90
+    temporal_window_size: int = 4
+    reacquisition_min_frames: int = 4
 
 
 

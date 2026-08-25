@@ -2,13 +2,25 @@
   "version": 1,
   "cameras": [
     {
+      "camera_id": "cam_0",
+      "name": "Webcam 0",
+      "source": 0,
+      "source_type": "webcam",
+      "enabled": true,
+      "position_x": 370.032696177047,
+      "position_y": -120.12392123833347,
+      "floor": null,
+      "zone": null,
+      "description": null
+    },
+    {
       "camera_id": "cam_1",
       "name": "Webcam 1",
       "source": 1,
       "source_type": "webcam",
       "enabled": true,
-      "position_x": 328.0188236850589,
-      "position_y": 67.36370151915574,
+      "position_x": 144.56171125968925,
+      "position_y": -116.04472487840592,
       "floor": null,
       "zone": null,
       "description": null
@@ -19,20 +31,8 @@
       "source": 2,
       "source_type": "webcam",
       "enabled": true,
-      "position_x": 164.9110466617492,
-      "position_y": 72.7657610392853,
-      "floor": null,
-      "zone": null,
-      "description": null
-    },
-    {
-      "camera_id": "cam_0",
-      "name": "Webcam 0",
-      "source": 0,
-      "source_type": "webcam",
-      "enabled": true,
-      "position_x": 527.789091752147,
-      "position_y": 56.76688190425879,
+      "position_x": -27.75079531610002,
+      "position_y": -116.52163768887213,
       "floor": null,
       "zone": null,
       "description": null

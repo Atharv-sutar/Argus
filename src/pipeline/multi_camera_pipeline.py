@@ -336,7 +336,10 @@ class MultiCameraPipeline:
             self._nodes[self._active_camera_id].mark_offline()
 
         # 3. Check Target State on Active Camera
-        target_is_active = (active_target is not None and active_target.state == TargetState.TRACKING)
+        target_is_active = (
+            active_target is not None
+            and active_target.state in (TargetState.TRACKING, TargetState.OCCLUDED, TargetState.LOCKED, TargetState.ACQUIRING_REFERENCE)
+        )
         target_is_lost = (active_target is not None and active_target.state in (TargetState.LOST, TargetState.UNCERTAIN))
 
         if target_is_active:

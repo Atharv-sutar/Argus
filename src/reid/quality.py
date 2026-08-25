@@ -30,10 +30,10 @@ class CropQualityEvaluator:
 
     def __init__(
         self,
-        min_width: int = 10,
-        min_height: int = 10,
-        min_aspect_ratio: float = 0.05,
-        max_aspect_ratio: float = 20.0,
+        min_width: int = 16,
+        min_height: int = 35,
+        min_aspect_ratio: float = 0.15,
+        max_aspect_ratio: float = 1.5,
         min_sharpness: float = 0.0,
         min_confidence: float = 0.0,
     ) -> None:

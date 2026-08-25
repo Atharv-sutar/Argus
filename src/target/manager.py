@@ -166,13 +166,22 @@ class TargetManager:
         track: Track,
         frame_id: int,
         timestamp_ms: float,
+        decision: Optional[VerifiedIdentityDecision] = None,
         reid_verified: bool = False,
     ) -> bool:
         """
         Reassociates a lost target with a new tracker ID.
-        STRICT SAFETY INVARIANT: Reassociation MUST have positive ReID verification.
+        STRICT SAFETY INVARIANT: Reassociation MUST have positive ReID verification
+        via a VerifiedIdentityDecision token or explicit verification flag.
         """
-        if not reid_verified:
+        if decision is not None:
+            if not decision.is_authorized_for(decision.target_identity_id, track.track_id, current_timestamp_ms=timestamp_ms):
+                logger.error(
+                    f"[TARGET_SAFETY] Reassociation REJECTED: VerifiedIdentityDecision token "
+                    f"is invalid or expired for track {track.track_id} and target '{decision.target_identity_id}'!"
+                )
+                return False
+        elif not reid_verified:
             logger.error(
                 f"[TARGET_SAFETY] Attempted to reassociate target '{self._target.track_id}' to "
                 f"new tracker '{track.track_id}' WITHOUT positive ReID verification! REJECTED."
@@ -201,17 +210,14 @@ class TargetManager:
     ) -> Target:
         """
         Updates the target state against the latest TrackResult.
-        If the current track is missing or fails verification:
-          - If verify_fn is provided, searches candidate tracks for a verified match with margin.
-          - Otherwise, transitions to LOST.
-        Never automatically assigns another tracker ID without explicit verified ReID.
+        TargetManager maintains spatial motion continuity for the actively locked track ID.
+        If the track is missing or fails verification, transitions to LOST.
+        TargetManager NEVER independently assigns another tracker ID.
         """
         if self._target.state == TargetState.UNSELECTED or self._target.track_id is None:
             return self._target
 
-        margin_req = min_margin if min_margin is not None else self.min_margin
-
-        # 1. Check current track if present
+        # Check current track if present in track_result
         current_track: Optional[Track] = None
         for track in track_result.tracks:
             if track.track_id == self._target.track_id:
@@ -230,37 +236,10 @@ class TargetManager:
                             f"[TARGET] LogicalTarget={self._target.track_id} CurrentTracker={current_track.track_id} "
                             f"Score={score:.3f} | Verification failed -> State=LOST"
                         )
-                        current_track = None
-            else:
-                return self.mark_tracking(current_track, track_result.frame_id, track_result.timestamp_ms)
+                        return self.mark_lost(track_result.timestamp_ms)
+            return self.mark_tracking(current_track, track_result.frame_id, track_result.timestamp_ms)
 
-        # 2. If current track is missing or failed verification, search candidates with verify_fn if provided
-        if verify_fn is not None and frame is not None:
-            candidate_tracks = [
-                t for t in track_result.tracks
-                if t.track_id != self._target.track_id
-            ]
-
-            scored_candidates: List[Tuple[Track, float]] = []
-            for t in candidate_tracks:
-                c = self._extract_crop(frame, t.box)
-                if c is not None:
-                    is_match, score = verify_fn(c)
-                    if is_match:
-                        scored_candidates.append((t, score))
-
-            scored_candidates.sort(key=lambda x: x[1], reverse=True)
-            if scored_candidates:
-                best_track, best_score = scored_candidates[0]
-                second_score = scored_candidates[1][1] if len(scored_candidates) > 1 else 0.0
-                margin = best_score - second_score
-
-                if len(scored_candidates) == 1 or margin >= margin_req:
-                    logger.info(
-                        f"[TARGET] Reassociated to candidate tracker {best_track.track_id} (score={best_score:.3f}, margin={margin:.3f})"
-                    )
-                    return self.mark_tracking(best_track, track_result.frame_id, track_result.timestamp_ms)
-
+        # Track is not in track_result -> Target is LOST
         return self.mark_lost(track_result.timestamp_ms)
 
 

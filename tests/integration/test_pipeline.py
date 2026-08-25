@@ -194,16 +194,96 @@ def test_target_leaves_frame_b_rejected_a_recovered():
     assert target2.state == TargetState.LOST
     assert target2.track_id == track_id_a  # Logical target still refers to A
 
-    # Frame 3: Person A enters again. Both A and B are visible
+    # Frame 3+: Person A enters again. Both A and B are visible
     detector.mode = "BOTH_VISIBLE"
     frame3 = np.zeros((240, 320, 3), dtype=np.uint8)
     frame3[50:200, 50:100] = [255, 50, 50]   # Person A: Blue
     frame3[50:200, 200:250] = [50, 50, 255]  # Person B: Red
 
-    _, track_res3, target3, _ = pipeline.process_frame(frame3, timestamp_ms=166.6)
-    # Person A MUST be recovered!
+    target3 = None
+    for i in range(4):
+        _, track_res3, target3, _ = pipeline.process_frame(frame3, timestamp_ms=166.6 + i * 33.3)
+
+    # Person A MUST be recovered after temporal consensus!
+    assert target3 is not None
     assert target3.state == TargetState.TRACKING
-    # Person A is tracked on left box
     assert target3.last_known_box.x1 == pytest.approx(50.0, abs=5.0)
 
     pipeline.stop()
+
+
+def test_id_swap_recovery():
+    """
+    Verifies that if a tracker accidentally swaps the track ID onto Person B (track scoop),
+    the pipeline detects the ReID mismatch and reassociates to Person A after temporal consensus.
+    """
+    class SwappedTracker:
+        """Mock tracker to simulate an ID swap between Person A and Person B."""
+        def __init__(self):
+            self.swapped = False
+
+        def update(self, detection_result, frame=None):
+            from src.core.types import Track, TrackResult
+            tracks = []
+            if not self.swapped:
+                # Normal: Track 1 = Person A (left), Track 2 = Person B (right)
+                tracks.append(Track(track_id=1, box=BoundingBox(50.0, 50.0, 100.0, 200.0, confidence=0.95), confidence=0.95))
+                tracks.append(Track(track_id=2, box=BoundingBox(200.0, 50.0, 250.0, 200.0, confidence=0.95), confidence=0.95))
+            else:
+                # Swapped: Track 1 = Person B (right), Track 2 = Person A (left)
+                tracks.append(Track(track_id=1, box=BoundingBox(200.0, 50.0, 250.0, 200.0, confidence=0.95), confidence=0.95))
+                tracks.append(Track(track_id=2, box=BoundingBox(50.0, 50.0, 100.0, 200.0, confidence=0.95), confidence=0.95))
+            return TrackResult(tracks=tracks, frame_id=detection_result.frame_id, timestamp_ms=detection_result.timestamp_ms)
+
+    class DummyDetector(BaseDetector):
+        def detect(self, frame, frame_id=0, timestamp_ms=0.0):
+            return DetectionResult(detections=[], frame_id=frame_id, timestamp_ms=timestamp_ms)
+
+    class ColorDiscriminativeReID(BaseReID):
+        def extract(self, crop: np.ndarray) -> Embedding:
+            mean_c = np.mean(crop, axis=(0, 1)) if (crop is not None and crop.size > 0) else np.zeros(3)
+            vec = np.array([mean_c[0], mean_c[1], mean_c[2], 100.0], dtype=np.float32)
+            return Embedding(vector=vec)
+
+        def extract_batch(self, crops: list[np.ndarray]) -> list[Embedding]:
+            return [self.extract(c) for c in crops]
+
+    camera = SyntheticCamera(width=320, height=240, fps=30, max_frames=10)
+    detector = DummyDetector()
+    tracker = SwappedTracker()
+    reid = ColorDiscriminativeReID()
+    identity_manager = IdentityManager(reid_extractor=reid, similarity_threshold=0.85, reacquisition_threshold=0.85, min_margin=0.05)
+
+    pipeline = SingleCameraPipeline(
+        camera=camera,
+        detector=detector,
+        tracker=tracker,
+        identity_manager=identity_manager,
+        reid_interval=1,
+    )
+
+    frame = np.zeros((240, 320, 3), dtype=np.uint8)
+    frame[50:200, 50:100] = [255, 50, 50]   # Person A: Blue
+    frame[50:200, 200:250] = [50, 50, 255]  # Person B: Red
+
+    # Frame 1: Select Person A (Track ID 1)
+    _, track_res1, target1, _ = pipeline.process_frame(frame, timestamp_ms=100.0)
+    pipeline.select_target_by_id(1)
+    assert pipeline.current_target.track_id == 1
+    assert pipeline.current_target.state == TargetState.LOCKED
+
+    # Frame 2+: Tracker swaps! Track 1 is now on Person B (Red), Track 2 is on Person A (Blue)
+    tracker.swapped = True
+    target2 = None
+    for i in range(4):
+        _, track_res2, target2, _ = pipeline.process_frame(frame, timestamp_ms=133.3 + i * 33.3)
+
+    # Verification: The pipeline detects that Track 1 is not the target, sweeps candidates,
+    # finds Track 2 matches Person A, and reassociates to Track 2!
+    assert target2 is not None
+    assert target2.state == TargetState.TRACKING
+    assert target2.track_id == 2
+    assert target2.last_known_box.x1 == pytest.approx(50.0, abs=5.0)
+
+    pipeline.stop()
+

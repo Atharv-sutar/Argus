@@ -142,12 +142,9 @@ def test_multi_camera_selection_and_cross_camera_handoff():
     det_b.set_person(60.0, 60.0, 160.0, 190.0)
     mock_reid.is_target_mode = True  # Verified target appearance
 
-    # Frame 1 confirmation on cam_B
-    pipe.step()
-    assert pipe.search_manager.is_searching
-
-    # Frame 2 confirmation on cam_B -> Triggers automatic handoff!
-    pipe.step()
+    # Step 4+: Person appears on cam_B -> Multi-frame reacquisition confirms target
+    for _ in range(4):
+        pipe.step()
 
     # Verify Handoff succeeded
     assert pipe.active_camera_id == "cam_B"
