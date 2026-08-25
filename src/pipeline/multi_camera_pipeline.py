@@ -323,6 +323,7 @@ class MultiCameraPipeline:
         active_target: Optional[Target] = None
 
         if active_pipeline and active_pipeline.camera.is_opened():
+            active_pipeline.target_evaluation_enabled = True
             success, frame, ts_ms = active_pipeline.camera.read()
             if success and frame is not None:
                 self._nodes[self._active_camera_id].last_frame = frame
@@ -368,6 +369,12 @@ class MultiCameraPipeline:
         # 4. Process Search Cameras
         progress = self.search_manager.get_progress()
         candidate_recovered_camera: Optional[str] = None
+        active_search_set = set(progress.active_cameras)
+
+        # Ensure non-search pipelines do not run target evaluation
+        for cid, pipe in self._pipelines.items():
+            if cid != self._active_camera_id and cid not in active_search_set:
+                pipe.target_evaluation_enabled = False
 
         if self.search_manager.is_searching:
             for search_cam_id in progress.active_cameras:
@@ -377,6 +384,7 @@ class MultiCameraPipeline:
                 if not s_pipe or not s_pipe.camera.is_opened():
                     continue
 
+                s_pipe.target_evaluation_enabled = True
                 success, s_frame, s_ts_ms = s_pipe.camera.read()
                 if not success or s_frame is None:
                     continue
@@ -498,13 +506,16 @@ class MultiCameraPipeline:
             self._nodes[old_camera_id].mark_online()
             old_p = self._pipelines.get(old_camera_id)
             if old_p:
+                old_p.target_evaluation_enabled = False
                 old_p.clear_target(clear_identity=False)
-
 
         # Update active camera
         self._active_camera_id = new_camera_id
         if new_camera_id in self._nodes:
             self._nodes[new_camera_id].mark_active_target()
+        new_p = self._pipelines.get(new_camera_id)
+        if new_p:
+            new_p.target_evaluation_enabled = True
 
         # Record handoff timestamp for UI confirmation delay
         self._handoff_timestamp = time.time()

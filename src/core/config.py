@@ -43,10 +43,10 @@ class TrackingConfig:
 @dataclass
 class ReIDConfig:
     model_name: str = "osnet_x0_25"
-    similarity_threshold: float = 0.75
-    reference_threshold: float = 0.70
-    upper_threshold: float = 0.55
-    min_margin: float = 0.05
+    similarity_threshold: float = 0.78
+    reference_threshold: float = 0.72
+    upper_threshold: float = 0.60
+    min_margin: float = 0.06
     w_upper: float = 0.45
     w_color: float = 0.25
     w_deep: float = 0.15

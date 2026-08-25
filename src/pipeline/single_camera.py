@@ -87,6 +87,7 @@ class SingleCameraPipeline:
         self._acquisition_start_frame: int = 0
         self._consecutive_mismatches: int = 0
         self._max_mismatches_before_lost: int = 3
+        self.target_evaluation_enabled: bool = True
 
     @property
     def current_target(self) -> Target:
@@ -200,6 +201,17 @@ class SingleCameraPipeline:
             return None
         return frame[y1:y2, x1:x2]
 
+    def _is_occluded(self, track: Track, all_tracks: List[Track], iou_threshold: float = 0.08) -> bool:
+        """Detects whether a track's bounding box significantly overlaps with any other track."""
+        if not all_tracks or len(all_tracks) <= 1:
+            return False
+        for other in all_tracks:
+            if other.track_id == track.track_id:
+                continue
+            if track.box.iou(other.box) > iou_threshold:
+                return True
+        return False
+
     def _manage_target_identity(
         self,
         track_result: TrackResult,
@@ -211,8 +223,13 @@ class SingleCameraPipeline:
 
         1. Handles reference acquisition over initial window to build diverse 3-5 sample reference gallery.
         2. Evaluates active track with decomposed deep/color/fused similarities and reference safeguards.
-        3. Recovers lost targets with candidate-level scoring and margin requirements.
+        3. Protects against occlusion and path-crossing box swaps.
+        4. Recovers lost targets with candidate-level scoring and margin requirements.
         """
+        if not self.target_evaluation_enabled:
+            # Passive monitoring camera: purely update spatial tracker without running global target re-association
+            return self.target_manager.update(track_result, frame=frame)
+
         target = self.target_manager.target
         ident = self.identity_manager.get_identity(self._identity_key) if self.identity_manager else None
         has_global_identity = ident is not None and bool(ident.reference_gallery)
@@ -247,13 +264,22 @@ class SingleCameraPipeline:
         if not has_global_identity:
             return self.target_manager.update(track_result, frame=frame)
 
-
         ref_hash = get_embedding_hash(ident.reference_embedding) if (ident and ident.reference_embedding) else "None"
 
         current_verified = False
         if current_track is not None:
+            is_occluded = self._is_occluded(current_track, track_result.tracks)
             crop = self._extract_crop(frame, current_track.box)
-            if crop is not None:
+
+            if is_occluded:
+                # Occlusion / Path Crossing detected: freeze gallery updates, rely on spatial Kalman tracking
+                current_verified = True
+                self.target_manager.mark_tracking(current_track, track_result.frame_id, timestamp_ms)
+                logger.debug(
+                    f"[REID] Target ID {current_track.track_id} is occluded by another person. "
+                    f"Freezing gallery update and maintaining spatial tracking lock."
+                )
+            elif crop is not None:
                 should_run_reid = (
                     target.state in (TargetState.LOCKED, TargetState.ACQUIRING_REFERENCE, TargetState.UNCERTAIN)
                     or (self._frame_id % self.reid_interval == 0)
@@ -293,11 +319,6 @@ class SingleCameraPipeline:
                                 f"Reason=verification_passed\n"
                                 f"ReIDScore={eval_res.candidate_score:.3f}\n"
                             )
-                        # Acquire diverse reference samples during initial window
-                        if not self.identity_manager.is_reference_complete(self._identity_key) and (self._frame_id - self._acquisition_start_frame) <= self.reference_window_frames:
-                            self.identity_manager.add_reference_sample(crop, self._identity_key, timestamp_ms)
-                        elif self._frame_id % self.reid_interval == 0 and target.state == TargetState.TRACKING:
-                            self.identity_manager.verified_update(crop, self._identity_key, timestamp_ms)
                     else:
                         self._consecutive_mismatches += 1
                         if self._consecutive_mismatches < self._max_mismatches_before_lost:
@@ -318,7 +339,6 @@ class SingleCameraPipeline:
                     current_verified = True
                     self.target_manager.mark_tracking(current_track, track_result.frame_id, timestamp_ms)
 
-
         if not current_verified:
             old_tr = target.track_id
             old_st = target.state.value
@@ -329,10 +349,11 @@ class SingleCameraPipeline:
                     f"Current target unavailable | State=LOST"
                 )
 
-            # Search candidate tracks in the frame with quality filtering
+            # Search candidate tracks in the frame, filtering out occluded/overlapping tracks
             candidate_tracks = [
                 t for t in track_result.tracks
                 if (t.track_id != current_track_id or current_track is None)
+                and not self._is_occluded(t, track_result.tracks)
             ]
             candidate_crops = []
             for t in candidate_tracks:
@@ -359,7 +380,6 @@ class SingleCameraPipeline:
                         f"Rank={rank_idx + 1}\n"
                         f"Decision={cand_decision}\n"
                     )
-
 
                 if ranked:
                     top_cand, top_score, top_eval = ranked[0]

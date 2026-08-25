@@ -26,10 +26,10 @@ tracking:
 
 reid:
   model_name: "osnet_x0_25"
-  similarity_threshold: 0.75
-  reference_threshold: 0.70
-  upper_threshold: 0.55
-  min_margin: 0.05
+  similarity_threshold: 0.78
+  reference_threshold: 0.72
+  upper_threshold: 0.60
+  min_margin: 0.06
   w_upper: 0.45
   w_color: 0.25
   w_deep: 0.15

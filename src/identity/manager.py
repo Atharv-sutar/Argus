@@ -46,10 +46,10 @@ class IdentityManager:
         self,
         reid_extractor: BaseReID,
         vector_store: Optional[BaseVectorStore] = None,
-        similarity_threshold: float = 0.75,
-        reference_threshold: float = 0.70,
-        upper_threshold: float = 0.55,
-        min_margin: float = 0.05,
+        similarity_threshold: float = 0.78,
+        reference_threshold: float = 0.72,
+        upper_threshold: float = 0.60,
+        min_margin: float = 0.06,
         max_reference_samples: int = 4,
         max_gallery_size: int = 5,
         redundancy_threshold: float = 0.90,
@@ -241,10 +241,10 @@ class IdentityManager:
             return False
 
         eval_res = self.evaluate_candidate_crop(crop, identity_id)
-        if not eval_res.is_match:
+        if not eval_res.is_match or eval_res.best_ref_sim < self.reference_threshold:
             logger.warning(
-                f"[IDENTITY] Adaptive update REJECTED for '{identity_id}': failed match criteria "
-                f"(score={eval_res.candidate_score:.3f} < {self.similarity_threshold:.2f})"
+                f"[IDENTITY] Adaptive update REJECTED for '{identity_id}': failed match or drifted from reference "
+                f"(score={eval_res.candidate_score:.3f}, ref_sim={eval_res.best_ref_sim:.3f} < {self.reference_threshold:.2f})"
             )
             return False
 
