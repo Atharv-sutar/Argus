@@ -44,6 +44,8 @@ class OpenCVCamera(BaseCamera):
         # Threaded capture state
         self._thread = None
         self._running = False
+        self._is_closed = False
+        self._consecutive_failures = 0
         self._lock = None
         self._latest_frame: Optional[np.ndarray] = None
         self._latest_timestamp_ms: float = 0.0
@@ -72,6 +74,7 @@ class OpenCVCamera(BaseCamera):
 
         if not self._cap or not self._cap.isOpened():
             logger.error(f"Failed to open video source: {self.source}")
+            self._is_closed = True
             return
 
         if self.width is not None and isinstance(src, int):
@@ -80,7 +83,6 @@ class OpenCVCamera(BaseCamera):
             self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         if self.fps is not None and isinstance(src, int):
             self._cap.set(cv2.CAP_PROP_FPS, self.fps)
-
 
         self._start_time = time.time()
         logger.info(f"Successfully opened video source: {self.source}")
@@ -94,20 +96,25 @@ class OpenCVCamera(BaseCamera):
             # Block until the first frame arrives so read() never returns None
             # on a healthy camera immediately after construction.
             deadline = time.time() + 2.0
-            while self._latest_frame is None and time.time() < deadline:
+            while self._latest_frame is None and time.time() < deadline and not self._is_closed:
                 time.sleep(0.01)
-            if self._latest_frame is None:
+            if self._latest_frame is None and not self._is_closed:
                 logger.warning(f"Camera '{self.source}' thread started but no frame received within 2s")
-
 
     def _capture_loop(self) -> None:
         """Background thread continuously pulling frames to prevent driver buffer buildup."""
         while self._running and self._cap is not None and self._cap.isOpened():
             success, frame = self._cap.read()
             if not success or frame is None:
+                self._consecutive_failures += 1
+                if self._consecutive_failures >= 60:
+                    logger.info(f"Camera '{self.source}' reached EOF or disconnected ({self._consecutive_failures} read failures).")
+                    self._is_closed = True
+                    break
                 time.sleep(0.005)
                 continue
 
+            self._consecutive_failures = 0
             self._frame_count += 1
             pos_msec = self._cap.get(cv2.CAP_PROP_POS_MSEC) if not isinstance(self.source, int) else 0.0
             now_ms = float(pos_msec) if pos_msec > 0.0 else (time.time() - (self._start_time or time.time())) * 1000.0
@@ -118,7 +125,7 @@ class OpenCVCamera(BaseCamera):
                 self._has_new_frame = True
 
     def is_opened(self) -> bool:
-        return self._cap is not None and self._cap.isOpened()
+        return not self._is_closed and self._cap is not None and self._cap.isOpened()
 
     def read(self) -> Tuple[bool, Optional[np.ndarray], float]:
         if not self.is_opened() or self._cap is None:
@@ -133,6 +140,7 @@ class OpenCVCamera(BaseCamera):
 
         success, frame = self._cap.read()
         if not success or frame is None:
+            self._is_closed = True
             return False, None, 0.0
 
         self._frame_count += 1
@@ -143,6 +151,7 @@ class OpenCVCamera(BaseCamera):
 
     def release(self) -> None:
         self._running = False
+        self._is_closed = True
         if self._thread is not None:
             self._thread.join(timeout=0.5)
             self._thread = None

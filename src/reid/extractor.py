@@ -36,7 +36,7 @@ class PyTorchReIDExtractor(BaseReID):
         self.model_name = model_name.lower()
         self.device_str = resolve_inference_device(device)
         self.input_size = input_size
-        self.feature_dim = 512 if "dino" not in self.model_name else 384
+        self.feature_dim = 512
         self._model = None
         self._osnet_model = None
         self._device = None
@@ -53,9 +53,6 @@ class PyTorchReIDExtractor(BaseReID):
                 from src.reid.backbones.osnet import build_osnet
                 self._model = build_osnet(self.model_name if "x1_0" in self.model_name else "osnet_x0_25", pretrained=True).to(self._device).eval()
                 self.feature_dim = 512
-            elif "dino" in self.model_name:
-                self._model = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14").to(self._device).eval()
-                self.feature_dim = 384
             elif "mobilenet" in self.model_name:
                 import torchvision.models as models
                 backbone = models.mobilenet_v3_small(weights=models.MobileNet_V3_Small_Weights.DEFAULT)

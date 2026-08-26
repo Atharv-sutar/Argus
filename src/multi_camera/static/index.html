@@ -154,11 +154,15 @@
           <canvas id="graph-canvas"></canvas>
         </div>
 
-        <!-- Live Mode Search Progress HUD -->
+        <!-- Live Mode Search Progress & Forensic HUD -->
         <div id="live-hud" class="live-hud" style="display:none;">
           <div class="hud-item">
             <span class="hud-label">Active Camera</span>
             <span id="hud-active-cam" class="hud-val">None</span>
+          </div>
+          <div class="hud-item">
+            <span class="hud-label">Target State</span>
+            <span id="hud-target-state" class="hud-val hud-state-badge">UNSELECTED</span>
           </div>
           <div class="hud-item">
             <span class="hud-label">Search Status</span>
@@ -167,6 +171,10 @@
           <div class="hud-item">
             <span class="hud-label">Search Radius</span>
             <span id="hud-search-radius" class="hud-val">0</span>
+          </div>
+          <div class="hud-item hud-trail-item">
+            <span class="hud-label">Forensic Trail</span>
+            <span id="hud-transit-trail" class="hud-val hud-trail-text">No transit</span>
           </div>
         </div>
       </main>

@@ -35,11 +35,14 @@ def get_embedding_hash(emb) -> str:
 
 
 def log_reid_test(message: str) -> None:
-    log_dir = r'C:\Users\athar\.gemini\antigravity-ide\brain\c2a87c82-e77c-4b55-8b21-41f2212e7450\scratch'
-    os.makedirs(log_dir, exist_ok=True)
-    log_path = os.path.join(log_dir, 'reid_test_log.txt')
-    with open(log_path, 'a', encoding='utf-8') as f:
-        f.write(message + '\n')
+    try:
+        log_dir = os.path.join(os.path.dirname(__file__), "..", "..", "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        log_path = os.path.join(log_dir, "reid_test_log.txt")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(message + "\n")
+    except Exception:
+        pass
     logger.info(message)
 
 
@@ -390,6 +393,7 @@ class SingleCameraPipeline:
                             self._consecutive_mismatches = 0
                             current_verified = True
                             old_tr = target.track_id
+                            old_st = target.state.value
                             self.identity_manager.flush_adaptive_gallery(self._identity_key)
                             reassociated = self.target_manager.reassociate_target(
                                 top_track_obj,

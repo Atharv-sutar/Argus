@@ -36,13 +36,13 @@ def run_combined_validation():
             if np.std(gray) >= 5.0 and crop.shape[0] >= 40 and crop.shape[1] >= 20:
                 if obs.identity_id in {'person_24', 'person_12'}:
                     cam0_target.append(crop)
-                elif obs.identity_id in {'person_75', 'person_74', 'person_30'}:
+                elif obs.identity_id in {'person_75', 'person_74', 'person_30', 'person_18', 'person_0', 'person_48'}:
                     cam1_target.append(crop)
-                elif obs.identity_id in {'person_83', 'person_2', 'person_82'}:
+                elif obs.identity_id in {'person_83', 'person_2', 'person_82', 'person_51', 'person_52'}:
                     cam2_target.append(crop)
-                elif obs.identity_id in {'person_18', 'person_0', 'person_15', 'person_48'}:
+                elif obs.identity_id in {'person_44', 'person_13', 'person_17'}:
                     cam1_hard_bystanders.append(crop)
-                elif obs.identity_id in {'person_10', 'person_1', 'person_14', 'person_16'}:
+                elif obs.identity_id in {'person_10', 'person_11', 'person_14', 'person_16'}:
                     cam2_hard_bystanders.append(crop)
                     
     print(f"Loaded Real Test Pools:")
@@ -68,10 +68,10 @@ def run_combined_validation():
         id_mgr = IdentityManager(
             reid_extractor=extractor,
             vector_store=None,
-            similarity_threshold=0.82,
-            reacquisition_threshold=0.85,
-            reference_threshold=0.78,
-            upper_threshold=0.75,
+            similarity_threshold=0.88,
+            reacquisition_threshold=0.90,
+            reference_threshold=0.85,
+            upper_threshold=0.82,
             min_margin=0.05,
             reacquisition_min_frames=5,
         )
@@ -87,8 +87,8 @@ def run_combined_validation():
         # Hard bystander walks in Camera 1 for 15 frames while target is absent
         ev_cam1 = EvidenceEngine(
             window_size=5,
-            min_similarity_threshold=0.82,
-            reacquisition_threshold=0.85,
+            min_similarity_threshold=0.88,
+            reacquisition_threshold=0.90,
             reacquisition_min_frames=5,
             min_consistency_ratio=0.80,
             min_margin_threshold=0.05,
@@ -146,8 +146,8 @@ def run_combined_validation():
         if target_reacquired_cam1:
             ev_cam2 = EvidenceEngine(
                 window_size=5,
-                min_similarity_threshold=0.82,
-                reacquisition_threshold=0.85,
+                min_similarity_threshold=0.88,
+                reacquisition_threshold=0.90,
                 reacquisition_min_frames=5,
                 min_consistency_ratio=0.80,
                 min_margin_threshold=0.05,

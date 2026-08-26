@@ -144,12 +144,16 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 }
                 self._send_json({
                     "active_camera": self.runtime_pipeline.active_camera_id,
+                    "target_state": getattr(self.runtime_pipeline, "target_state", "UNSELECTED"),
+                    "transit_history": getattr(self.runtime_pipeline, "transit_history", []),
                     "search_progress": progress.to_dict(),
                     "camera_statuses": statuses,
                 })
             else:
                 self._send_json({
                     "active_camera": None,
+                    "target_state": "UNSELECTED",
+                    "transit_history": [],
                     "search_progress": None,
                     "camera_statuses": {},
                 })

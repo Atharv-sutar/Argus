@@ -250,7 +250,7 @@ class VerifiedIdentityDecision:
     reason: str
     decision_id: str = ""
     source_camera_id: str = "camera_0"
-    model_name: str = "dinov2"
+    model_name: str = "osnet_x0_25"
     model_version: str = "2.0"
     expires_at_ms: float = 0.0
     evidence_hash: str = ""

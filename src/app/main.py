@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
+import sys
+import threading
 import time
+import webbrowser
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -36,6 +40,90 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 logger = logging.getLogger("argus.app")
+
+
+def _launch_browser_when_ready(port: int, delay: float = 0.8) -> None:
+    """Opens the web browser to the given port in a background daemon thread."""
+    def _open() -> None:
+        time.sleep(delay)
+        url = f"http://127.0.0.1:{port}"
+        try:
+            logger.info(f"Automatically opening browser at {url}")
+            webbrowser.open(url)
+        except Exception as e:
+            logger.debug(f"Could not open browser automatically: {e}")
+
+    threading.Thread(target=_open, daemon=True).start()
+
+
+def _prompt_camera_source(
+    graph_path: str = "configs/camera_graph.json",
+    default_source: Any = 0,
+    allow_interactive: bool = True,
+) -> Any:
+    """
+    Prompts the user to select an available camera source if running interactively,
+    or returns the configured default source without blocking.
+    """
+    if not allow_interactive or not sys.stdin.isatty():
+        return default_source
+
+    graph_cameras: List[Dict[str, Any]] = []
+    try:
+        g_file = Path(graph_path)
+        if g_file.is_file():
+            import json
+            with open(g_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            graph_cameras = data.get("cameras", [])
+    except Exception:
+        pass
+
+    options: List[Tuple[str, Any]] = []
+
+    # Add cameras from graph
+    for cam in graph_cameras:
+        name = cam.get("name") or cam.get("camera_id")
+        src = cam.get("source")
+        cid = cam.get("camera_id")
+        options.append((f"{name} ({cid}) [source: {src}]", src))
+
+    # Add standard webcams 0 and 1 if not already present
+    existing_srcs = {opt[1] for opt in options}
+    if 0 not in existing_srcs and "0" not in existing_srcs:
+        options.append(("Default Local Webcam (Device Index 0)", 0))
+    if 1 not in existing_srcs and "1" not in existing_srcs:
+        options.append(("Secondary Local Webcam (Device Index 1)", 1))
+
+    # Add synthetic generator option
+    options.append(("Synthetic Simulation Feed (Headless Test Generator)", "synthetic"))
+    # Add custom path option
+    options.append(("Custom Video File / RTSP Stream URL...", "CUSTOM"))
+
+    print("\n" + "=" * 65)
+    print(" ARGUS SURVEILLANCE — SELECT CAMERA SOURCE")
+    print("=" * 65)
+    for i, (label, _) in enumerate(options, 1):
+        print(f"  [{i}] {label}")
+    print("=" * 65)
+
+    try:
+        user_choice = input(f"Select camera [1-{len(options)}] (or press Enter for default '{default_source}'): ").strip()
+        if not user_choice:
+            return default_source
+
+        if user_choice.isdigit():
+            idx = int(user_choice) - 1
+            if 0 <= idx < len(options):
+                selected_src = options[idx][1]
+                if selected_src == "CUSTOM":
+                    custom_path = input("Enter video file path or RTSP stream URL: ").strip()
+                    return custom_path if custom_path else default_source
+                return selected_src
+
+        return user_choice
+    except (EOFError, KeyboardInterrupt):
+        return default_source
 
 
 def build_pipeline(
@@ -350,6 +438,7 @@ def run_multi_camera_app(
     if serve_ui:
         run_ui_server(port=ui_port, graph_file=graph_path or config.multi_camera.graph_file, pipeline=pipeline, block=False)
         logger.info(f"Live Monitor web UI available at http://127.0.0.1:{ui_port}")
+        _launch_browser_when_ready(ui_port)
 
     show_window = config.visualization.show_window and not no_gui and (cv2 is not None)
     window_name = "Argus Multi-Camera Surveillance"
@@ -469,9 +558,10 @@ def run_multi_camera_app(
                     cv2.line(frame, (0, 32), (w, 32), (0, 215, 255), 1)
                     cv2.imshow(window_name, frame)
 
-                    # Check for target loss → transition to SEARCH_VIEW
+                    # Check for target loss → transition to SEARCH_VIEW only if adjacent search cameras exist
                     if target and target.state in (TargetState.LOST, TargetState.UNCERTAIN):
-                        if pipeline.search_manager.is_searching:
+                        progress = pipeline.get_search_progress()
+                        if pipeline.search_manager.is_searching and len(progress.active_cameras) > 0:
                             ui_state = "SEARCH_VIEW"
                             logger.info(f"[UI] TARGET_TRACKING → SEARCH_VIEW (Target lost on '{active_id}')")
 
@@ -500,10 +590,10 @@ def run_multi_camera_app(
                         ui_state = "HANDOFF_CONFIRM"
                         logger.info(f"[UI] SEARCH_VIEW → HANDOFF_CONFIRM (Target found on '{handoff_new_cam_id}')")
 
-                # Check if search timed out → back to TARGET_TRACKING (single camera, LOST state)
-                if not pipeline.search_manager.is_searching:
+                # Check if search timed out or no search cameras → back to TARGET_TRACKING (single camera, LOST state)
+                if not pipeline.search_manager.is_searching or len(search_cam_ids) == 0:
                     ui_state = "TARGET_TRACKING"
-                    logger.info(f"[UI] SEARCH_VIEW → TARGET_TRACKING (search ended)")
+                    logger.info(f"[UI] SEARCH_VIEW → TARGET_TRACKING (search ended or single camera)")
 
             # ===== HANDOFF_CONFIRM STATE =====
             elif ui_state == "HANDOFF_CONFIRM":
@@ -569,6 +659,7 @@ def run_map_ui(
 ) -> None:
     """Launches the interactive Camera Mapping Web UI server."""
     logger.info(f"Opening Argus Camera Mapping UI at http://127.0.0.1:{port}")
+    _launch_browser_when_ready(port)
     run_ui_server(port=port, graph_file=graph_path, pipeline=None, block=True)
 
 
@@ -587,6 +678,17 @@ def run_app(
     else:
         logger.warning(f"Config file '{config_path}' not found. Using defaults.")
         config = AppConfig()
+
+    # Prompt for source if not provided
+    if source is None and not synthetic:
+        source = _prompt_camera_source(
+            graph_path=config.multi_camera.graph_file,
+            default_source=config.camera.source,
+            allow_interactive=not no_gui,
+        )
+        if str(source).lower() == "synthetic":
+            synthetic = True
+            source = None
 
     pipeline = build_pipeline(
         config=config,

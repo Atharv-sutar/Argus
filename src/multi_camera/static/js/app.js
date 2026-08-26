@@ -170,16 +170,39 @@ class App {
         this.graphCanvas.cameraStatuses = statusData.camera_statuses || {};
         this.graphCanvas.activeCameraId = statusData.active_camera;
         this.graphCanvas.searchProgress = statusData.search_progress;
+        this.graphCanvas.targetState = statusData.target_state || 'UNSELECTED';
+        this.graphCanvas.transitHistory = statusData.transit_history || [];
 
         document.getElementById('hud-active-cam').textContent = statusData.active_camera || 'None';
+
+        // Target State Badge
+        const stateEl = document.getElementById('hud-target-state');
+        if (stateEl) {
+          const tState = statusData.target_state || 'UNSELECTED';
+          stateEl.textContent = tState;
+          stateEl.className = `hud-val hud-state-badge state-${tState.toLowerCase()}`;
+        }
+
+        // Search progress
         if (statusData.search_progress) {
           document.getElementById('hud-search-state').textContent = statusData.search_progress.state.toUpperCase();
           document.getElementById('hud-search-radius').textContent = statusData.search_progress.search_radius;
         }
+
+        // Forensic Trail
+        const trailEl = document.getElementById('hud-transit-trail');
+        if (trailEl) {
+          const trail = statusData.transit_history || [];
+          if (trail.length === 0) {
+            trailEl.textContent = 'No transit recorded';
+          } else {
+            trailEl.textContent = trail.map(t => t.camera_id).join(' \u2192 ');
+          }
+        }
       }
     };
     poll();
-    this.statusPollInterval = setInterval(poll, 1000);
+    this.statusPollInterval = setInterval(poll, 800);
   }
 
   stopStatusPolling() {

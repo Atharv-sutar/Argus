@@ -487,16 +487,23 @@ class GraphCanvas {
 
     // 1. Status Ring / Glow
     if (isActiveTarget) {
+      const tState = (this.targetState || 'TRACKING').toUpperCase();
+      let targetGlowColor = '#10b981'; // Green default for TRACKING
+      if (tState === 'OCCLUDED') targetGlowColor = '#c084fc';
+      else if (tState === 'UNCERTAIN') targetGlowColor = '#f59e0b';
+      else if (tState === 'LOST') targetGlowColor = '#f43f5e';
+      else if (tState === 'LOCKED' || tState === 'ACQUIRING_REFERENCE') targetGlowColor = '#00f0ff';
+
       this.ctx.beginPath();
       this.ctx.arc(x, y, r + 8, 0, Math.PI * 2);
-      this.ctx.strokeStyle = '#ffd700'; // Gold
+      this.ctx.strokeStyle = targetGlowColor;
       this.ctx.lineWidth = 3;
       this.ctx.stroke();
 
       // Corner Brackets for active target lock
       const bLen = 10;
       const bPad = r + 12;
-      this.ctx.strokeStyle = '#ffd700';
+      this.ctx.strokeStyle = targetGlowColor;
       this.ctx.lineWidth = 2;
       // Top-Left
       this.ctx.strokeRect(x - bPad, y - bPad, bLen, 0);
@@ -529,7 +536,7 @@ class GraphCanvas {
     let borderColor = '#00f0ff';
     if (!node.enabled || status === 'offline') borderColor = '#64748b';
     if (status === 'searching') borderColor = '#ff9900';
-    if (isActiveTarget) borderColor = '#ffd700';
+    if (isActiveTarget) borderColor = '#10b981';
     if (isSelected) borderColor = '#ffffff';
 
     this.ctx.strokeStyle = borderColor;

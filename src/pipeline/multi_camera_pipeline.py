@@ -112,22 +112,23 @@ class MultiCameraPipeline:
         self._target_lost_timestamp: float = 0.0
         self._handoff_timestamp: float = 0.0
         self._is_running: bool = False
+        self._transit_history: List[Dict[str, Any]] = []
 
 
         # Initialize camera nodes from graph
         self._sync_nodes_with_graph()
 
     def _default_detector_factory(self) -> BaseDetector:
-        if self._shared_detector is not None:
-            return self._shared_detector
-        return YOLODetector(
-            model_name=self.config.detection.model_name,
-            confidence_threshold=self.config.detection.confidence_threshold,
-            iou_threshold=self.config.detection.iou_threshold,
-            target_classes=self.config.detection.target_classes,
-            device=self.config.inference.device,
-            image_size=self.config.detection.image_size,
-        )
+        if self._shared_detector is None:
+            self._shared_detector = YOLODetector(
+                model_name=self.config.detection.model_name,
+                confidence_threshold=self.config.detection.confidence_threshold,
+                iou_threshold=self.config.detection.iou_threshold,
+                target_classes=self.config.detection.target_classes,
+                device=self.config.inference.device,
+                image_size=self.config.detection.image_size,
+            )
+        return self._shared_detector
 
     def _default_tracker_factory(self) -> BaseTracker:
         return ByteTracker(
@@ -251,6 +252,12 @@ class MultiCameraPipeline:
         selected_id = pipeline.select_target_by_point(x, y)
         if selected_id is not None:
             self._nodes[camera_id].mark_active_target()
+            self._transit_history.append({
+                "camera_id": camera_id,
+                "timestamp": time.time(),
+                "event": "TARGET_SELECTED",
+                "track_id": selected_id,
+            })
             logger.info(
                 f"[MULTI-CAM] Target selected on active camera '{camera_id}' | Tracker={selected_id}"
             )
@@ -283,11 +290,16 @@ class MultiCameraPipeline:
         ok = pipeline.select_target_by_id(track_id)
         if ok and camera_id in self._nodes:
             self._nodes[camera_id].mark_active_target()
+            self._transit_history.append({
+                "camera_id": camera_id,
+                "timestamp": time.time(),
+                "event": "TARGET_SELECTED",
+                "track_id": track_id,
+            })
             logger.info(
                 f"[MULTI-CAM] Target selected by ID on camera '{camera_id}' | Tracker={track_id}"
             )
         return ok
-
 
     def clear_target(self) -> None:
         """Clear target across all cameras and reset search."""
@@ -298,6 +310,7 @@ class MultiCameraPipeline:
                 node.mark_online()
         self._active_camera_id = None
         self.search_manager.reset()
+        self._transit_history.clear()
         logger.info("[MULTI-CAM] Global target cleared.")
 
     def step(self) -> Dict[str, Tuple[Optional[np.ndarray], Optional[TrackResult], Optional[Target]]]:
@@ -353,11 +366,26 @@ class MultiCameraPipeline:
 
         elif target_is_lost and self._active_camera_id:
             # Target lost on active camera!
-            if not self.search_manager.is_searching:
+            has_adjacent_cams = len(self.graph.get_neighbors(self._active_camera_id, 1)) > 0
+            if not has_adjacent_cams:
+                # Single camera or isolated node: hold LOST state on current camera without futile search loop
+                if self.search_manager.is_searching:
+                    self.search_manager.reset()
+                    self._deactivate_search_cameras()
+            elif not self.search_manager.is_searching:
                 self._target_lost_timestamp = now
-                logger.info(f"[MULTI-CAM] Target LOST on camera '{self._active_camera_id}'. Initiating graph search.")
                 search_cams = self.search_manager.on_target_lost(self._active_camera_id)
-                self._activate_search_cameras([cid for cid, _ in search_cams])
+                if search_cams:
+                    logger.info(
+                        f"[MULTI-CAM] Target LOST on camera '{self._active_camera_id}'. "
+                        f"Initiating graph search on {len(search_cams)} adjacent cameras."
+                    )
+                    self._activate_search_cameras([cid for cid, _ in search_cams])
+                else:
+                    logger.info(
+                        f"[MULTI-CAM] Target LOST on camera '{self._active_camera_id}'. "
+                        f"No reachable search cameras in graph."
+                    )
             else:
                 # Search is in progress, check for radius expansion or timeout
                 elapsed_s = now - self._target_lost_timestamp
@@ -521,11 +549,31 @@ class MultiCameraPipeline:
 
         # Record handoff timestamp for UI confirmation delay
         self._handoff_timestamp = time.time()
+        self._transit_history.append({
+            "camera_id": new_camera_id,
+            "from_camera": old_camera_id,
+            "timestamp": self._handoff_timestamp,
+            "event": "HANDOFF",
+        })
 
         # Reset search manager and deactivate search cameras
         self.search_manager.reset()
         self._deactivate_search_cameras()
         self._target_lost_timestamp = 0.0
+
+    @property
+    def transit_history(self) -> List[Dict[str, Any]]:
+        """List of chronological target transition events across cameras."""
+        return list(self._transit_history)
+
+    @property
+    def target_state(self) -> str:
+        """Current target state across the active surveillance camera."""
+        if self._active_camera_id:
+            p = self._pipelines.get(self._active_camera_id)
+            if p and p.target_manager.target:
+                return p.target_manager.target.state.value
+        return "UNSELECTED"
 
     def stream(self) -> Generator[Dict[str, Tuple[Optional[np.ndarray], Optional[TrackResult], Optional[Target]]], None, None]:
         """Continuous generator yielding multi-camera step results."""
