@@ -390,7 +390,6 @@ class SingleCameraPipeline:
                             self._consecutive_mismatches = 0
                             current_verified = True
                             old_tr = target.track_id
-                            old_st = target.state.value
                             self.identity_manager.flush_adaptive_gallery(self._identity_key)
                             reassociated = self.target_manager.reassociate_target(
                                 top_track_obj,
@@ -400,6 +399,14 @@ class SingleCameraPipeline:
                                 reid_verified=True,
                             )
                             if reassociated:
+                                c_top = self._extract_crop(frame, top_track_obj.box)
+                                if c_top is not None:
+                                    self.identity_manager.enroll_cross_camera_viewpoint(
+                                        crop=c_top,
+                                        identity_id=self._identity_key,
+                                        decision=evidence_dec.verified_token,
+                                        timestamp_ms=timestamp_ms,
+                                    )
                                 new_st = target.state.value
                                 log_reid_test(
                                     f"\n[REID_TEST] TARGET_ASSIGNMENT\n"

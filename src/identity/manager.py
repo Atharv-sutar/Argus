@@ -8,7 +8,14 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from src.core.interfaces import BaseReID, BaseVectorStore
-from src.core.types import Embedding, Identity, TargetIdentityAnchor, ViewCluster
+from src.core.types import (
+    Embedding,
+    Identity,
+    MatchDecisionState,
+    TargetIdentityAnchor,
+    VerifiedIdentityDecision,
+    ViewCluster,
+)
 from src.identity.store import InMemoryVectorStore
 from src.identity.evidence import EvidenceEngine
 from src.reid.quality import CropQualityEvaluator
@@ -256,6 +263,70 @@ class IdentityManager:
         logger.info(
             f"[IDENTITY] Added diverse reference sample {len(ident.trusted_gallery)}/{self.max_reference_samples} "
             f"for '{identity_id}' (quality={q_score:.2f}, clusters={len(ident.view_clusters)})"
+        )
+        return True
+
+    def enroll_cross_camera_viewpoint(
+        self,
+        crop: np.ndarray,
+        identity_id: str,
+        decision: Optional[VerifiedIdentityDecision] = None,
+        timestamp_ms: float = 0.0,
+    ) -> bool:
+        """
+        Enrolls a verified cross-camera viewpoint into the TargetIdentityAnchor
+        as a permanent ViewCluster, strictly gated by a valid VerifiedIdentityDecision token.
+        Preserves anti-scooping guarantees while allowing multi-camera appearance learning.
+        """
+        ident = self._identities.get(identity_id)
+        if ident is None or crop is None or crop.size == 0:
+            return False
+
+        if decision is None or decision.decision_state != MatchDecisionState.MATCH:
+            logger.warning(f"[IDENTITY] Cross-camera viewpoint enrollment REJECTED: no valid VerifiedIdentityDecision token.")
+            return False
+
+        is_valid, q_score, reason = self.quality.evaluate(crop)
+        if not is_valid:
+            logger.debug(f"[IDENTITY] Cross-camera viewpoint rejected for '{identity_id}': poor quality ({reason})")
+            return False
+
+        fused, deep, global_v, upper, lower = self._extract_all_representations(crop)
+
+        if ident.anchor is None:
+            return False
+
+        # Check if this sample matches an existing cluster (> 0.85) or forms a new viewpoint cluster
+        matched_cluster = False
+        for cluster in ident.anchor.clusters:
+            c_sim = cluster.match_score(fused)
+            if c_sim > 0.85:
+                cluster.exemplars.append(fused)
+                cluster.update_centroid()
+                matched_cluster = True
+                break
+
+        if not matched_cluster:
+            new_c = ViewCluster(
+                cluster_id=f"{identity_id}_view_{len(ident.anchor.clusters)}",
+                label=f"viewpoint_{len(ident.anchor.clusters)}",
+                exemplars=[fused],
+                centroid=fused,
+            )
+            ident.anchor.clusters.append(new_c)
+            ident.view_clusters.append(new_c)
+
+        if len(ident.trusted_gallery) < self.max_gallery_size:
+            ident.trusted_gallery.append(fused)
+            ident.trusted_upper_gallery.append(upper)
+            ident.trusted_lower_gallery.append(lower)
+        ident.update_prototype()
+
+        ident.last_seen_timestamp_ms = timestamp_ms
+        self.vector_store.add(fused, identity_id)
+        logger.info(
+            f"[IDENTITY] Enrolled verified cross-camera viewpoint for '{identity_id}' "
+            f"(clusters={len(ident.anchor.clusters)}, quality={q_score:.2f})"
         )
         return True
 
