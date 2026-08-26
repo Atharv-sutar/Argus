@@ -360,19 +360,12 @@ def _render_search_grid(
 def run_multi_camera_app(
     config_path: str = "configs/default.yaml",
     graph_path: Optional[str] = None,
-    no_gui: bool = False,
-    serve_ui: bool = False,
+    no_gui: bool = True,
+    serve_ui: bool = True,
     ui_port: int = 8765,
 ) -> None:
     """
-    Runs the multi-camera surveillance system with a state-driven UI.
-
-    UI States:
-    - MONITORING: Paginated grid of all camera live feeds (no AI).
-    - CAMERA_FOCUS: Single camera enlarged with detection/tracking overlays.
-    - TARGET_TRACKING: Single active camera tracking the target.
-    - SEARCH_VIEW: Active + adjacent cameras during target search.
-    - HANDOFF_CONFIRM: Search view with handoff confirmation indicator.
+    Runs the multi-camera surveillance system with the web operations center as primary interface.
     """
     config_file = Path(config_path)
     config = AppConfig.from_yaml(config_file) if config_file.is_file() else AppConfig()
@@ -381,10 +374,10 @@ def run_multi_camera_app(
 
     if serve_ui:
         run_ui_server(port=ui_port, graph_file=graph_path or config.multi_camera.graph_file, pipeline=pipeline, block=False)
-        logger.info(f"Live Monitor web UI available at http://127.0.0.1:{ui_port}")
+        logger.info(f"Surveillance Operations Center web UI available at http://127.0.0.1:{ui_port}")
         _launch_browser_when_ready(ui_port)
 
-    show_window = config.visualization.show_window and not no_gui and (cv2 is not None)
+    show_window = not no_gui and config.visualization.show_window and (cv2 is not None)
     window_name = "Argus Multi-Camera Surveillance"
 
     # --- UI State Machine ---
@@ -750,38 +743,41 @@ def run_app(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Argus Real-Time Surveillance Pipeline")
+    parser = argparse.ArgumentParser(description="Argus Real-Time Surveillance Operations Center")
     parser.add_argument("--config", type=str, default="configs/default.yaml", help="Path to config YAML")
     parser.add_argument("--graph", type=str, default="configs/camera_graph.json", help="Path to camera topology graph JSON")
-    parser.add_argument("--multi-camera", action="store_true", help="Run in multi-camera graph tracking mode")
+    parser.add_argument("--multi-camera", action="store_true", default=True, help="Run in multi-camera web surveillance mode (default)")
     parser.add_argument("--map-ui", action="store_true", help="Launch interactive web camera mapping UI")
-    parser.add_argument("--ui-port", type=int, default=8765, help="Port for the mapping web UI")
-    parser.add_argument("--source", type=str, default=None, help="Single-camera index, video file, or 'synthetic'")
+    parser.add_argument("--ui-port", type=int, default=8765, help="Port for the surveillance web UI")
+    parser.add_argument("--source", type=str, default=None, help="Camera index, video file, or 'synthetic'")
     parser.add_argument("--device", type=str, default=None, help="Inference device ('auto', 'cuda', 'cpu')")
     parser.add_argument("--target-id", type=int, default=None, help="Pre-select specific Track ID as target")
-    parser.add_argument("--no-gui", action="store_true", help="Run without graphical display window")
+    parser.add_argument("--legacy-desktop", action="store_true", help="[Deprecated / Debug Only] Launch legacy OpenCV desktop window")
+    parser.add_argument("--no-gui", action="store_true", default=True, help="Run without legacy graphical display window")
     parser.add_argument("--synthetic", action="store_true", help="Run with synthetic frame generator")
 
     args = parser.parse_args()
 
     if args.map_ui:
         run_map_ui(graph_path=args.graph, port=args.ui_port)
-    elif args.multi_camera:
-        run_multi_camera_app(
-            config_path=args.config,
-            graph_path=args.graph,
-            no_gui=args.no_gui,
-            serve_ui=True,
-            ui_port=args.ui_port,
-        )
-    else:
+    elif args.legacy_desktop:
+        logger.warning("The OpenCV desktop window is deprecated. Running in debug legacy mode.")
         run_app(
             config_path=args.config,
             source=args.source,
             device=args.device,
-            no_gui=args.no_gui,
+            no_gui=False,
             synthetic=args.synthetic,
             target_id=args.target_id,
+        )
+    else:
+        # Default: Web-First Multi-Camera Surveillance Operations Center
+        run_multi_camera_app(
+            config_path=args.config,
+            graph_path=args.graph,
+            no_gui=True,
+            serve_ui=True,
+            ui_port=args.ui_port,
         )
 
 

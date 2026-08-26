@@ -74,11 +74,14 @@
           </button>
         </div>
 
-        <button id="btn-add-sample-global" class="btn btn-primary btn-sm" title="Capture current angle to target gallery">
+        <button id="btn-add-sample-global" class="btn btn-primary btn-sm" title="Capture current angle to target gallery (Shortcut: 'a')">
           + Add Angle
         </button>
-        <button id="btn-clear-target-global" class="btn btn-danger btn-sm" title="Clear active target and reset search">
+        <button id="btn-clear-target-global" class="btn btn-danger btn-sm" title="Clear active target and reset search (Shortcut: 'c')">
           Clear Target
+        </button>
+        <button id="btn-quit-global" class="btn btn-quit btn-sm" title="Safely shutdown all camera pipelines and server (Shortcut: 'q')">
+          Shutdown
         </button>
       </div>
     </header>
@@ -116,7 +119,7 @@
           </div>
         </section>
 
-        <!-- VIEW B: Camera Graph Topology Editor Canvas -->
+        <!-- VIEW B: Camera Graph Topology Editor Canvas & Camera Management -->
         <section id="view-topology" class="view-stage" style="display: none;">
           <div class="canvas-toolbar">
             <div class="tool-group">
@@ -152,8 +155,129 @@
             </div>
           </div>
 
-          <div id="canvas-container" class="canvas-container">
-            <canvas id="graph-canvas"></canvas>
+          <div class="topology-stage-layout">
+            <!-- Left Topology Management Sidebar: Add Camera, Probe, Inspector -->
+            <aside class="topology-sidebar">
+              <!-- Tab A: Add Camera -->
+              <div class="topo-card">
+                <div class="topo-card-header">
+                  <h4>ADD CAMERA</h4>
+                </div>
+                <form id="form-custom-camera" class="topo-form">
+                  <div class="form-row">
+                    <label>Camera ID</label>
+                    <input type="text" id="custom-cam-id" placeholder="cam_2" required>
+                  </div>
+                  <div class="form-row">
+                    <label>Display Name</label>
+                    <input type="text" id="custom-cam-name" placeholder="Corridor B" required>
+                  </div>
+                  <div class="form-row">
+                    <label>Source Type</label>
+                    <select id="custom-cam-type">
+                      <option value="webcam">Webcam (Device Index)</option>
+                      <option value="rtsp">RTSP Stream</option>
+                      <option value="video_file">Video File</option>
+                      <option value="synthetic">Synthetic Test Generator</option>
+                    </select>
+                  </div>
+                  <div class="form-row">
+                    <label>Source URI / Index</label>
+                    <input type="text" id="custom-cam-source" placeholder="0 or rtsp://... or path/to/video.mp4" required>
+                  </div>
+                  <button type="submit" class="btn btn-primary btn-sm w-full">+ Add Camera to Canvas</button>
+                </form>
+              </div>
+
+              <!-- Tab B: Discover Local Webcams -->
+              <div class="topo-card">
+                <div class="topo-card-header">
+                  <h4>LOCAL DISCOVERY</h4>
+                  <button id="btn-discover" class="btn btn-secondary btn-xs">Probe Webcams</button>
+                </div>
+                <div id="discovered-list" class="discovered-list">
+                  <div class="empty-state">Click 'Probe Webcams' to detect connected USB/webcams</div>
+                </div>
+                <div class="preview-box">
+                  <img id="preview-image" style="display: none;" alt="Preview">
+                  <div class="preview-placeholder">Camera Preview</div>
+                  <div id="preview-info"></div>
+                </div>
+              </div>
+
+              <!-- Tab C: Inspector / Selected Object Properties -->
+              <div class="topo-card">
+                <div class="topo-card-header">
+                  <h4>PROPERTIES</h4>
+                </div>
+                <div id="inspector-empty" class="empty-state">Select a camera node or edge to edit</div>
+
+                <!-- Node Inspector -->
+                <div id="inspector-node" style="display: none;">
+                  <form id="form-edit-node" class="topo-form">
+                    <div class="form-row">
+                      <label>Camera ID</label>
+                      <input type="text" id="prop-cam-id" readonly class="readonly-input">
+                    </div>
+                    <div class="form-row">
+                      <label>Display Name</label>
+                      <input type="text" id="prop-cam-name" required>
+                    </div>
+                    <div class="form-row">
+                      <label>Source Type</label>
+                      <select id="prop-cam-type">
+                        <option value="webcam">Webcam</option>
+                        <option value="rtsp">RTSP Stream</option>
+                        <option value="video_file">Video File</option>
+                        <option value="synthetic">Synthetic</option>
+                      </select>
+                    </div>
+                    <div class="form-row">
+                      <label>Source</label>
+                      <input type="text" id="prop-cam-source" required>
+                    </div>
+                    <div class="form-row form-checkbox">
+                      <label><input type="checkbox" id="prop-cam-enabled"> Enabled</label>
+                    </div>
+                    <div class="topo-btn-row">
+                      <button type="submit" class="btn btn-primary btn-xs">Save</button>
+                      <button type="button" id="btn-delete-node" class="btn btn-danger btn-xs">Remove Camera</button>
+                    </div>
+                  </form>
+                </div>
+
+                <!-- Edge Inspector -->
+                <div id="inspector-edge" style="display: none;">
+                  <form id="form-edit-edge" class="topo-form">
+                    <div class="form-row">
+                      <label>Connection</label>
+                      <div class="edge-nodes-display"><span id="prop-edge-source"></span> &rarr; <span id="prop-edge-target"></span></div>
+                    </div>
+                    <div class="form-row">
+                      <label>Edge Type</label>
+                      <select id="prop-edge-type">
+                        <option value="overlap">Overlap (Shared Field)</option>
+                        <option value="adjacent">Adjacent (Direct Next)</option>
+                        <option value="travel">Travel (Corridor Transit)</option>
+                      </select>
+                    </div>
+                    <div class="form-row">
+                      <label>Weight / Cost</label>
+                      <input type="number" id="prop-edge-weight" min="0.1" max="10.0" step="0.1" value="1.0">
+                    </div>
+                    <div class="topo-btn-row">
+                      <button type="submit" class="btn btn-primary btn-xs">Save</button>
+                      <button type="button" id="btn-delete-edge" class="btn btn-danger btn-xs">Delete Edge</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            </aside>
+
+            <!-- Main Canvas Container -->
+            <div id="canvas-container" class="canvas-container">
+              <canvas id="graph-canvas"></canvas>
+            </div>
           </div>
         </section>
 
@@ -251,6 +375,7 @@
 
   <!-- Scripts -->
   <script src="js/api.js"></script>
+  <script src="js/inspector.js"></script>
   <script src="js/camera.js"></script>
   <script src="js/graph.js"></script>
   <script src="js/app.js"></script>

@@ -65,6 +65,36 @@ class GraphCanvas {
     document.getElementById('btn-zoom-in').addEventListener('click', () => this.zoom(1.2));
     document.getElementById('btn-zoom-out').addEventListener('click', () => this.zoom(0.8));
     document.getElementById('btn-zoom-reset').addEventListener('click', () => this.fitToScreen());
+
+    const btnSave = document.getElementById('btn-save');
+    if (btnSave) {
+      btnSave.addEventListener('click', async () => {
+        try {
+          const res = await API.saveGraph(this.toJSON());
+          this.app.showToast('Camera topology graph saved successfully!', 'success');
+          // Reload live matrix
+          this.app.loadLiveMatrix();
+        } catch (err) {
+          this.app.showToast(`Save failed: ${err.message}`, 'error');
+        }
+      });
+    }
+
+    const btnValidate = document.getElementById('btn-validate');
+    if (btnValidate) {
+      btnValidate.addEventListener('click', async () => {
+        try {
+          const res = await API.validateGraph(this.toJSON());
+          if (res.valid) {
+            this.app.showToast('Topology graph is valid and well-connected!', 'success');
+          } else {
+            this.app.showToast(`Topology warnings: ${(res.errors || []).join('; ')}`, 'error');
+          }
+        } catch (err) {
+          this.app.showToast(`Validation error: ${err.message}`, 'error');
+        }
+      });
+    }
   }
 
   setTool(tool) {

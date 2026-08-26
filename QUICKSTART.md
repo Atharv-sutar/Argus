@@ -1,12 +1,12 @@
-# Argus Surveillance — Quickstart Guide
+# Argus Multi-Camera Surveillance — Quickstart Guide
 
-This guide explains how to set up and run the Argus single-camera surveillance pipeline.
+This guide explains how to set up and run the Argus Multi-Camera Surveillance Operations Center.
 
 ---
 
 ## 1. Fast Start (Recommended)
 
-Run the launcher script corresponding to your terminal. It will automatically use the project's virtual environment:
+Run the launcher script corresponding to your terminal. It will automatically launch the surveillance pipeline and open the web dashboard in your default browser at **`http://127.0.0.1:8765`**:
 
 ### PowerShell:
 ```powershell
@@ -40,24 +40,12 @@ python -m src.app.main
 
 ---
 
-## 3. Common Usage Examples
+## 3. Web Dashboard Features
 
-### A. Run with Webcam (Default)
-Opens the default webcam (device `0`) and shows real-time person detection & tracking:
-```powershell
-.\run.ps1
-```
-
-### B. Run on a Video File
-```powershell
-.\run.ps1 --source "path\to\video.mp4"
-```
-
-### C. Run Headless Simulation (No camera/GPU needed)
-Runs a synthetic test feed in headless mode:
-```powershell
-.\run.ps1 --synthetic --no-gui
-```
+- **Multi-Camera Live Matrix**: View live video streams across all configured cameras simultaneously.
+- **Click-to-Focus & Target Lock**: Click any camera tile to focus; click on a tracked person in that feed to lock focus and accumulate their appearance gallery.
+- **Vertical Target Gallery (Right Side)**: Dedicated real-time scrollable column displaying all locked appearances (MANUAL and AUTO angles).
+- **Progressive Multi-Camera Search**: When the target is lost, adjacent cameras automatically activate at Radius 1 &rarr; Radius 2 &rarr; Radius 3 (max radius = 3).
 
 ### D. Specify Hardware Acceleration
 Force GPU or CPU execution:

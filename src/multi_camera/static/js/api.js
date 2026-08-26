@@ -96,6 +96,13 @@ const API = {
     return await res.json();
   },
 
+  async quit() {
+    const res = await fetch(`${this.baseUrl}/api/system/quit`, {
+      method: 'POST',
+    });
+    return await res.json();
+  },
+
   getCameraStreamUrl(cameraId) {
     return `${this.baseUrl}/api/camera/${encodeURIComponent(cameraId)}/stream`;
   },

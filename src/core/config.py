@@ -49,6 +49,7 @@ class ReIDConfig:
     diversity_threshold: float = 0.96
     max_gallery_size: int = 25
     min_margin: float = 0.05
+    lock_switch_margin: float = 0.06
     extract_interval_frames: int = 5
     min_crop_width: int = 24
     min_crop_height: int = 60

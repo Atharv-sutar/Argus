@@ -12,7 +12,9 @@ class SurveillanceApp {
     this.statusPollTimer = null;
     this.galleryPollTimer = null;
 
-    // Topology Graph Canvas helper if needed
+    // Topology Graph Canvas & Managers
+    this.inspector = new Inspector(this);
+    this.cameraManager = new CameraManager(this);
     this.graphCanvas = null;
 
     this.initElements();
@@ -75,6 +77,7 @@ class SurveillanceApp {
         this.showToast(`Failed to capture angle: ${err.message}`, 'error');
       }
     };
+    this.addSampleFn = addSampleFn;
 
     const clearTargetFn = async () => {
       try {
@@ -86,12 +89,56 @@ class SurveillanceApp {
         this.showToast(`Failed to clear target: ${err.message}`, 'error');
       }
     };
+    this.clearTargetFn = clearTargetFn;
 
     document.getElementById('btn-add-sample-global').addEventListener('click', addSampleFn);
     document.getElementById('btn-card-add-sample').addEventListener('click', addSampleFn);
 
     document.getElementById('btn-clear-target-global').addEventListener('click', clearTargetFn);
     document.getElementById('btn-card-clear').addEventListener('click', clearTargetFn);
+
+    const btnQuit = document.getElementById('btn-quit-global');
+    if (btnQuit) {
+      btnQuit.addEventListener('click', () => this.safeQuit());
+    }
+
+    // Global Keyboard Shortcuts (Issue 2)
+    window.addEventListener('keydown', (e) => {
+      if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
+      const key = e.key.toLowerCase();
+      if (key === 'a') {
+        e.preventDefault();
+        addSampleFn();
+      } else if (key === 'c') {
+        e.preventDefault();
+        clearTargetFn();
+      } else if (key === 'q') {
+        e.preventDefault();
+        this.safeQuit();
+      }
+    });
+  }
+
+  async safeQuit() {
+    if (!confirm('Are you sure you want to cleanly shut down Argus Surveillance? All camera connections and models will be released.')) {
+      return;
+    }
+    try {
+      this.showToast('Shutting down surveillance pipeline and releasing camera resources...', 'info');
+      await API.quit();
+      setTimeout(() => {
+        document.body.innerHTML = `
+          <div style="height:100vh;display:flex;align-items:center;justify-content:center;background:#0b0f17;color:#94a3b8;font-family:system-ui,-apple-system,sans-serif;flex-direction:column;gap:14px;text-align:center;">
+            <div style="width:48px;height:48px;border-radius:50%;background:rgba(0,242,254,0.1);border:1px solid #00f2fe;display:flex;align-items:center;justify-content:center;color:#00f2fe;font-size:20px;">&#10003;</div>
+            <h2 style="color:#f8fafc;margin:0;font-weight:600;">Argus Surveillance Operations Center Closed</h2>
+            <p style="margin:0;max-width:400px;font-size:13px;line-height:1.5;">All camera capture streams, AI models, and background workers have been released safely.</p>
+            <p style="font-size:11px;color:#64748b;">You can safely close this browser window.</p>
+          </div>
+        `;
+      }, 400);
+    } catch (err) {
+      this.showToast(`Shutdown: ${err.message}`, 'info');
+    }
   }
 
   setMode(mode) {
@@ -246,6 +293,12 @@ class SurveillanceApp {
         } catch (err) {
           console.error(err);
         }
+      });
+
+      // Right-click on feed: Capture manual angle (Shortcut action)
+      stage.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        this.addSampleFn();
       });
 
       // Overlay button handlers

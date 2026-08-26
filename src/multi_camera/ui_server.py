@@ -8,6 +8,7 @@ import mimetypes
 import os
 import sys
 import threading
+import time
 import urllib.parse
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -183,7 +184,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                         self.wfile.write(b"\r\n")
                         self.wfile.flush()
                         time.sleep(0.033)  # ~30 FPS throttle
-                except (BrokenPipeError, ConnectionResetError):
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError):
                     pass
                 except Exception as e:
                     logger.debug(f"Stream client disconnected for camera '{cam_id}': {e}")
@@ -391,10 +392,35 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": False, "error": "Runtime pipeline not active"}, status=HTTPStatus.BAD_REQUEST)
             return
 
+        elif path == "/api/system/quit":
+            logger.info("[SERVER] Safe shutdown requested via /api/system/quit endpoint.")
+            if self.runtime_pipeline is not None:
+                try:
+                    self.runtime_pipeline.stop()
+                except Exception as e:
+                    logger.warning(f"Error stopping pipeline: {e}")
+
+            self._send_json({"success": True, "message": "Argus Surveillance shutting down cleanly."})
+
+            def _delayed_shutdown():
+                time.sleep(0.4)
+                self.server.shutdown()
+
+            threading.Thread(target=_delayed_shutdown, daemon=True).start()
+            return
+
         self.send_error(HTTPStatus.NOT_FOUND, "Endpoint not found")
 
     def _capture_preview_jpeg(self, source_param: str, source_type: str) -> Optional[bytes]:
-        """Capture a single test frame as JPEG."""
+        """Capture a single test frame as JPEG, reusing pipeline frame if available."""
+        # 1. Reuse existing pipeline capture if source is already managed by pipeline
+        if self.runtime_pipeline is not None:
+            for cid, node in getattr(self.runtime_pipeline, "_nodes", {}).items():
+                if str(node.config.source) == str(source_param) or cid == source_param:
+                    jpeg = self.runtime_pipeline.get_camera_frame_jpeg(cid)
+                    if jpeg:
+                        return jpeg
+
         if cv2 is None:
             return None
 
@@ -405,26 +431,29 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             except ValueError:
                 src = 0
 
-        cap = cv2.VideoCapture(src)
-        if not cap.isOpened():
+        try:
+            cap = cv2.VideoCapture(src)
+            if not cap.isOpened():
+                return None
+
+            ret, frame = cap.read()
+            cap.release()
+
+            if not ret or frame is None:
+                return None
+
+            # Resize preview for fast network transfer
+            h, w = frame.shape[:2]
+            if w > 640:
+                scale = 640.0 / w
+                frame = cv2.resize(frame, (640, int(h * scale)))
+
+            ret, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+            if not ret:
+                return None
+            return buf.tobytes()
+        except Exception:
             return None
-
-        ret, frame = cap.read()
-        cap.release()
-
-        if not ret or frame is None:
-            return None
-
-        # Resize preview for fast network transfer
-        h, w = frame.shape[:2]
-        if w > 640:
-            scale = 640.0 / w
-            frame = cv2.resize(frame, (640, int(h * scale)))
-
-        ret, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
-        if not ret:
-            return None
-        return buf.tobytes()
 
 
 def run_ui_server(
