@@ -312,6 +312,16 @@ class TargetGallery:
         else:
             self._consecutive_matches.clear()
 
+    def remove_entry(self, entry_id: str) -> bool:
+        """Removes a specific gallery entry by entry_id and rebuilds the cosine matrix."""
+        for i, entry in enumerate(self._entries):
+            if entry.entry_id == entry_id:
+                self._entries.pop(i)
+                self._rebuild_matrix()
+                logger.info(f"[TARGET_GALLERY] Removed entry '{entry_id}' (remaining={self.size})")
+                return True
+        return False
+
     def clear(self) -> None:
         """Clears all entries, matrix, and state from the gallery."""
         self._entries.clear()

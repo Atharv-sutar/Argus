@@ -26,12 +26,13 @@ tracking:
 
 reid:
   model_name: "osnet_x0_25"
-  match_threshold: 0.85
-  auto_add_threshold: 0.90
+  match_threshold: 0.75
+  auto_add_threshold: 0.85
   auto_add_min_consecutive: 3
   diversity_threshold: 0.96
   max_gallery_size: 25
   min_margin: 0.05
+  lock_switch_margin: 0.05
   extract_interval_frames: 5
   min_crop_width: 24
   min_crop_height: 60

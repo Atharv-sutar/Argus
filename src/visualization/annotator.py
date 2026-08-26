@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 import numpy as np
 
 try:
@@ -71,6 +71,7 @@ class FrameAnnotator:
         target: Optional[Target] = None,
         fps: Optional[float] = None,
         camera_id: str = "camera_0",
+        candidate_similarities: Optional[Dict[int, float]] = None,
     ) -> np.ndarray:
         """
         Draw annotations directly onto a copy of the input frame.
@@ -81,6 +82,7 @@ class FrameAnnotator:
             target: Currently selected target state (if any).
             fps: Current processing frames-per-second.
             camera_id: Camera identifier label.
+            candidate_similarities: Real-time ReID cosine similarities per track ID.
 
         Returns:
             np.ndarray: Annotated frame.
@@ -104,9 +106,12 @@ class FrameAnnotator:
                 # Draw standard bounding box
                 cv2.rectangle(canvas, (x1, y1), (x2, y2), color, self.box_thickness)
 
-                # Draw track label tag
+                # Draw track label tag with real-time ReID similarity if available
                 if self.draw_ids:
-                    label = f"ID: {track.track_id} ({track.confidence:.2f})"
+                    sim_tag = ""
+                    if candidate_similarities is not None and track.track_id in candidate_similarities:
+                        sim_tag = f" | sim={candidate_similarities[track.track_id]:.2f}"
+                    label = f"ID: {track.track_id} ({track.confidence:.2f}){sim_tag}"
                     (tw, th), baseline = cv2.getTextSize(
                         label, cv2.FONT_HERSHEY_SIMPLEX, self.font_scale, 1
                     )
@@ -152,9 +157,13 @@ class FrameAnnotator:
                     cv2.rectangle(canvas, (tx1, ty1), (tx2, ty2), target_color, self.box_thickness + 1)
                     self._draw_target_brackets(canvas, tx1, ty1, tx2, ty2, target_color)
 
+                target_sim_str = ""
+                if candidate_similarities is not None and target.track_id is not None and target.track_id in candidate_similarities:
+                    target_sim_str = f" [sim={candidate_similarities[target.track_id]:.2f}]"
+
                 status_text = f"[TARGET] {target.state.value}"
                 if target.state != TargetState.LOST:
-                    status_text += f" (Tracker: {target.track_id})"
+                    status_text += f" (Tracker: {target.track_id}){target_sim_str}"
                 if target.state == TargetState.LOST and target.lost_duration_ms > 0:
                     status_text += f" ({target.lost_duration_ms / 1000.0:.1f}s)"
 

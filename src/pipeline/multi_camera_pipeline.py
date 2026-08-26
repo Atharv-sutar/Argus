@@ -118,20 +118,31 @@ class MultiCameraPipeline:
         self._active_camera_id: Optional[str] = None
         self._target_lost_timestamp: float = 0.0
         self._handoff_timestamp: float = 0.0
-        self._is_running: bool = False
+        self._is_running: bool = True
         self._transit_history: List[Dict[str, Any]] = []
         self._frame_count: int = 0
         self.reid_interval: int = config.reid.extract_interval_frames
         self._frame_lock: threading.Lock = threading.Lock()
         self._latest_jpegs: Dict[str, bytes] = {}
+        self._last_candidate_scores: Dict[int, float] = {}
 
         # Sync nodes from graph
         self._sync_nodes_with_graph()
 
     @property
+    def is_running(self) -> bool:
+        """Returns True if the pipeline is active and not stopped."""
+        return self._is_running
+
+    @property
     def gallery(self) -> TargetGallery:
         """The single target appearance gallery."""
         return self.target_manager.gallery
+
+    @property
+    def last_candidate_scores(self) -> Dict[int, float]:
+        """Real-time dictionary of track_id -> similarity score against the target gallery."""
+        return dict(self._last_candidate_scores)
 
     @property
     def _pipelines(self) -> Dict[str, CameraWorker]:
@@ -398,11 +409,14 @@ class MultiCameraPipeline:
 
     def step(self) -> Dict[str, Tuple[Optional[np.ndarray], Optional[TrackResult], Optional[Target]]]:
         """
-        Executes one processing cycle across the active camera and any search cameras.
-        Returns mapping: camera_id -> (annotated_frame, track_result, target).
+        Executes a single processing step across the multi-camera network.
+        Processes active camera first, and only processes search-radius cameras if target is LOST.
         """
-        self._sync_nodes_with_graph()
+        if not self._is_running:
+            return {}
+
         self._frame_count += 1
+        now = time.time()
         results: Dict[str, Tuple[Optional[np.ndarray], Optional[TrackResult], Optional[Target]]] = {}
         now = time.time()
 
@@ -428,7 +442,12 @@ class MultiCameraPipeline:
                 # Target Appearance Evaluation on Active Camera
                 self._evaluate_active_camera_target(active_worker, frame, active_track_res, ts_ms)
 
-                ann_frame = active_worker.annotate(frame, active_track_res, self.target_manager.target)
+                ann_frame = active_worker.annotate(
+                    frame,
+                    active_track_res,
+                    self.target_manager.target,
+                    candidate_similarities=self._last_candidate_scores,
+                )
                 results[active_cam_id] = (ann_frame, active_track_res, self.target_manager.target)
             else:
                 self._nodes[active_cam_id].mark_offline()
@@ -569,10 +588,12 @@ class MultiCameraPipeline:
     ) -> None:
         """
         Manages target tracking continuity, continuous appearance re-verification across
-        all candidates in the active frame, hysteresis-based lock switching, and gallery accumulation.
+        all candidates in the active frame via batched GPU ReID inference, hysteresis-based
+        lock switching, real-time diagnostic score telemetry, and gallery accumulation.
         """
         target = self.target_manager.target
         if not self.target_manager.is_active():
+            self._last_candidate_scores.clear()
             return
 
         # 1. Identify currently locked track
@@ -584,56 +605,84 @@ class MultiCameraPipeline:
 
         should_reid = (self._frame_count % self.reid_interval == 0) or (target.state == TargetState.LOST)
         match_thresh = self.config.reid.match_threshold
-        switch_margin = getattr(self.config.reid, "lock_switch_margin", 0.06)
+        switch_margin = getattr(self.config.reid, "lock_switch_margin", 0.05)
+        min_candidate_sim = min(match_thresh, 0.70)
 
-        if current_track is not None:
-            if should_reid and not self.gallery.is_empty:
-                # 2. Extract and evaluate currently locked track's similarity
-                current_crop = worker.extract_crop(frame, current_track.box)
-                current_emb: Optional[Embedding] = None
-                current_sim = 0.0
-                if current_crop is not None and current_crop.size > 0 and current_crop.shape[0] >= 10 and current_crop.shape[1] >= 10:
-                    try:
-                        current_emb = self.reid_extractor.extract(current_crop)
-                        current_sim, _ = self.gallery.match(current_emb)
-                    except Exception as e:
-                        logger.debug(f"[REID] Current track extraction error: {e}")
+        # Case A: On frames where ReID is NOT evaluated and target is actively tracking
+        if not should_reid or self.gallery.is_empty:
+            if current_track is not None and target.state in (TargetState.TRACKING, TargetState.LOCKED):
+                self.target_manager.mark_tracking(current_track, track_res.frame_id, timestamp_ms)
+            elif current_track is None and target.state in (TargetState.TRACKING, TargetState.LOCKED):
+                self.target_manager.mark_lost(timestamp_ms)
+            return
 
-                # 3. Simultaneously evaluate ALL OTHER candidate tracks in the active camera frame
-                best_other_track: Optional[Track] = None
-                best_other_crop: Optional[np.ndarray] = None
-                best_other_emb: Optional[Embedding] = None
-                best_other_sim = 0.0
+        # Case B: On frames where ReID IS evaluated (or target is LOST)
+        candidates_to_extract: List[Tuple[Track, np.ndarray]] = []
+        crops_list: List[np.ndarray] = []
 
-                for candidate in track_res.tracks:
-                    if candidate.track_id == current_track.track_id:
-                        continue
-                    c_crop = worker.extract_crop(frame, candidate.box)
-                    if c_crop is None or c_crop.size == 0 or c_crop.shape[0] < 10 or c_crop.shape[1] < 10:
-                        continue
-                    try:
-                        c_emb = self.reid_extractor.extract(c_crop)
-                        c_sim, _ = self.gallery.match(c_emb)
-                        if c_sim > best_other_sim:
-                            best_other_sim = c_sim
-                            best_other_track = candidate
-                            best_other_crop = c_crop
-                            best_other_emb = c_emb
-                    except Exception as e:
-                        logger.debug(f"[REID] Candidate track #{candidate.track_id} extraction error: {e}")
+        for track in track_res.tracks:
+            c_crop = worker.extract_crop(frame, track.box)
+            if c_crop is not None and c_crop.size > 0 and c_crop.shape[0] >= 10 and c_crop.shape[1] >= 10:
+                candidates_to_extract.append((track, c_crop))
+                crops_list.append(c_crop)
 
-                # 4. Check for Lock Switch condition (Issue 1)
-                # Case A: Current track is rejected (sim < match_thresh) AND a valid candidate exists (best_other_sim >= match_thresh)
-                # Case B: Candidate similarity significantly beats current track by hysteresis margin (best_other_sim >= current_sim + switch_margin)
+        if not crops_list:
+            if target.state in (TargetState.TRACKING, TargetState.LOCKED):
+                self.target_manager.mark_lost(timestamp_ms)
+            return
+
+        try:
+            embs = self.reid_extractor.extract_batch(crops_list)
+            matches = self.gallery.match_batch(embs)
+        except Exception as e:
+            logger.debug(f"[REID] Candidate batch extraction error: {e}")
+            return
+
+        self._last_candidate_scores.clear()
+        best_other_track: Optional[Track] = None
+        best_other_crop: Optional[np.ndarray] = None
+        best_other_emb: Optional[Embedding] = None
+        best_other_sim = 0.0
+
+        current_sim = 0.0
+        current_crop: Optional[np.ndarray] = None
+        current_emb: Optional[Embedding] = None
+
+        for (cand_track, cand_crop), cand_emb, (cand_sim, _) in zip(candidates_to_extract, embs, matches):
+            cand_sim_f = float(cand_sim)
+            self._last_candidate_scores[cand_track.track_id] = cand_sim_f
+
+            if current_track is not None and cand_track.track_id == current_track.track_id:
+                current_sim = cand_sim_f
+                current_crop = cand_crop
+                current_emb = cand_emb
+            else:
+                if cand_sim_f > best_other_sim:
+                    best_other_sim = cand_sim_f
+                    best_other_track = cand_track
+                    best_other_crop = cand_crop
+                    best_other_emb = cand_emb
+
+        # Diagnostic telemetry
+        score_details = [f"Track #{tid}: {sim:.3f}" for tid, sim in sorted(self._last_candidate_scores.items())]
+        cur_id_str = f"Track #{target.track_id} (sim={current_sim:.3f})" if (current_track and target.track_id) else "None (LOST)"
+        logger.info(
+            f"[REID DIAGNOSTICS] Cam='{self._active_camera_id}' | Locked={cur_id_str} | "
+            f"Candidates=[{', '.join(score_details)}]"
+        )
+
+        # Scenario 1: Target was actively tracking or locked
+        if target.state in (TargetState.TRACKING, TargetState.LOCKED):
+            if current_track is not None:
                 should_switch = False
                 reason = ""
-                if best_other_track is not None and best_other_sim >= match_thresh:
+                if best_other_track is not None and best_other_sim >= min_candidate_sim:
                     if current_sim < match_thresh:
                         should_switch = True
-                        reason = f"current track sim {current_sim:.3f} < threshold {match_thresh:.3f} and candidate matches with {best_other_sim:.3f}"
+                        reason = f"current track sim ({current_sim:.3f}) < match threshold ({match_thresh:.3f}) and candidate matches with {best_other_sim:.3f}"
                     elif best_other_sim >= (current_sim + switch_margin):
                         should_switch = True
-                        reason = f"candidate sim {best_other_sim:.3f} exceeds current {current_sim:.3f} by +{best_other_sim - current_sim:.3f} (margin={switch_margin:.2f})"
+                        reason = f"candidate sim ({best_other_sim:.3f}) exceeds current ({current_sim:.3f}) by +{best_other_sim - current_sim:.3f} (margin={switch_margin:.2f})"
 
                 if should_switch and best_other_track is not None:
                     logger.info(
@@ -647,7 +696,6 @@ class MultiCameraPipeline:
                         timestamp_ms=timestamp_ms,
                         reid_verified=True,
                     )
-                    # Accumulate switched target view
                     if best_other_crop is not None and best_other_emb is not None and best_other_sim >= self.config.reid.auto_add_threshold:
                         self.gallery.add_auto(
                             crop=best_other_crop,
@@ -660,8 +708,7 @@ class MultiCameraPipeline:
                         )
                     return
 
-                # If no switch, but current track has failed ReID match threshold -> mark LOST
-                if current_sim < match_thresh and current_crop is not None and current_crop.size > 0:
+                if current_sim < match_thresh:
                     logger.info(
                         f"[TARGET LOST] Track #{current_track.track_id} failed ReID verification "
                         f"(sim={current_sim:.3f} < {match_thresh:.3f}). Marking LOST."
@@ -669,7 +716,7 @@ class MultiCameraPipeline:
                     self.target_manager.mark_lost(timestamp_ms)
                     return
 
-                # Current track confirmed
+                # Verified: current track matches gallery
                 self.target_manager.mark_tracking(current_track, track_res.frame_id, timestamp_ms)
                 if current_crop is not None and current_emb is not None and current_sim >= self.config.reid.auto_add_threshold:
                     self.gallery.add_auto(
@@ -682,37 +729,57 @@ class MultiCameraPipeline:
                         track_id=current_track.track_id,
                     )
             else:
-                self.target_manager.mark_tracking(current_track, track_res.frame_id, timestamp_ms)
-        else:
-            # Target not found by motion tracker! Match all candidates in frame
-            if not self.gallery.is_empty and track_res.count > 0:
-                best_tr, best_cr, best_em, best_score = self._match_candidates_against_gallery(
-                    worker, frame, track_res
-                )
-                if best_tr is not None and best_score >= match_thresh:
-                    logger.info(
-                        f"[TARGET REACQUIRED] Target reacquired on Track #{best_tr.track_id} (sim={best_score:.3f})"
-                    )
+                # Target was tracking, but current track is missing from frame: check if reacquired on candidate
+                if best_other_track is not None and best_other_sim >= min_candidate_sim:
                     self.target_manager.reassociate_target(
-                        track=best_tr,
+                        track=best_other_track,
                         frame_id=track_res.frame_id,
                         timestamp_ms=timestamp_ms,
                         reid_verified=True,
                     )
-                    if best_cr is not None and best_em is not None and best_score >= self.config.reid.auto_add_threshold:
-                        self.gallery.add_auto(
-                            crop=best_cr,
-                            embedding=best_em,
-                            candidate_similarity=best_score,
-                            camera_id=self._active_camera_id or "camera_0",
-                            timestamp_ms=timestamp_ms,
-                            frame_id=track_res.frame_id,
-                            track_id=best_tr.track_id,
-                        )
                 else:
                     self.target_manager.mark_lost(timestamp_ms)
-            else:
-                self.target_manager.mark_lost(timestamp_ms)
+
+        # Scenario 2: Target was LOST or UNCERTAIN - reacquire ONLY if a candidate passes threshold
+        else:
+            best_candidate: Optional[Track] = None
+            best_cand_sim = 0.0
+            best_cand_crop: Optional[np.ndarray] = None
+            best_cand_emb: Optional[Embedding] = None
+
+            if current_track is not None and current_sim >= min_candidate_sim:
+                best_candidate = current_track
+                best_cand_sim = current_sim
+                best_cand_crop = current_crop
+                best_cand_emb = current_emb
+
+            if best_other_track is not None and best_other_sim > best_cand_sim and best_other_sim >= min_candidate_sim:
+                best_candidate = best_other_track
+                best_cand_sim = best_other_sim
+                best_cand_crop = best_other_crop
+                best_cand_emb = best_other_emb
+
+            if best_candidate is not None:
+                logger.info(
+                    f"[TARGET REACQUIRED ON ACTIVE CAM] Reacquired target on '{self._active_camera_id}' "
+                    f"as Track #{best_candidate.track_id} (sim={best_cand_sim:.3f})"
+                )
+                self.target_manager.reassociate_target(
+                    track=best_candidate,
+                    frame_id=track_res.frame_id,
+                    timestamp_ms=timestamp_ms,
+                    reid_verified=True,
+                )
+                if best_cand_crop is not None and best_cand_emb is not None and best_cand_sim >= self.config.reid.auto_add_threshold:
+                    self.gallery.add_auto(
+                        crop=best_cand_crop,
+                        embedding=best_cand_emb,
+                        candidate_similarity=best_cand_sim,
+                        camera_id=self._active_camera_id or "camera_0",
+                        timestamp_ms=timestamp_ms,
+                        frame_id=track_res.frame_id,
+                        track_id=best_candidate.track_id,
+                    )
 
     def _match_candidates_against_gallery(
         self,
@@ -931,6 +998,35 @@ class MultiCameraPipeline:
                 yield results
         finally:
             self.stop()
+
+    def update_graph(self, new_graph: CameraGraph) -> None:
+        """
+        Dynamically updates the camera topology graph at runtime (Issue 2).
+        Synchronizes camera nodes, spawns workers for newly added cameras,
+        and cleanly releases workers for removed cameras.
+        """
+        logger.info(f"[MULTI-CAM] Dynamically updating camera topology graph ({len(new_graph.all_camera_ids())} cameras)...")
+        self.graph = new_graph
+        self.search_manager.graph = new_graph
+
+        # Stop and remove workers for cameras no longer in graph
+        all_new_ids = set(new_graph.all_camera_ids())
+        for old_id in list(self._workers.keys()):
+            if old_id not in all_new_ids:
+                logger.info(f"[MULTI-CAM] Releasing removed camera worker '{old_id}'")
+                self._workers[old_id].stop()
+                del self._workers[old_id]
+
+        # Sync nodes and initialize workers for new cameras
+        self._sync_nodes_with_graph()
+        for cid in all_new_ids:
+            node = new_graph.get_node(cid)
+            if node and node.enabled:
+                self._get_or_create_worker(cid)
+
+        if self._active_camera_id not in all_new_ids and all_new_ids:
+            self._active_camera_id = sorted(list(all_new_ids))[0]
+            logger.info(f"[MULTI-CAM] Active camera reassigned to '{self._active_camera_id}'")
 
     def stop(self) -> None:
         """Stop all camera workers and release resources."""

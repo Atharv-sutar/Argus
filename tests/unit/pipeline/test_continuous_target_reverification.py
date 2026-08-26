@@ -51,6 +51,9 @@ def test_lock_switches_when_bystander_hijacks_track_and_real_target_is_present()
                 return Embedding(vector=target_vec)
             return Embedding(vector=bystander_vec)
 
+        def extract_batch(self, crops):
+            return [self.extract(c) for c in crops]
+
     mock_reid = DynamicMockReID()
 
     pipe = MultiCameraPipeline(

@@ -138,20 +138,23 @@ class PyTorchReIDExtractor(BaseReID):
         return np.zeros(self.feature_dim, dtype=np.float32)
 
     def extract(self, crop: np.ndarray) -> Embedding:
-        """Extracts primary full-body embedding."""
-        fused, _, _, _, _ = self.extract_decomposed(crop)
-        return fused
+        """Extracts primary full-body embedding with high-speed single forward pass."""
+        if crop is None or crop.size == 0:
+            return Embedding(
+                vector=np.zeros(self.feature_dim, dtype=np.float32),
+                model_name=self.model_name,
+                version="2.0",
+                crop_type="full",
+            )
+        embs = self.extract_batch([crop])
+        return embs[0]
 
     def extract_decomposed(
         self, crop: np.ndarray
     ) -> Tuple[Embedding, Embedding, Embedding, Embedding, Embedding]:
         """
-        Extracts multi-crop representations:
-        1. fused: Combined multi-scale representation
-        2. deep: Full-body embedding
-        3. global_view: Full crop embedding with metadata
-        4. upper: Upper-torso crop embedding (head to waist)
-        5. lower: Lower-body crop embedding (waist to feet)
+        Extracts multi-crop representations (Full Body, Upper Torso, Lower Body, Fused).
+        Used when deep decomposed viewpoint representation is requested.
         """
         if crop is None or crop.size == 0:
             zero_vec = np.zeros(self.feature_dim, dtype=np.float32)
@@ -187,7 +190,7 @@ class PyTorchReIDExtractor(BaseReID):
             crop_type="lower",
         )
 
-        # 4. Fused Multi-Scale Representation
+        # Fused Multi-Scale Representation
         if upper_vec.shape == deep_vec.shape and lower_vec.shape == deep_vec.shape:
             fused_vec = 0.60 * deep_vec + 0.25 * upper_vec + 0.15 * lower_vec
             fn = float(np.linalg.norm(fused_vec))
@@ -205,20 +208,31 @@ class PyTorchReIDExtractor(BaseReID):
         return fused_emb, deep_emb, deep_emb, upper_emb, lower_emb
 
     def extract_batch(self, crops: List[np.ndarray]) -> List[Embedding]:
+        """
+        Fast GPU batched feature extraction for multiple candidate crops in a single tensor forward pass.
+        """
         if not crops:
             return []
 
-        if self._model is not None and len(crops) > 1:
+        zero_emb = lambda: Embedding(
+            vector=np.zeros(self.feature_dim, dtype=np.float32),
+            model_name=self.model_name,
+            version="2.0",
+            crop_type="full",
+        )
+
+        if self._model is not None:
             try:
                 import torch
 
                 valid_preps = []
                 indices = []
                 for i, crop in enumerate(crops):
-                    p = self._preprocess(crop)
-                    if p is not None:
-                        valid_preps.append(p)
-                        indices.append(i)
+                    if crop is not None and crop.size > 0:
+                        p = self._preprocess(crop)
+                        if p is not None:
+                            valid_preps.append(p)
+                            indices.append(i)
 
                 if valid_preps:
                     batch_tensor = torch.from_numpy(np.stack(valid_preps)).to(self._device)
@@ -228,7 +242,7 @@ class PyTorchReIDExtractor(BaseReID):
                     if len(feats.shape) > 2:
                         feats = feats.reshape(feats.shape[0], -1)
 
-                    embeddings: List[Optional[Embedding]] = [None] * len(crops)
+                    embeddings: List[Embedding] = [zero_emb() for _ in range(len(crops))]
                     for idx, orig_i in enumerate(indices):
                         feat = feats[idx]
                         norm = float(np.linalg.norm(feat))
@@ -240,11 +254,8 @@ class PyTorchReIDExtractor(BaseReID):
                             crop_type="full",
                         )
 
-                    return [
-                        emb if emb is not None else self.extract(crops[i])
-                        for i, emb in enumerate(embeddings)
-                    ]
+                    return embeddings
             except Exception as e:
                 logger.error(f"Error in batch ReID extraction: {e}")
 
-        return [self.extract(c) for c in crops]
+        return [zero_emb() for _ in crops]

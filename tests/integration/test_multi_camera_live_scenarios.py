@@ -96,6 +96,7 @@ def _build_test_setup():
     pipe = MultiCameraPipeline(
         graph=graph,
         config=config,
+        reid_extractor=mock_reid,
         identity_manager=identity_mgr,
         camera_factory=camera_factory,
         tracker_factory=tracker_factory,

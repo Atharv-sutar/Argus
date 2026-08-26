@@ -1212,6 +1212,23 @@ body.theme-dark {
   color: var(--text-muted);
 }
 
+.crop-delete-btn {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: all 0.15s ease;
+}
+
+.crop-delete-btn:hover {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.15);
+}
+
 .crop-time-text {
   font-family: var(--font-mono);
   font-size: 9.5px;

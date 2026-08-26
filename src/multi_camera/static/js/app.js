@@ -123,6 +123,8 @@ class SurveillanceApp {
     if (!confirm('Are you sure you want to cleanly shut down Argus Surveillance? All camera connections and models will be released.')) {
       return;
     }
+    if (this.statusPollTimer) clearInterval(this.statusPollTimer);
+    if (this.galleryPollTimer) clearInterval(this.galleryPollTimer);
     try {
       this.showToast('Shutting down surveillance pipeline and releasing camera resources...', 'info');
       await API.quit();
@@ -376,7 +378,15 @@ class SurveillanceApp {
       this.cardTargetState.textContent = this.targetState;
       this.cardTargetState.className = `state-tag state-${this.targetState.toLowerCase()}`;
       this.cardTargetCam.textContent = st.active_camera || 'None';
-      this.cardTargetSamples.textContent = `${st.gallery_manual || 0} manual / ${st.gallery_auto || 0} auto`;
+
+      const scores = st.candidate_scores || {};
+      const scoreKeys = Object.keys(scores);
+      if (scoreKeys.length > 0) {
+        const scoreStr = scoreKeys.map(k => `#${k}: ${(scores[k]).toFixed(2)}`).join(' | ');
+        this.cardTargetSamples.innerHTML = `<span style="color:#00f2fe;font-weight:600;">Sim: ${scoreStr}</span> (${st.gallery_manual || 0}m/${st.gallery_auto || 0}a)`;
+      } else {
+        this.cardTargetSamples.textContent = `${st.gallery_manual || 0} manual / ${st.gallery_auto || 0} auto`;
+      }
 
       // Update Bottom Radius Stepper
       this.updateRadiusStepper(rad, searchSt);
@@ -478,6 +488,7 @@ class SurveillanceApp {
               <div class="crop-meta-top">
                 <span class="crop-type-badge ${tagClass}">${tagLabel}</span>
                 <span class="crop-quality-text">Q: ${qualityPct}%</span>
+                <button class="crop-delete-btn" data-entry="${thumb.entry_id}" title="Remove this angle">&times;</button>
               </div>
               <div class="crop-cam-text">${thumb.camera_id || 'cam_0'}</div>
               <div class="crop-time-text">${thumb.timestamp_ms ? `${(thumb.timestamp_ms / 1000).toFixed(1)}s` : 'Captured'}</div>
@@ -485,6 +496,22 @@ class SurveillanceApp {
           </div>
         `;
       }).join('');
+
+      // Wire up crop delete buttons (Hypothesis A fix)
+      this.galleryCardsList.querySelectorAll('.crop-delete-btn').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const entryId = btn.dataset.entry;
+          try {
+            await API.deleteGalleryEntry(entryId);
+            this.showToast('Removed angle crop from gallery', 'info');
+            this.refreshGallery();
+            this.refreshStatus();
+          } catch (err) {
+            this.showToast(`Failed to delete crop: ${err.message}`, 'error');
+          }
+        });
+      });
     } catch (e) {
       console.debug('Gallery poll error', e);
     }

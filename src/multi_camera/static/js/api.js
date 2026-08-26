@@ -96,6 +96,15 @@ const API = {
     return await res.json();
   },
 
+  async deleteGalleryEntry(entryId) {
+    const res = await fetch(`${this.baseUrl}/api/target/gallery/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entry_id: entryId }),
+    });
+    return await res.json();
+  },
+
   async quit() {
     const res = await fetch(`${this.baseUrl}/api/system/quit`, {
       method: 'POST',

@@ -81,8 +81,9 @@ class CameraWorker:
         frame: np.ndarray,
         track_result: TrackResult,
         target: Optional[Target] = None,
+        candidate_similarities: Optional[Dict[int, float]] = None,
     ) -> np.ndarray:
-        """Draws bounding boxes, IDs, and target overlays on the frame."""
+        """Draws bounding boxes, IDs, target overlays, and real-time similarity metrics on the frame."""
         if target is not None:
             self.current_target = target
         else:
@@ -93,6 +94,7 @@ class CameraWorker:
             target=target,
             fps=self._fps,
             camera_id=self.camera_id,
+            candidate_similarities=candidate_similarities,
         )
 
     def extract_crop(self, frame: np.ndarray, box: BoundingBox) -> Optional[np.ndarray]:

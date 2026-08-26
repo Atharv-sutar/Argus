@@ -447,8 +447,10 @@ def run_multi_camera_app(
     logger.info(f"Starting Argus Multi-Camera Surveillance. State: MONITORING")
 
     try:
-        while True:
+        while pipeline.is_running:
             if not show_window:
+                if not pipeline.is_running:
+                    break
                 pipeline.step()
                 time.sleep(0.01)
                 continue

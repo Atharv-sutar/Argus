@@ -237,6 +237,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     "transit_history": getattr(self.runtime_pipeline, "transit_history", []),
                     "search_progress": progress.to_dict(),
                     "camera_statuses": statuses,
+                    "candidate_scores": getattr(self.runtime_pipeline, "last_candidate_scores", {}),
                     "gallery_size": gallery.size,
                     "gallery_max": gallery.max_size,
                     "gallery_manual": gallery.manual_count,
@@ -250,6 +251,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     "transit_history": [],
                     "search_progress": None,
                     "camera_statuses": {},
+                    "candidate_scores": {},
                     "gallery_size": 0,
                     "gallery_max": 25,
                     "gallery_manual": 0,
@@ -334,7 +336,12 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     return
 
                 graph.save(self.graph_file)
-                self._send_json({"success": True, "message": "Graph saved successfully"})
+
+                # Dynamically sync running pipeline with updated topology graph (Issue 2)
+                if self.runtime_pipeline is not None:
+                    self.runtime_pipeline.update_graph(graph)
+
+                self._send_json({"success": True, "message": "Graph saved and live pipeline updated successfully"})
             except Exception as e:
                 self._send_json({"success": False, "error": str(e)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
@@ -392,6 +399,23 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": False, "error": "Runtime pipeline not active"}, status=HTTPStatus.BAD_REQUEST)
             return
 
+        elif path == "/api/target/gallery/delete":
+            if self.runtime_pipeline is not None:
+                entry_id = payload.get("entry_id")
+                if entry_id:
+                    ok = self.runtime_pipeline.gallery.remove_entry(entry_id)
+                    self._send_json({
+                        "success": ok,
+                        "size": self.runtime_pipeline.gallery.size,
+                        "manual_count": self.runtime_pipeline.gallery.manual_count,
+                        "auto_count": self.runtime_pipeline.gallery.auto_count,
+                    })
+                else:
+                    self._send_json({"success": False, "error": "Missing entry_id"}, status=HTTPStatus.BAD_REQUEST)
+            else:
+                self._send_json({"success": False, "error": "Runtime pipeline not active"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
         elif path == "/api/system/quit":
             logger.info("[SERVER] Safe shutdown requested via /api/system/quit endpoint.")
             if self.runtime_pipeline is not None:
@@ -404,7 +428,12 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
 
             def _delayed_shutdown():
                 time.sleep(0.4)
-                self.server.shutdown()
+                try:
+                    self.server.shutdown()
+                except Exception:
+                    pass
+                logger.info("[SERVER] Process exiting cleanly.")
+                os._exit(0)
 
             threading.Thread(target=_delayed_shutdown, daemon=True).start()
             return
