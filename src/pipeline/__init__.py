@@ -1,5 +1,6 @@
 """Pipeline orchestration subsystem."""
 
-from src.pipeline.single_camera import SingleCameraPipeline
+from src.pipeline.multi_camera_pipeline import MultiCameraPipeline
+from src.pipeline.camera_worker import CameraWorker
 
-__all__ = ["SingleCameraPipeline"]
+__all__ = ["MultiCameraPipeline", "CameraWorker"]

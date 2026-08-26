@@ -1,5 +1,5 @@
 /**
- * Argus Mapping REST API Client
+ * Argus Surveillance REST API & Stream Client
  */
 const API = {
   baseUrl: '',
@@ -36,10 +36,72 @@ const API = {
     return await res.json();
   },
 
+  async getLiveCameras() {
+    const res = await fetch(`${this.baseUrl}/api/cameras/live`);
+    if (!res.ok) return { cameras: [], active_camera: null };
+    return await res.json();
+  },
+
+  async setActiveCamera(cameraId) {
+    const res = await fetch(`${this.baseUrl}/api/camera/select_active`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ camera_id: cameraId }),
+    });
+    return await res.json();
+  },
+
+  async selectTarget(cameraId, x = null, y = null, trackId = null) {
+    const payload = { camera_id: cameraId };
+    if (x !== null && y !== null) {
+      payload.x = x;
+      payload.y = y;
+    }
+    if (trackId !== null) {
+      payload.track_id = trackId;
+    }
+    const res = await fetch(`${this.baseUrl}/api/target/select`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return await res.json();
+  },
+
   async getStatus() {
     const res = await fetch(`${this.baseUrl}/api/status`);
     if (!res.ok) return null;
     return await res.json();
+  },
+
+  async getGallery() {
+    const res = await fetch(`${this.baseUrl}/api/target/gallery`);
+    if (!res.ok) return null;
+    return await res.json();
+  },
+
+  async addSample(cameraId = null) {
+    const res = await fetch(`${this.baseUrl}/api/target/add_sample`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ camera_id: cameraId }),
+    });
+    return await res.json();
+  },
+
+  async clearTarget() {
+    const res = await fetch(`${this.baseUrl}/api/target/clear`, {
+      method: 'POST',
+    });
+    return await res.json();
+  },
+
+  getCameraStreamUrl(cameraId) {
+    return `${this.baseUrl}/api/camera/${encodeURIComponent(cameraId)}/stream`;
+  },
+
+  getCameraFrameUrl(cameraId) {
+    return `${this.baseUrl}/api/camera/${encodeURIComponent(cameraId)}/frame.jpg?t=${Date.now()}`;
   },
 
   getPreviewUrl(source, sourceType) {

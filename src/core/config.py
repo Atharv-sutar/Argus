@@ -43,27 +43,33 @@ class TrackingConfig:
 @dataclass
 class ReIDConfig:
     model_name: str = "osnet_x0_25"
-    similarity_threshold: float = 0.88
-    reacquisition_threshold: float = 0.90
-    reference_threshold: float = 0.85
-    upper_threshold: float = 0.82
+    match_threshold: float = 0.85
+    auto_add_threshold: float = 0.90
+    auto_add_min_consecutive: int = 3
+    diversity_threshold: float = 0.96
+    max_gallery_size: int = 25
     min_margin: float = 0.05
-    w_upper: float = 0.40
-    w_color: float = 0.15
-    w_deep: float = 0.35
-    w_lower: float = 0.10
     extract_interval_frames: int = 5
-
-    gallery_size: int = 6
-    reference_samples: int = 4
-    reference_window_frames: int = 30
-    adaptive_gallery_size: int = 6
     min_crop_width: int = 24
     min_crop_height: int = 60
     min_sharpness: float = 25.0
-    redundancy_threshold: float = 0.90
-    temporal_window_size: int = 5
-    reacquisition_min_frames: int = 5
+
+    # Backward-compatible property aliases
+    @property
+    def similarity_threshold(self) -> float:
+        return self.match_threshold
+
+    @similarity_threshold.setter
+    def similarity_threshold(self, val: float) -> None:
+        self.match_threshold = val
+
+    @property
+    def gallery_size(self) -> int:
+        return self.max_gallery_size
+
+    @gallery_size.setter
+    def gallery_size(self, val: int) -> None:
+        self.max_gallery_size = val
 
 
 

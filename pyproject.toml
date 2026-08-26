@@ -28,9 +28,22 @@ dev = [
     "pytest-cov>=4.1.0",
 ]
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.pyright]
+include = ["src", "tests", "scripts", "scratch"]
+extraPaths = ["."]
+executionEnvironments = [
+    { root = ".", extraPaths = ["."] }
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+
+

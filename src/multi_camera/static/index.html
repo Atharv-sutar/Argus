@@ -3,295 +3,253 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Argus // Topology & Camera Mapping</title>
+  <title>Argus // AI Multi-Camera Surveillance Operations Center</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css">
 </head>
-<body>
+<body class="theme-dark">
   <div id="app" class="app-container">
-    <!-- Top Navigation Header -->
+    <!-- Top Surveillance Command Header -->
     <header class="app-header">
       <div class="brand">
         <div class="logo-icon">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
             <circle cx="12" cy="12" r="9"></circle>
             <circle cx="12" cy="12" r="3"></circle>
             <path d="M12 3v3M12 18v3M3 12h3M18 12h3"></path>
           </svg>
         </div>
         <div class="brand-text">
-          <span class="brand-name">ARGUS</span>
-          <span class="brand-badge">TOPOLOGY MAPPER</span>
+          <div class="brand-name">ARGUS <span class="brand-accent">SURVEILLANCE</span></div>
+          <div class="brand-sub">MULTI-CAMERA AI & PERSON RE-ID</div>
         </div>
       </div>
 
-      <div class="mode-toggle">
-        <button id="btn-mode-edit" class="mode-btn active" data-mode="edit">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-          </svg>
-          Topology Editor
-        </button>
-        <button id="btn-mode-live" class="mode-btn" data-mode="live">
-          <span class="pulse-indicator"></span>
-          Live Monitor
-        </button>
+      <!-- Center Operations HUD Badges -->
+      <div class="header-hud">
+        <div class="hud-chip">
+          <span class="chip-label">ACTIVE CAM</span>
+          <span id="header-active-cam" class="chip-val chip-cyan">None</span>
+        </div>
+        <div class="hud-chip">
+          <span class="chip-label">TARGET STATUS</span>
+          <span id="header-target-state" class="chip-val chip-badge state-unselected">UNSELECTED</span>
+        </div>
+        <div class="hud-chip">
+          <span class="chip-label">SEARCH RADIUS</span>
+          <span id="header-search-radius" class="chip-val chip-amber">R = 0 (IDLE)</span>
+        </div>
+        <div class="hud-chip">
+          <span class="chip-label">GALLERY</span>
+          <span id="header-gallery-stats" class="chip-val chip-emerald">0 / 25</span>
+        </div>
       </div>
 
+      <!-- Mode Switch & Controls -->
       <div class="header-actions">
-        <button id="btn-validate" class="btn btn-secondary" title="Validate graph topology">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
-            <polyline points="22 4 12 14.01 9 11.01"></polyline>
-          </svg>
-          Validate
+        <div class="view-switch">
+          <button id="btn-mode-matrix" class="mode-btn active" data-mode="matrix" title="Multi-Camera Live Video Matrix">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="7" height="7"></rect>
+              <rect x="14" y="3" width="7" height="7"></rect>
+              <rect x="14" y="14" width="7" height="7"></rect>
+              <rect x="3" y="14" width="7" height="7"></rect>
+            </svg>
+            Live Matrix
+          </button>
+          <button id="btn-mode-topology" class="mode-btn" data-mode="topology" title="Camera Graph Topology Editor">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="6" cy="6" r="3"></circle>
+              <circle cx="18" cy="6" r="3"></circle>
+              <circle cx="18" cy="18" r="3"></circle>
+              <circle cx="6" cy="18" r="3"></circle>
+              <line x1="9" y1="6" x2="15" y2="6"></line>
+              <line x1="6" y1="9" x2="6" y2="15"></line>
+              <line x1="9" y1="18" x2="15" y2="18"></line>
+              <line x1="18" y1="9" x2="18" y2="15"></line>
+            </svg>
+            Topology Map
+          </button>
+        </div>
+
+        <button id="btn-add-sample-global" class="btn btn-primary btn-sm" title="Capture current angle to target gallery">
+          + Add Angle
         </button>
-        <button id="btn-save" class="btn btn-primary" title="Save graph to file">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
-            <polyline points="17 21 17 13 7 13 7 21"></polyline>
-            <polyline points="7 3 7 8 15 8"></polyline>
-          </svg>
-          Save Graph
+        <button id="btn-clear-target-global" class="btn btn-danger btn-sm" title="Clear active target and reset search">
+          Clear Target
         </button>
       </div>
     </header>
 
-    <!-- Main 3-Panel Layout -->
+    <!-- Main Content Workspace (Split: Center Matrix / Right Gallery) -->
     <div class="workspace">
-      <!-- Left Panel: Camera Discovery & Library -->
-      <aside class="panel left-panel">
-        <div class="panel-header">
-          <h3>Camera Discovery</h3>
-          <button id="btn-discover" class="btn-icon" title="Probe for cameras">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
-            </svg>
-          </button>
-        </div>
-
-        <div class="panel-body">
-          <div class="section-title">Discovered Sources</div>
-          <div id="discovered-list" class="camera-list">
-            <div class="empty-state">Click refresh to probe available webcams</div>
-          </div>
-
-          <div class="section-title">Custom Camera Source</div>
-          <form id="form-custom-camera" class="custom-cam-form">
-            <div class="form-group">
-              <label for="custom-cam-id">Camera ID</label>
-              <input type="text" id="custom-cam-id" placeholder="cam_lobby" required>
-            </div>
-            <div class="form-group">
-              <label for="custom-cam-name">Display Name</label>
-              <input type="text" id="custom-cam-name" placeholder="Lobby Entrance" required>
-            </div>
-            <div class="form-group">
-              <label for="custom-cam-type">Source Type</label>
-              <select id="custom-cam-type">
-                <option value="webcam">Webcam Index</option>
-                <option value="rtsp">RTSP Stream</option>
-                <option value="video_file">Video File</option>
-                <option value="synthetic">Synthetic Generator</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label for="custom-cam-source">Source Path / URL / Index</label>
-              <input type="text" id="custom-cam-source" placeholder="0 or rtsp://..." required>
-            </div>
-            <button type="submit" class="btn btn-secondary btn-block">
-              + Add to Canvas
-            </button>
-          </form>
-
-          <!-- Camera Live Preview Thumbnail -->
-          <div class="section-title">Source Preview</div>
-          <div class="preview-card">
-            <div id="preview-container" class="preview-container">
-              <div class="preview-placeholder">Select a camera to preview snapshot</div>
-              <img id="preview-image" src="" alt="Camera Preview" style="display:none;">
-            </div>
-            <div id="preview-info" class="preview-info">No source selected</div>
-          </div>
-        </div>
-      </aside>
-
-      <!-- Center Panel: Interactive Map Canvas -->
+      
+      <!-- Center Main Stage -->
       <main class="panel center-panel">
-        <div class="canvas-toolbar">
-          <div class="tool-group">
-            <button id="tool-select" class="tool-btn active" title="Select / Move Nodes">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M3 3l7 18 3-7 7-3L3 3z"></path>
-              </svg>
-            </button>
-            <button id="tool-connect" class="tool-btn" title="Connect Cameras (Drag between nodes)">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="6" cy="6" r="3"></circle>
-                <circle cx="18" cy="18" r="3"></circle>
-                <line x1="8.59" y1="8.59" x2="15.42" y2="15.42"></line>
-              </svg>
-            </button>
+
+        <!-- VIEW A: Multi-Camera Live Surveillance Video Matrix (Default) -->
+        <section id="view-matrix" class="view-stage active">
+          <div class="matrix-toolbar">
+            <div class="matrix-title-group">
+              <span class="live-pulse"></span>
+              <span class="matrix-heading">MULTI-CAMERA LIVE FEEDS</span>
+              <span id="matrix-cam-count" class="badge-pill">0 Cameras Online</span>
+            </div>
+            <div class="matrix-grid-controls">
+              <span class="ctrl-label">Layout:</span>
+              <button class="grid-btn active" data-layout="auto">Auto</button>
+              <button class="grid-btn" data-layout="1x1">1x1</button>
+              <button class="grid-btn" data-layout="2x2">2x2</button>
+              <button class="grid-btn" data-layout="3x3">3x3</button>
+            </div>
           </div>
 
-          <div class="tool-group">
-            <button id="btn-zoom-in" class="tool-btn" title="Zoom In">+</button>
-            <button id="btn-zoom-out" class="tool-btn" title="Zoom Out">-</button>
-            <button id="btn-zoom-reset" class="tool-btn" title="Fit to Screen">Fit</button>
+          <!-- Video Grid Container -->
+          <div id="camera-matrix-grid" class="camera-matrix-grid layout-auto">
+            <!-- Dynamic Camera Tiles Injected by app.js -->
+            <div class="matrix-loading">
+              <div class="spinner"></div>
+              <span>Connecting to surveillance video feeds...</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- VIEW B: Camera Graph Topology Editor Canvas -->
+        <section id="view-topology" class="view-stage" style="display: none;">
+          <div class="canvas-toolbar">
+            <div class="tool-group">
+              <button id="tool-select" class="tool-btn active" title="Select / Move Nodes">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M3 3l7 18 3-7 7-3L3 3z"></path>
+                </svg>
+              </button>
+              <button id="tool-connect" class="tool-btn" title="Connect Cameras (Drag between nodes)">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="6" cy="6" r="3"></circle>
+                  <circle cx="18" cy="18" r="3"></circle>
+                  <line x1="8.59" y1="8.59" x2="15.42" y2="15.42"></line>
+                </svg>
+              </button>
+            </div>
+
+            <div class="tool-group">
+              <button id="btn-zoom-in" class="tool-btn" title="Zoom In">+</button>
+              <button id="btn-zoom-out" class="tool-btn" title="Zoom Out">-</button>
+              <button id="btn-zoom-reset" class="tool-btn" title="Fit to Screen">Fit</button>
+            </div>
+
+            <div class="canvas-legend">
+              <span class="legend-item"><span class="edge-sample edge-overlap"></span> Overlap</span>
+              <span class="legend-item"><span class="edge-sample edge-adjacent"></span> Adjacent</span>
+              <span class="legend-item"><span class="edge-sample edge-travel"></span> Travel</span>
+            </div>
+
+            <div class="canvas-actions">
+              <button id="btn-validate" class="btn btn-secondary btn-sm">Validate</button>
+              <button id="btn-save" class="btn btn-primary btn-sm">Save Topology</button>
+            </div>
           </div>
 
-          <div class="canvas-legend">
-            <span class="legend-item"><span class="edge-sample edge-overlap"></span> Overlap</span>
-            <span class="legend-item"><span class="edge-sample edge-adjacent"></span> Adjacent</span>
-            <span class="legend-item"><span class="edge-sample edge-travel"></span> Travel</span>
+          <div id="canvas-container" class="canvas-container">
+            <canvas id="graph-canvas"></canvas>
           </div>
-        </div>
+        </section>
 
-        <div id="canvas-container" class="canvas-container">
-          <canvas id="graph-canvas"></canvas>
-        </div>
+        <!-- Bottom Dynamic Search & Forensic Trail Bar -->
+        <footer class="live-search-dock">
+          <div class="search-dock-left">
+            <span class="dock-title">SEARCH RADII</span>
+            <div class="radius-stepper">
+              <div id="radius-step-0" class="step-pill step-active">Origin (Cam)</div>
+              <div class="step-arrow">&rarr;</div>
+              <div id="radius-step-1" class="step-pill">Radius 1 (Adjacent)</div>
+              <div class="step-arrow">&rarr;</div>
+              <div id="radius-step-2" class="step-pill">Radius 2 (Extended)</div>
+              <div class="step-arrow">&rarr;</div>
+              <div id="radius-step-3" class="step-pill">Radius 3 (Perimeter)</div>
+            </div>
+          </div>
 
-        <!-- Live Mode Search Progress & Forensic HUD -->
-        <div id="live-hud" class="live-hud" style="display:none;">
-          <div class="hud-item">
-            <span class="hud-label">Active Camera</span>
-            <span id="hud-active-cam" class="hud-val">None</span>
+          <div class="search-dock-right">
+            <span class="dock-title">FORENSIC TRANSIT TRAIL</span>
+            <div id="transit-trail-display" class="trail-chain">
+              <span class="trail-empty">No cross-camera movement recorded yet</span>
+            </div>
           </div>
-          <div class="hud-item">
-            <span class="hud-label">Target State</span>
-            <span id="hud-target-state" class="hud-val hud-state-badge">UNSELECTED</span>
-          </div>
-          <div class="hud-item">
-            <span class="hud-label">Search Status</span>
-            <span id="hud-search-state" class="hud-val">IDLE</span>
-          </div>
-          <div class="hud-item">
-            <span class="hud-label">Search Radius</span>
-            <span id="hud-search-radius" class="hud-val">0</span>
-          </div>
-          <div class="hud-item hud-trail-item">
-            <span class="hud-label">Forensic Trail</span>
-            <span id="hud-transit-trail" class="hud-val hud-trail-text">No transit</span>
-          </div>
-        </div>
+        </footer>
+
       </main>
 
-      <!-- Right Panel: Properties Inspector -->
-      <aside class="panel right-panel">
-        <div class="panel-header">
-          <h3>Properties Inspector</h3>
+      <!-- Right Panel: Vertical Target Gallery Column (Requirement #2) -->
+      <aside class="panel right-panel gallery-column-panel">
+        <div class="panel-header gallery-header">
+          <div class="gallery-title-box">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+              <circle cx="8.5" cy="8.5" r="1.5"></circle>
+              <polyline points="21 15 16 10 5 21"></polyline>
+            </svg>
+            <h3>TARGET GALLERY</h3>
+          </div>
+          <span id="gallery-count-badge" class="badge-pill">0 / 25</span>
         </div>
 
-        <div class="panel-body">
-          <!-- Empty selection state -->
-          <div id="inspector-empty" class="inspector-section">
-            <div class="empty-state">Click on a camera node or connection line to inspect and configure properties.</div>
+        <!-- Target Info Card -->
+        <div id="target-summary-card" class="target-summary-card">
+          <div class="target-summary-row">
+            <span class="summary-label">Target ID</span>
+            <span id="target-card-id" class="summary-val mono-font">UNSELECTED</span>
+          </div>
+          <div class="target-summary-row">
+            <span class="summary-label">Tracking State</span>
+            <span id="target-card-state" class="state-tag state-unselected">UNSELECTED</span>
+          </div>
+          <div class="target-summary-row">
+            <span class="summary-label">Current Camera</span>
+            <span id="target-card-cam" class="summary-val">None</span>
+          </div>
+          <div class="target-summary-row">
+            <span class="summary-label">Appearance Samples</span>
+            <span id="target-card-samples" class="summary-val">0 manual / 0 auto</span>
           </div>
 
-          <!-- Camera Node Inspector -->
-          <div id="inspector-node" class="inspector-section" style="display:none;">
-            <div class="section-title">Camera Node Properties</div>
-            <div class="form-group">
-              <label for="prop-node-id">Camera ID</label>
-              <input type="text" id="prop-node-id" readonly class="input-readonly">
-            </div>
-            <div class="form-group">
-              <label for="prop-node-name">Display Name</label>
-              <input type="text" id="prop-node-name">
-            </div>
-            <div class="form-group">
-              <label for="prop-node-source">Source</label>
-              <input type="text" id="prop-node-source">
-            </div>
-            <div class="form-group">
-              <label for="prop-node-type">Source Type</label>
-              <select id="prop-node-type">
-                <option value="webcam">webcam</option>
-                <option value="rtsp">rtsp</option>
-                <option value="video_file">video_file</option>
-                <option value="synthetic">synthetic</option>
-              </select>
-            </div>
-            <div class="form-row">
-              <div class="form-group">
-                <label for="prop-node-floor">Floor</label>
-                <input type="text" id="prop-node-floor" placeholder="Floor 1">
-              </div>
-              <div class="form-group">
-                <label for="prop-node-zone">Zone</label>
-                <input type="text" id="prop-node-zone" placeholder="Lobby">
-              </div>
-            </div>
-            <div class="form-group">
-              <label for="prop-node-desc">Description</label>
-              <textarea id="prop-node-desc" rows="2" placeholder="North entrance view..."></textarea>
-            </div>
-            <div class="form-checkbox">
-              <input type="checkbox" id="prop-node-enabled" checked>
-              <label for="prop-node-enabled">Camera Enabled</label>
-            </div>
-            <div class="inspector-actions">
-              <button id="btn-delete-node" class="btn btn-danger btn-block">Delete Camera</button>
-            </div>
+          <div class="target-card-actions">
+            <button id="btn-card-add-sample" class="btn btn-secondary btn-sm btn-block">
+              + Capture Current Angle
+            </button>
+            <button id="btn-card-clear" class="btn btn-outline-danger btn-sm btn-block">
+              Clear Focus Target
+            </button>
+          </div>
+        </div>
+
+        <!-- Vertically Scrollable Gallery Stream Column -->
+        <div class="gallery-scroll-container">
+          <div class="gallery-section-subhead">
+            <span>SAVED APPEARANCE CROPS</span>
+            <span class="subhead-hint">Scroll for all angles</span>
           </div>
 
-          <!-- Edge Connection Inspector -->
-          <div id="inspector-edge" class="inspector-section" style="display:none;">
-            <div class="section-title">Edge Connection Properties</div>
-            <div class="form-group">
-              <label>Connection</label>
-              <div id="prop-edge-endpoints" class="endpoint-display">A &rarr; B</div>
-            </div>
-            <div class="form-group">
-              <label for="prop-edge-type">Relationship Type</label>
-              <select id="prop-edge-type">
-                <option value="adjacent">Adjacent (Nearby, Non-Overlapping)</option>
-                <option value="overlap">Overlap (Shared Field of View)</option>
-                <option value="travel">Travel (Physical Corridor / Route)</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label for="prop-edge-direction">Directional Flow</label>
-              <select id="prop-edge-direction">
-                <option value="bidirectional">Bidirectional (&harr;)</option>
-                <option value="a_to_b">A &rarr; B Only</option>
-                <option value="b_to_a">B &rarr; A Only</option>
-              </select>
-            </div>
-            <div class="section-title" style="margin-top:16px;">Transition Timing (Optional)</div>
-            <div class="form-row">
-              <div class="form-group">
-                <label for="prop-edge-min-t">Min (s)</label>
-                <input type="number" id="prop-edge-min-t" min="0" step="0.5" placeholder="1.0">
-              </div>
-              <div class="form-group">
-                <label for="prop-edge-typ-t">Typical (s)</label>
-                <input type="number" id="prop-edge-typ-t" min="0" step="0.5" placeholder="3.0">
-              </div>
-              <div class="form-group">
-                <label for="prop-edge-max-t">Max (s)</label>
-                <input type="number" id="prop-edge-max-t" min="0" step="0.5" placeholder="8.0">
-              </div>
-            </div>
-            <div class="form-checkbox">
-              <input type="checkbox" id="prop-edge-enabled" checked>
-              <label for="prop-edge-enabled">Connection Active</label>
-            </div>
-            <div class="inspector-actions">
-              <button id="btn-delete-edge" class="btn btn-danger btn-block">Delete Connection</button>
+          <div id="gallery-cards-list" class="gallery-cards-list">
+            <!-- Empty state placeholder -->
+            <div class="gallery-empty-state">
+              <div class="empty-icon">&#128100;</div>
+              <div class="empty-text">No target locked</div>
+              <div class="empty-hint">Click on any tracked person in a live camera feed to lock focus and seed their appearance gallery.</div>
             </div>
           </div>
         </div>
       </aside>
+
     </div>
 
     <!-- Toast Notification Container -->
     <div id="toast-container" class="toast-container"></div>
   </div>
 
+  <!-- Scripts -->
   <script src="js/api.js"></script>
   <script src="js/camera.js"></script>
   <script src="js/graph.js"></script>

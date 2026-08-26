@@ -1,249 +1,439 @@
 /**
- * Argus Topology & Camera Mapping Application Orchestrator
+ * ARGUS Multi-Camera Surveillance Operations Center Orchestrator
  */
-class InspectorManager {
-  constructor(app) {
-    this.app = app;
-    this.emptySec = document.getElementById('inspector-empty');
-    this.nodeSec = document.getElementById('inspector-node');
-    this.edgeSec = document.getElementById('inspector-edge');
 
-    this.currentNode = null;
-    this.currentEdge = null;
-
-    this.initNodeInputs();
-    this.initEdgeInputs();
-  }
-
-  clear() {
-    this.emptySec.style.display = 'block';
-    this.nodeSec.style.display = 'none';
-    this.edgeSec.style.display = 'none';
-    this.currentNode = null;
-    this.currentEdge = null;
-  }
-
-  inspectNode(node) {
-    this.currentNode = node;
-    this.currentEdge = null;
-
-    this.emptySec.style.display = 'none';
-    this.nodeSec.style.display = 'block';
-    this.edgeSec.style.display = 'none';
-
-    document.getElementById('prop-node-id').value = node.camera_id;
-    document.getElementById('prop-node-name').value = node.name || '';
-    document.getElementById('prop-node-source').value = node.source !== undefined ? node.source : '';
-    document.getElementById('prop-node-type').value = node.source_type || 'webcam';
-    document.getElementById('prop-node-floor').value = node.floor || '';
-    document.getElementById('prop-node-zone').value = node.zone || '';
-    document.getElementById('prop-node-desc').value = node.description || '';
-    document.getElementById('prop-node-enabled').checked = node.enabled !== false;
-  }
-
-  initNodeInputs() {
-    const bind = (id, prop, isNum, isBool) => {
-      document.getElementById(id).addEventListener('input', (e) => {
-        if (!this.currentNode) return;
-        let val = e.target.value;
-        if (isBool) val = e.target.checked;
-        else if (isNum) val = isNaN(val) ? val : parseInt(val, 10);
-        this.currentNode[prop] = val;
-      });
-    };
-
-    bind('prop-node-name', 'name');
-    bind('prop-node-source', 'source', true);
-    bind('prop-node-type', 'source_type');
-    bind('prop-node-floor', 'floor');
-    bind('prop-node-zone', 'zone');
-    bind('prop-node-desc', 'description');
-    bind('prop-node-enabled', 'enabled', false, true);
-
-    document.getElementById('btn-delete-node').addEventListener('click', () => {
-      if (this.currentNode) {
-        const id = this.currentNode.camera_id;
-        this.app.graphCanvas.removeNode(id);
-        this.app.showToast(`Deleted camera '${id}'`, 'info');
-      }
-    });
-  }
-
-  inspectEdge(edge) {
-    this.currentEdge = edge;
-    this.currentNode = null;
-
-    this.emptySec.style.display = 'none';
-    this.nodeSec.style.display = 'none';
-    this.edgeSec.style.display = 'block';
-
-    const srcNode = this.app.graphCanvas.nodes.find(n => n.camera_id === edge.source_camera_id);
-    const tgtNode = this.app.graphCanvas.nodes.find(n => n.camera_id === edge.target_camera_id);
-
-    const srcName = srcNode ? srcNode.name : edge.source_camera_id;
-    const tgtName = tgtNode ? tgtNode.name : edge.target_camera_id;
-
-    document.getElementById('prop-edge-endpoints').textContent = `${srcName} \u2194 ${tgtName}`;
-    document.getElementById('prop-edge-type').value = edge.edge_type || 'adjacent';
-    document.getElementById('prop-edge-direction').value = edge.direction || 'bidirectional';
-    document.getElementById('prop-edge-min-t').value = edge.expected_min_transition_s || '';
-    document.getElementById('prop-edge-typ-t').value = edge.expected_typical_transition_s || '';
-    document.getElementById('prop-edge-max-t').value = edge.expected_max_transition_s || '';
-    document.getElementById('prop-edge-enabled').checked = edge.enabled !== false;
-  }
-
-  initEdgeInputs() {
-    const bind = (id, prop, isFloat, isBool) => {
-      document.getElementById(id).addEventListener('input', (e) => {
-        if (!this.currentEdge) return;
-        let val = e.target.value;
-        if (isBool) val = e.target.checked;
-        else if (isFloat) val = val === '' ? null : parseFloat(val);
-        this.currentEdge[prop] = val;
-      });
-    };
-
-    bind('prop-edge-type', 'edge_type');
-    bind('prop-edge-direction', 'direction');
-    bind('prop-edge-min-t', 'expected_min_transition_s', true);
-    bind('prop-edge-typ-t', 'expected_typical_transition_s', true);
-    bind('prop-edge-max-t', 'expected_max_transition_s', true);
-    bind('prop-edge-enabled', 'enabled', false, true);
-
-    document.getElementById('btn-delete-edge').addEventListener('click', () => {
-      if (this.currentEdge) {
-        this.app.graphCanvas.removeEdge(this.currentEdge.source_camera_id, this.currentEdge.target_camera_id);
-        this.app.showToast('Deleted connection', 'info');
-      }
-    });
-  }
-}
-
-class App {
+class SurveillanceApp {
   constructor() {
-    this.mode = 'edit'; // 'edit' | 'live'
-    this.statusPollInterval = null;
+    this.mode = 'matrix'; // 'matrix' | 'topology'
+    this.cameras = [];
+    this.activeCameraId = null;
+    this.targetState = 'UNSELECTED';
+    this.searchProgress = null;
+    this.statusPollTimer = null;
+    this.galleryPollTimer = null;
 
-    this.graphCanvas = new GraphCanvas(this, 'graph-canvas');
-    this.cameraManager = new CameraManager(this);
-    this.inspector = new InspectorManager(this);
+    // Topology Graph Canvas helper if needed
+    this.graphCanvas = null;
 
+    this.initElements();
     this.initEvents();
-    this.loadGraph();
+    this.loadLiveMatrix();
+    this.startPolling();
+  }
+
+  initElements() {
+    // Mode Views
+    this.viewMatrix = document.getElementById('view-matrix');
+    this.viewTopology = document.getElementById('view-topology');
+    this.matrixGrid = document.getElementById('camera-matrix-grid');
+    this.matrixCountBadge = document.getElementById('matrix-cam-count');
+
+    // Header Badges
+    this.hdrActiveCam = document.getElementById('header-active-cam');
+    this.hdrTargetState = document.getElementById('header-target-state');
+    this.hdrSearchRadius = document.getElementById('header-search-radius');
+    this.hdrGalleryStats = document.getElementById('header-gallery-stats');
+
+    // Target Summary Card Elements
+    this.cardTargetId = document.getElementById('target-card-id');
+    this.cardTargetState = document.getElementById('target-card-state');
+    this.cardTargetCam = document.getElementById('target-card-cam');
+    this.cardTargetSamples = document.getElementById('target-card-samples');
+    this.galleryCountBadge = document.getElementById('gallery-count-badge');
+    this.galleryCardsList = document.getElementById('gallery-cards-list');
+
+    // Forensic & Radius Dock
+    this.transitTrailEl = document.getElementById('transit-trail-display');
   }
 
   initEvents() {
-    // Mode Switching
-    document.getElementById('btn-mode-edit').addEventListener('click', () => this.setMode('edit'));
-    document.getElementById('btn-mode-live').addEventListener('click', () => this.setMode('live'));
+    // Mode Switch
+    document.getElementById('btn-mode-matrix').addEventListener('click', () => this.setMode('matrix'));
+    document.getElementById('btn-mode-topology').addEventListener('click', () => this.setMode('topology'));
 
-    // Save Graph
-    document.getElementById('btn-save').addEventListener('click', () => this.saveGraph());
+    // Grid Layout Buttons
+    document.querySelectorAll('.grid-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        document.querySelectorAll('.grid-btn').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        const layout = btn.dataset.layout;
+        this.matrixGrid.className = `camera-matrix-grid layout-${layout}`;
+      });
+    });
 
-    // Validate Graph
-    document.getElementById('btn-validate').addEventListener('click', () => this.validateGraph());
+    // Target Action Buttons (Header + Card)
+    const addSampleFn = async () => {
+      try {
+        const res = await API.addSample(this.activeCameraId);
+        if (res.success) {
+          this.showToast(`Target appearance angle captured! (${res.size} in gallery)`, 'success');
+          this.refreshGallery();
+        } else {
+          this.showToast('No active target locked to capture angle', 'error');
+        }
+      } catch (err) {
+        this.showToast(`Failed to capture angle: ${err.message}`, 'error');
+      }
+    };
+
+    const clearTargetFn = async () => {
+      try {
+        await API.clearTarget();
+        this.showToast('Focus target cleared and gallery purged', 'info');
+        this.refreshStatus();
+        this.refreshGallery();
+      } catch (err) {
+        this.showToast(`Failed to clear target: ${err.message}`, 'error');
+      }
+    };
+
+    document.getElementById('btn-add-sample-global').addEventListener('click', addSampleFn);
+    document.getElementById('btn-card-add-sample').addEventListener('click', addSampleFn);
+
+    document.getElementById('btn-clear-target-global').addEventListener('click', clearTargetFn);
+    document.getElementById('btn-card-clear').addEventListener('click', clearTargetFn);
   }
 
   setMode(mode) {
     this.mode = mode;
-    document.getElementById('btn-mode-edit').classList.toggle('active', mode === 'edit');
-    document.getElementById('btn-mode-live').classList.toggle('active', mode === 'live');
+    document.getElementById('btn-mode-matrix').classList.toggle('active', mode === 'matrix');
+    document.getElementById('btn-mode-topology').classList.toggle('active', mode === 'topology');
 
-    const liveHud = document.getElementById('live-hud');
-    if (mode === 'live') {
-      liveHud.style.display = 'flex';
-      this.startStatusPolling();
-      this.showToast('Switched to Live Surveillance Monitor', 'info');
+    if (mode === 'matrix') {
+      this.viewMatrix.style.display = 'flex';
+      this.viewTopology.style.display = 'none';
+      this.loadLiveMatrix();
     } else {
-      liveHud.style.display = 'none';
-      this.stopStatusPolling();
-      this.showToast('Switched to Topology Editor', 'info');
-    }
-  }
-
-  startStatusPolling() {
-    this.stopStatusPolling();
-    const poll = async () => {
-      if (this.mode !== 'live') return;
-      const statusData = await API.getStatus();
-      if (statusData) {
-        this.graphCanvas.cameraStatuses = statusData.camera_statuses || {};
-        this.graphCanvas.activeCameraId = statusData.active_camera;
-        this.graphCanvas.searchProgress = statusData.search_progress;
-        this.graphCanvas.targetState = statusData.target_state || 'UNSELECTED';
-        this.graphCanvas.transitHistory = statusData.transit_history || [];
-
-        document.getElementById('hud-active-cam').textContent = statusData.active_camera || 'None';
-
-        // Target State Badge
-        const stateEl = document.getElementById('hud-target-state');
-        if (stateEl) {
-          const tState = statusData.target_state || 'UNSELECTED';
-          stateEl.textContent = tState;
-          stateEl.className = `hud-val hud-state-badge state-${tState.toLowerCase()}`;
-        }
-
-        // Search progress
-        if (statusData.search_progress) {
-          document.getElementById('hud-search-state').textContent = statusData.search_progress.state.toUpperCase();
-          document.getElementById('hud-search-radius').textContent = statusData.search_progress.search_radius;
-        }
-
-        // Forensic Trail
-        const trailEl = document.getElementById('hud-transit-trail');
-        if (trailEl) {
-          const trail = statusData.transit_history || [];
-          if (trail.length === 0) {
-            trailEl.textContent = 'No transit recorded';
-          } else {
-            trailEl.textContent = trail.map(t => t.camera_id).join(' \u2192 ');
-          }
-        }
+      this.viewMatrix.style.display = 'none';
+      this.viewTopology.style.display = 'flex';
+      if (!this.graphCanvas) {
+        this.graphCanvas = new GraphCanvas(this, 'graph-canvas');
+        this.loadGraphTopology();
       }
-    };
-    poll();
-    this.statusPollInterval = setInterval(poll, 800);
-  }
-
-  stopStatusPolling() {
-    if (this.statusPollInterval) {
-      clearInterval(this.statusPollInterval);
-      this.statusPollInterval = null;
     }
   }
 
-  async loadGraph() {
+  async loadGraphTopology() {
     try {
       const data = await API.getGraph();
-      this.graphCanvas.loadGraph(data);
-      this.graphCanvas.fitToScreen();
-      this.showToast('Graph topology loaded', 'info');
-    } catch (err) {
-      this.showToast(`Error loading graph: ${err.message}`, 'error');
-    }
-  }
-
-  async saveGraph() {
-    const graphData = this.graphCanvas.toJSON();
-    try {
-      const res = await API.saveGraph(graphData);
-      this.showToast(res.message || 'Graph saved successfully!', 'success');
-    } catch (err) {
-      this.showToast(`Failed to save: ${err.message}`, 'error');
-    }
-  }
-
-  async validateGraph() {
-    const graphData = this.graphCanvas.toJSON();
-    try {
-      const res = await API.validateGraph(graphData);
-      if (res.valid) {
-        this.showToast('Topology is valid and ready!', 'success');
-      } else {
-        this.showToast(`Validation issues:\n${res.errors.join('\n')}`, 'error');
+      if (this.graphCanvas) {
+        this.graphCanvas.loadGraph(data);
+        this.graphCanvas.fitToScreen();
       }
+    } catch (e) {
+      this.showToast(`Topology load error: ${e.message}`, 'error');
+    }
+  }
+
+  /* ==========================================================================
+     MULTI-CAMERA LIVE MATRIX RENDERING
+     ========================================================================== */
+
+  async loadLiveMatrix() {
+    try {
+      const data = await API.getLiveCameras();
+      this.cameras = data.cameras || [];
+      this.activeCameraId = data.active_camera;
+
+      this.renderMatrixGrid();
+      this.matrixCountBadge.textContent = `${this.cameras.length} Cameras Online`;
     } catch (err) {
-      this.showToast(`Validation failed: ${err.message}`, 'error');
+      this.matrixGrid.innerHTML = `
+        <div class="matrix-loading">
+          <span>Failed to connect to surveillance stream backend. Retrying...</span>
+        </div>
+      `;
+    }
+  }
+
+  renderMatrixGrid() {
+    if (this.cameras.length === 0) {
+      this.matrixGrid.innerHTML = `
+        <div class="matrix-loading">
+          <span>No camera sources configured. Switch to Topology Map to add cameras.</span>
+        </div>
+      `;
+      return;
+    }
+
+    this.matrixGrid.innerHTML = '';
+
+    this.cameras.forEach((cam) => {
+      const isAct = (cam.camera_id === this.activeCameraId);
+      const isSearch = cam.is_searching;
+
+      let tileClass = 'camera-tile';
+      let badgeClass = 'badge-standby';
+      let badgeText = cam.status || 'STANDBY';
+
+      if (isAct) {
+        tileClass += ' tile-active';
+        badgeClass = 'badge-active';
+        badgeText = 'ACTIVE FOCUS';
+      } else if (isSearch) {
+        tileClass += ' tile-searching';
+        badgeClass = 'badge-searching';
+        badgeText = 'SEARCHING';
+      } else if (!cam.enabled) {
+        badgeClass = 'badge-offline';
+        badgeText = 'DISABLED';
+      }
+
+      const streamUrl = API.getCameraStreamUrl(cam.camera_id);
+      const fallbackUrl = API.getCameraFrameUrl(cam.camera_id);
+
+      const tile = document.createElement('div');
+      tile.className = tileClass;
+      tile.id = `tile-${cam.camera_id}`;
+      tile.dataset.cameraId = cam.camera_id;
+
+      tile.innerHTML = `
+        <div class="camera-tile-header">
+          <div class="tile-cam-info">
+            <span class="tile-cam-name">${cam.name || cam.camera_id}</span>
+            <span class="tile-cam-id">[${cam.camera_id}]</span>
+          </div>
+          <span class="tile-cam-badge ${badgeClass}" id="badge-${cam.camera_id}">${badgeText}</span>
+        </div>
+
+        <div class="camera-tile-video" id="stage-${cam.camera_id}">
+          <img class="camera-feed-img" 
+               id="img-${cam.camera_id}"
+               src="${streamUrl}" 
+               alt="${cam.name}" 
+               onerror="this.onerror=null; this.src='${fallbackUrl}'">
+          
+          <div class="camera-tile-overlay">
+            <button class="tile-overlay-btn btn-focus-cam" data-cam="${cam.camera_id}">Set Active</button>
+            <span style="font-size:10px; color:#94a3b8;">Click feed to lock target</span>
+            <button class="tile-overlay-btn btn-snap-cam" data-cam="${cam.camera_id}">+ Angle</button>
+          </div>
+        </div>
+      `;
+
+      // Click on tile video stage: Set active camera + select target at coordinates
+      const stage = tile.querySelector('.camera-tile-video');
+      const img = tile.querySelector('.camera-feed-img');
+
+      stage.addEventListener('click', async (e) => {
+        if (e.target.classList.contains('tile-overlay-btn')) return;
+
+        const rect = img.getBoundingClientRect();
+        const clickX = e.clientX - rect.left;
+        const clickY = e.clientY - rect.top;
+
+        // Scale to image actual pixel dimensions
+        const scaleX = (img.naturalWidth || 640) / rect.width;
+        const scaleY = (img.naturalHeight || 480) / rect.height;
+
+        const targetX = clickX * scaleX;
+        const targetY = clickY * scaleY;
+
+        try {
+          const res = await API.selectTarget(cam.camera_id, targetX, targetY);
+          if (res.success && res.selected_id !== null) {
+            this.showToast(`Target locked! Tracker ID: ${res.selected_id} on ${cam.name}`, 'success');
+            this.activeCameraId = cam.camera_id;
+            this.refreshStatus();
+            this.refreshGallery();
+          } else {
+            // Simply switch active camera if no person was directly clicked
+            await API.setActiveCamera(cam.camera_id);
+            this.activeCameraId = cam.camera_id;
+            this.updateActiveTileVisuals();
+            this.showToast(`Switched active camera to '${cam.name}'`, 'info');
+          }
+        } catch (err) {
+          console.error(err);
+        }
+      });
+
+      // Overlay button handlers
+      tile.querySelector('.btn-focus-cam').addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await API.setActiveCamera(cam.camera_id);
+        this.activeCameraId = cam.camera_id;
+        this.updateActiveTileVisuals();
+        this.showToast(`Focused on '${cam.name}'`, 'info');
+      });
+
+      tile.querySelector('.btn-snap-cam').addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const res = await API.addSample(cam.camera_id);
+        if (res.success) {
+          this.showToast(`Angle captured on ${cam.name}!`, 'success');
+          this.refreshGallery();
+        } else {
+          this.showToast('No active target locked to add angle', 'error');
+        }
+      });
+
+      this.matrixGrid.appendChild(tile);
+    });
+  }
+
+  updateActiveTileVisuals() {
+    document.querySelectorAll('.camera-tile').forEach((t) => {
+      const cid = t.dataset.cameraId;
+      const isAct = (cid === this.activeCameraId);
+      t.classList.toggle('tile-active', isAct);
+      const badge = document.getElementById(`badge-${cid}`);
+      if (badge && isAct) {
+        badge.className = 'tile-cam-badge badge-active';
+        badge.textContent = 'ACTIVE FOCUS';
+      }
+    });
+  }
+
+  /* ==========================================================================
+     PERIODIC STATUS & GALLERY POLLING
+     ========================================================================== */
+
+  startPolling() {
+    this.refreshStatus();
+    this.refreshGallery();
+
+    this.statusPollTimer = setInterval(() => this.refreshStatus(), 700);
+    this.galleryPollTimer = setInterval(() => this.refreshGallery(), 750);
+  }
+
+  async refreshStatus() {
+    try {
+      const st = await API.getStatus();
+      if (!st) return;
+
+      this.activeCameraId = st.active_camera;
+      this.targetState = st.target_state || 'UNSELECTED';
+      this.searchProgress = st.search_progress;
+
+      // Update Header HUD
+      this.hdrActiveCam.textContent = st.active_camera || 'None';
+
+      this.hdrTargetState.textContent = this.targetState;
+      this.hdrTargetState.className = `chip-val chip-badge state-${this.targetState.toLowerCase()}`;
+
+      const rad = st.search_progress ? st.search_progress.search_radius : 0;
+      const searchSt = st.search_progress ? st.search_progress.state.toUpperCase() : 'IDLE';
+      this.hdrSearchRadius.textContent = `R = ${rad} (${searchSt})`;
+
+      this.hdrGalleryStats.textContent = `${st.gallery_size || 0} / ${st.gallery_max || 25}`;
+
+      // Update Target Summary Card
+      this.cardTargetId.textContent = st.target_track_id ? `Tracker #${st.target_track_id}` : (st.target_state !== 'UNSELECTED' ? 'TARGET_0' : 'UNSELECTED');
+      this.cardTargetState.textContent = this.targetState;
+      this.cardTargetState.className = `state-tag state-${this.targetState.toLowerCase()}`;
+      this.cardTargetCam.textContent = st.active_camera || 'None';
+      this.cardTargetSamples.textContent = `${st.gallery_manual || 0} manual / ${st.gallery_auto || 0} auto`;
+
+      // Update Bottom Radius Stepper
+      this.updateRadiusStepper(rad, searchSt);
+
+      // Update Forensic Trail
+      const trail = st.transit_history || [];
+      if (trail.length === 0) {
+        this.transitTrailEl.innerHTML = '<span class="trail-empty">No cross-camera movement recorded yet</span>';
+      } else {
+        this.transitTrailEl.innerHTML = trail.map((t, idx) => `
+          <span class="step-pill step-active">${t.camera_id || t}</span>
+          ${idx < trail.length - 1 ? '<span class="step-arrow">&rarr;</span>' : ''}
+        `).join('');
+      }
+
+      // Update Active/Searching tile indicators in the grid
+      if (this.cameras.length > 0) {
+        const searchingCams = new Set(st.search_progress ? st.search_progress.active_cameras : []);
+        this.cameras.forEach((cam) => {
+          const tile = document.getElementById(`tile-${cam.camera_id}`);
+          const badge = document.getElementById(`badge-${cam.camera_id}`);
+          if (!tile || !badge) return;
+
+          const isAct = (cam.camera_id === st.active_camera);
+          const isSearch = searchingCams.has(cam.camera_id);
+
+          tile.classList.toggle('tile-active', isAct);
+          tile.classList.toggle('tile-searching', !isAct && isSearch);
+
+          if (isAct) {
+            badge.className = 'tile-cam-badge badge-active';
+            badge.textContent = 'ACTIVE FOCUS';
+          } else if (isSearch) {
+            badge.className = 'tile-cam-badge badge-searching';
+            badge.textContent = `SEARCHING (R=${rad})`;
+          } else {
+            badge.className = 'tile-cam-badge badge-standby';
+            badge.textContent = 'STANDBY';
+          }
+        });
+      }
+    } catch (e) {
+      console.debug('Status poll error', e);
+    }
+  }
+
+  updateRadiusStepper(radius, stateStr) {
+    for (let r = 0; r <= 3; r++) {
+      const stepEl = document.getElementById(`radius-step-${r}`);
+      if (!stepEl) continue;
+      if (r === 0) {
+        stepEl.className = 'step-pill step-active';
+      } else if (r <= radius && stateStr !== 'IDLE') {
+        stepEl.className = 'step-pill step-searching';
+      } else {
+        stepEl.className = 'step-pill';
+      }
+    }
+  }
+
+  /* ==========================================================================
+     RIGHT VERTICAL TARGET GALLERY COLUMN RENDERING (REQUIREMENT #2)
+     ========================================================================== */
+
+  async refreshGallery() {
+    try {
+      const g = await API.getGallery();
+      if (!g) return;
+
+      this.galleryCountBadge.textContent = `${g.size} / ${g.max_size}`;
+
+      if (!g.thumbnails || g.thumbnails.length === 0) {
+        this.galleryCardsList.innerHTML = `
+          <div class="gallery-empty-state">
+            <div class="empty-icon">&#128100;</div>
+            <div class="empty-text">No target locked</div>
+            <div class="empty-hint">Click on any tracked person in a live camera feed to lock focus and seed their appearance gallery.</div>
+          </div>
+        `;
+        return;
+      }
+
+      // Reverse list to show newest appearances at top
+      const items = [...g.thumbnails].reverse();
+
+      this.galleryCardsList.innerHTML = items.map((thumb) => {
+        const isMan = thumb.is_manual;
+        const tagClass = isMan ? 'badge-manual' : 'badge-auto';
+        const tagLabel = isMan ? 'MANUAL' : 'AUTO';
+        const qualityPct = Math.round((thumb.quality_score || thumb.confidence || 0.9) * 100);
+        const imgSrc = thumb.image_b64 ? `data:image/jpeg;base64,${thumb.image_b64}` : '';
+
+        return `
+          <div class="gallery-crop-card" title="Entry: ${thumb.entry_id} | Camera: ${thumb.camera_id}">
+            <div class="crop-thumb-box">
+              ${imgSrc ? `<img src="${imgSrc}" class="crop-thumb-img" alt="Target Crop">` : '<div style="color:#64748b;font-size:10px;">No image</div>'}
+            </div>
+            <div class="crop-meta-box">
+              <div class="crop-meta-top">
+                <span class="crop-type-badge ${tagClass}">${tagLabel}</span>
+                <span class="crop-quality-text">Q: ${qualityPct}%</span>
+              </div>
+              <div class="crop-cam-text">${thumb.camera_id || 'cam_0'}</div>
+              <div class="crop-time-text">${thumb.timestamp_ms ? `${(thumb.timestamp_ms / 1000).toFixed(1)}s` : 'Captured'}</div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    } catch (e) {
+      console.debug('Gallery poll error', e);
     }
   }
 
@@ -263,7 +453,7 @@ class App {
   }
 }
 
-// Bootstrap Application
+// Bootstrap Application on Load
 window.addEventListener('DOMContentLoaded', () => {
-  window.app = new App();
+  window.app = new SurveillanceApp();
 });

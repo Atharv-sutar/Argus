@@ -1,4 +1,4 @@
-"""Main application entry point for running the single-camera surveillance pipeline."""
+"""Main application entry point for running the unified Argus surveillance pipeline."""
 
 from __future__ import annotations
 
@@ -19,21 +19,12 @@ try:
 except ImportError:
     cv2 = None
 
-
-from src.camera.capture import OpenCVCamera, SyntheticCamera
 from src.core.config import AppConfig
+from src.core.multi_camera_types import CameraNodeConfig, SourceType
 from src.core.types import Target, TargetState, TrackResult
-from src.detection.yolo_detector import YOLODetector
-
-from src.identity.manager import IdentityManager
 from src.multi_camera.camera_graph import CameraGraph
 from src.multi_camera.ui_server import run_ui_server
 from src.pipeline.multi_camera_pipeline import MultiCameraPipeline
-from src.pipeline.single_camera import SingleCameraPipeline
-from src.reid.extractor import PyTorchReIDExtractor
-from src.target.manager import TargetManager
-from src.tracking.byte_tracker import ByteTracker
-from src.visualization.annotator import FrameAnnotator
 
 logging.basicConfig(
     level=logging.INFO,
@@ -132,88 +123,41 @@ def build_pipeline(
     device_override: Optional[str] = None,
     use_synthetic: bool = False,
     initial_target_id: Optional[int] = None,
-) -> SingleCameraPipeline:
-    """Constructs and wires all single-camera components according to configuration."""
+) -> MultiCameraPipeline:
+    """
+    Constructs a unified MultiCameraPipeline for a single camera (1-node CameraGraph).
+    Eliminates code duplication between single and multi-camera modes.
+    """
+    if device_override is not None:
+        config.inference.device = device_override
 
-    # 1. Camera
-    if use_synthetic or str(source_override).lower() == "synthetic":
-        logger.info("Initializing SyntheticCamera (headless simulation).")
-        camera = SyntheticCamera(
-            width=config.camera.width,
-            height=config.camera.height,
-            fps=config.camera.fps,
-        )
+    src = source_override if source_override is not None else config.camera.source
+    if use_synthetic or str(src).lower() == "synthetic":
+        src_type = SourceType.SYNTHETIC
+    elif str(src).startswith(("rtsp://", "http://", "https://")):
+        src_type = SourceType.RTSP
+    elif str(src).isdigit() or isinstance(src, int):
+        src_type = SourceType.WEBCAM
     else:
-        src = source_override if source_override is not None else config.camera.source
-        camera = OpenCVCamera(
-            source=src,
-            width=config.camera.width,
-            height=config.camera.height,
-            fps=config.camera.fps,
-        )
+        src_type = SourceType.VIDEO_FILE
 
-    # 2. Detector
-    dev = device_override if device_override is not None else config.inference.device
-    detector = YOLODetector(
-        model_name=config.detection.model_name,
-        confidence_threshold=config.detection.confidence_threshold,
-        iou_threshold=config.detection.iou_threshold,
-        target_classes=config.detection.target_classes,
-        device=dev,
-        image_size=config.detection.image_size,
+    node_cfg = CameraNodeConfig(
+        camera_id=config.camera.name or "cam_0",
+        name="Primary Camera",
+        source=src,
+        source_type=src_type,
+        enabled=True,
     )
+    graph = CameraGraph()
+    graph.add_node(node_cfg)
 
-    # 3. Tracker
-    tracker = ByteTracker(
-        track_thresh=config.tracking.track_thresh,
-        match_thresh=config.tracking.match_thresh,
-        track_buffer=config.tracking.track_buffer,
-        min_box_area=config.tracking.min_box_area,
+    pipeline = MultiCameraPipeline(
+        graph=graph,
+        config=config,
     )
-
-    # 4. Target Manager
-    target_manager = TargetManager()
     if initial_target_id is not None:
-        target_manager.select_by_track_id(initial_target_id)
-
-    # 5. ReID & Identity Manager
-    reid_extractor = PyTorchReIDExtractor(
-        model_name=config.reid.model_name,
-        device=dev,
-    )
-    identity_manager = IdentityManager(
-        reid_extractor=reid_extractor,
-        similarity_threshold=config.reid.similarity_threshold,
-        reference_threshold=config.reid.reference_threshold,
-        upper_threshold=config.reid.upper_threshold,
-        min_margin=config.reid.min_margin,
-        max_gallery_size=config.reid.gallery_size,
-        w_upper=config.reid.w_upper,
-        w_color=config.reid.w_color,
-        w_deep=config.reid.w_deep,
-        w_lower=config.reid.w_lower,
-    )
-
-    # 6. Annotator
-    annotator = FrameAnnotator(
-        draw_fps=config.visualization.draw_fps,
-        draw_boxes=config.visualization.draw_boxes,
-        draw_ids=config.visualization.draw_ids,
-        box_thickness=config.visualization.box_thickness,
-        font_scale=config.visualization.font_scale,
-    )
-
-    return SingleCameraPipeline(
-        camera=camera,
-        detector=detector,
-        tracker=tracker,
-        target_manager=target_manager,
-        identity_manager=identity_manager,
-        annotator=annotator,
-        camera_id=config.camera.name,
-        reid_interval=config.reid.extract_interval_frames,
-        min_margin=config.reid.min_margin,
-    )
+        pipeline.select_target_by_id(node_cfg.camera_id, initial_target_id)
+    return pipeline
 
 
 def build_multi_camera_pipeline(
@@ -452,46 +396,56 @@ def run_multi_camera_app(
 
     def on_mouse(event, x, y, flags, param):
         nonlocal ui_state, focused_camera_id
-        if event != cv2.EVENT_LBUTTONDOWN:
-            return
+        if event == cv2.EVENT_LBUTTONDOWN:
+            if ui_state == "MONITORING":
+                # Click a camera tile → CAMERA_FOCUS
+                for tile in current_tile_maps:
+                    if tile["x1"] <= x <= tile["x2"] and tile["y1"] <= y <= tile["y2"]:
+                        focused_camera_id = tile["camera_id"]
+                        ui_state = "CAMERA_FOCUS"
+                        logger.info(f"[UI] MONITORING → CAMERA_FOCUS on '{focused_camera_id}'")
+                        break
 
-        if ui_state == "MONITORING":
-            # Click a camera tile → CAMERA_FOCUS
-            for tile in current_tile_maps:
-                if tile["x1"] <= x <= tile["x2"] and tile["y1"] <= y <= tile["y2"]:
-                    focused_camera_id = tile["camera_id"]
-                    ui_state = "CAMERA_FOCUS"
-                    logger.info(f"[UI] MONITORING → CAMERA_FOCUS on '{focused_camera_id}'")
-                    break
-
-        elif ui_state == "CAMERA_FOCUS":
-            # Click on person → select target → TARGET_TRACKING
-            if focused_camera_id:
-                selected_id = pipeline.select_target_on_camera(focused_camera_id, float(x), float(y))
-                if selected_id is not None:
-                    ui_state = "TARGET_TRACKING"
-                    logger.info(f"[UI] CAMERA_FOCUS → TARGET_TRACKING | Target selected on '{focused_camera_id}' Tracker={selected_id}")
-
-        elif ui_state == "TARGET_TRACKING":
-            # Re-select target on active camera
-            active_id = pipeline.active_camera_id
-            if active_id:
-                selected_id = pipeline.select_target_on_camera(active_id, float(x), float(y))
-                if selected_id is not None:
-                    logger.info(f"[UI] Re-selected target on '{active_id}' Tracker={selected_id}")
-
-        elif ui_state in ("SEARCH_VIEW", "HANDOFF_CONFIRM"):
-            # Click on a search camera tile
-            for tile in current_tile_maps:
-                if tile["x1"] <= x <= tile["x2"] and tile["y1"] <= y <= tile["y2"]:
-                    cam_id = tile["camera_id"]
-                    local_x = (x - tile["x1"]) * tile["scale_x"]
-                    local_y = (y - tile["y1"]) * tile["scale_y"]
-                    selected_id = pipeline.select_target_on_camera(cam_id, float(local_x), float(local_y))
+            elif ui_state == "CAMERA_FOCUS":
+                # Click on person → select target → TARGET_TRACKING
+                if focused_camera_id:
+                    selected_id = pipeline.select_target_on_camera(focused_camera_id, float(x), float(y))
                     if selected_id is not None:
                         ui_state = "TARGET_TRACKING"
-                        logger.info(f"[UI] Manual target selection on '{cam_id}' → TARGET_TRACKING")
-                    break
+                        logger.info(f"[UI] CAMERA_FOCUS → TARGET_TRACKING | Target selected on '{focused_camera_id}' Tracker={selected_id}")
+
+            elif ui_state == "TARGET_TRACKING":
+                # Re-select target on active camera
+                active_id = pipeline.active_camera_id
+                if active_id:
+                    selected_id = pipeline.select_target_on_camera(active_id, float(x), float(y))
+                    if selected_id is not None:
+                        logger.info(f"[UI] Re-selected target on '{active_id}' Tracker={selected_id}")
+
+            elif ui_state in ("SEARCH_VIEW", "HANDOFF_CONFIRM"):
+                # Click on a search camera tile
+                for tile in current_tile_maps:
+                    if tile["x1"] <= x <= tile["x2"] and tile["y1"] <= y <= tile["y2"]:
+                        cam_id = tile["camera_id"]
+                        local_x = (x - tile["x1"]) * tile["scale_x"]
+                        local_y = (y - tile["y1"]) * tile["scale_y"]
+                        selected_id = pipeline.select_target_on_camera(cam_id, float(local_x), float(local_y))
+                        if selected_id is not None:
+                            ui_state = "TARGET_TRACKING"
+                            logger.info(f"[UI] Manual target selection on '{cam_id}' → TARGET_TRACKING")
+                        break
+
+        elif event == cv2.EVENT_RBUTTONDOWN:
+            # Right-click: Manual "add to gallery" capture
+            if ui_state in ("TARGET_TRACKING", "CAMERA_FOCUS"):
+                cam_id = focused_camera_id if ui_state == "CAMERA_FOCUS" else pipeline.active_camera_id
+                if cam_id and pipeline.target_manager.is_active():
+                    ok = pipeline.add_manual_target_sample(cam_id)
+                    if ok:
+                        logger.info(
+                            f"[UI] Captured manual protected sample on '{cam_id}' "
+                            f"(Gallery={pipeline.gallery.size}/{pipeline.gallery.max_size})"
+                        )
 
     if show_window:
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
@@ -502,7 +456,8 @@ def run_multi_camera_app(
     try:
         while True:
             if not show_window:
-                time.sleep(0.03)
+                pipeline.step()
+                time.sleep(0.01)
                 continue
 
             # ===== MONITORING STATE =====
@@ -527,9 +482,8 @@ def run_multi_camera_app(
                     result = pipeline.process_single_camera_frame(focused_camera_id)
                     if result is not None:
                         ann_frame, track_res, target = result
-                        # Draw focus header
                         h, w = ann_frame.shape[:2]
-                        header_text = f"CAMERA: {focused_camera_id}  |  Click a person to select target  |  [Esc]: Back to grid"
+                        header_text = f"CAMERA: {focused_camera_id}  |  Left-Click: Select Target  |  [Esc]: Back to grid"
                         cv2.rectangle(ann_frame, (0, 0), (w, 32), (10, 14, 22), -1)
                         cv2.putText(ann_frame, header_text, (12, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 180), 1, cv2.LINE_AA)
                         cv2.line(ann_frame, (0, 32), (w, 32), (0, 220, 180), 1)
@@ -549,12 +503,19 @@ def run_multi_camera_app(
                 if active_data and active_data[0] is not None:
                     frame = active_data[0]
                     target = active_data[2]
-                    # Add tracking header
                     h, w = frame.shape[:2]
                     state_str = target.state.value if target else "UNKNOWN"
-                    header_text = f"TRACKING  |  Camera: {active_id}  |  Target: [{state_str}]  |  [C]: Clear  [Q]: Quit"
+                    g_size = pipeline.gallery.size
+                    g_max = pipeline.gallery.max_size
+                    g_man = pipeline.gallery.manual_count
+                    g_auto = pipeline.gallery.auto_count
+                    header_text = (
+                        f"TRACKING | Camera: {active_id} | Target: [{state_str}] | "
+                        f"Gallery: {g_size}/{g_max} (Man: {g_man}, Auto: {g_auto}) | "
+                        f"[A/Right-Click]: Add Angle | [C]: Clear | [Q]: Quit"
+                    )
                     cv2.rectangle(frame, (0, 0), (w, 32), (10, 14, 22), -1)
-                    cv2.putText(frame, header_text, (12, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 215, 255), 1, cv2.LINE_AA)
+                    cv2.putText(frame, header_text, (12, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 215, 255), 1, cv2.LINE_AA)
                     cv2.line(frame, (0, 32), (w, 32), (0, 215, 255), 1)
                     cv2.imshow(window_name, frame)
 
@@ -567,8 +528,7 @@ def run_multi_camera_app(
 
                 # Check for handoff that happened during step()
                 if pipeline.handoff_timestamp > 0 and ui_state == "TARGET_TRACKING":
-                    # A handoff just completed, possibly from a previous search
-                    pass  # Stay in TARGET_TRACKING
+                    pass
 
             # ===== SEARCH_VIEW STATE =====
             elif ui_state == "SEARCH_VIEW":
@@ -590,10 +550,10 @@ def run_multi_camera_app(
                         ui_state = "HANDOFF_CONFIRM"
                         logger.info(f"[UI] SEARCH_VIEW → HANDOFF_CONFIRM (Target found on '{handoff_new_cam_id}')")
 
-                # Check if search timed out or no search cameras → back to TARGET_TRACKING (single camera, LOST state)
+                # Check if search timed out or no search cameras → back to TARGET_TRACKING
                 if not pipeline.search_manager.is_searching or len(search_cam_ids) == 0:
                     ui_state = "TARGET_TRACKING"
-                    logger.info(f"[UI] SEARCH_VIEW → TARGET_TRACKING (search ended or single camera)")
+                    logger.info(f"[UI] SEARCH_VIEW → TARGET_TRACKING (search ended)")
 
             # ===== HANDOFF_CONFIRM STATE =====
             elif ui_state == "HANDOFF_CONFIRM":
@@ -636,6 +596,15 @@ def run_multi_camera_app(
                 focused_camera_id = None
                 handoff_new_cam_id = None
                 logger.info("[UI] Target cleared → MONITORING")
+            elif key == ord("a") or key == 32:  # 'a' or Space: Manual Gallery Capture
+                if pipeline.target_manager.is_active():
+                    ok = pipeline.add_manual_target_sample()
+                    if ok:
+                        logger.info(
+                            f"[UI] Manual sample added to gallery via hotkey "
+                            f"(Size={pipeline.gallery.size}/{pipeline.gallery.max_size}, "
+                            f"Manual={pipeline.gallery.manual_count}, Auto={pipeline.gallery.auto_count})"
+                        )
             elif key == ord("m"):
                 pipeline.clear_target()
                 ui_state = "MONITORING"
@@ -649,8 +618,6 @@ def run_multi_camera_app(
         pipeline.stop()
         if show_window:
             cv2.destroyAllWindows()
-
-
 
 
 def run_map_ui(
@@ -671,7 +638,7 @@ def run_app(
     synthetic: bool = False,
     target_id: Optional[int] = None,
 ) -> None:
-    """Loads configuration and runs the live pipeline loop."""
+    """Loads configuration and runs the live pipeline loop for a single camera."""
     config_file = Path(config_path)
     if config_file.is_file():
         config = AppConfig.from_yaml(config_file)
@@ -700,23 +667,57 @@ def run_app(
 
     window_name = config.visualization.window_name
     show_window = config.visualization.show_window and not no_gui and (cv2 is not None)
+    cam_id = pipeline.active_camera_id or "cam_0"
 
     # Mouse callback to allow clicking directly on targets in GUI window
     def on_mouse(event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
-            selected_id = pipeline.select_target_by_point(float(x), float(y))
+            selected_id = pipeline.select_target_on_camera(cam_id, float(x), float(y))
             if selected_id is not None:
-                logger.info(f"[USER ACTION] Clicked and locked onto Target ID: {selected_id}")
+                logger.info(f"[USER ACTION] Clicked and locked onto Target ID: {selected_id} (Gallery seeded)")
+        elif event == cv2.EVENT_RBUTTONDOWN:
+            if pipeline.target_manager.is_active():
+                ok = pipeline.add_manual_target_sample(cam_id)
+                if ok:
+                    logger.info(
+                        f"[USER ACTION] Right-click captured manual sample on '{cam_id}' "
+                        f"(Gallery: {pipeline.gallery.size}/{pipeline.gallery.max_size})"
+                    )
 
     if show_window:
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
         cv2.setMouseCallback(window_name, on_mouse)
 
-    logger.info("Starting Argus pipeline. Controls: Left-Click: Select Target | 'c': Clear Target | 'q': Quit")
+    logger.info(
+        "Starting Argus pipeline. Controls: Left-Click: Select Target | "
+        "Right-Click / 'a': Add Angle to Gallery | 'c': Clear | 'q': Quit"
+    )
 
     try:
-        for annotated_frame, track_result, target in pipeline.stream():
+        for results in pipeline.stream():
+            active_cam = pipeline.active_camera_id or cam_id
+            data = results.get(active_cam)
+            if data is None or data[0] is None:
+                continue
+            annotated_frame, track_result, target = data
+
             if show_window:
+                h, w = annotated_frame.shape[:2]
+                state_str = target.state.value if target else "UNSELECTED"
+                g_size = pipeline.gallery.size
+                g_max = pipeline.gallery.max_size
+                g_man = pipeline.gallery.manual_count
+                g_auto = pipeline.gallery.auto_count
+
+                hud = (
+                    f"Camera: {active_cam} | Target: [{state_str}] | "
+                    f"Gallery: {g_size}/{g_max} (Man: {g_man}, Auto: {g_auto}) | "
+                    f"[A/Right-Click]: Add Angle | [C]: Clear"
+                )
+                cv2.rectangle(annotated_frame, (0, 0), (w, 30), (10, 14, 22), -1)
+                cv2.putText(annotated_frame, hud, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 220, 180), 1, cv2.LINE_AA)
+                cv2.line(annotated_frame, (0, 30), (w, 30), (0, 220, 180), 1)
+
                 cv2.imshow(window_name, annotated_frame)
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord("q") or key == 27:  # 'q' or Esc
@@ -725,11 +726,20 @@ def run_app(
                 elif key == ord("c"):
                     logger.info("[USER ACTION] 'c' key pressed: Deselecting target.")
                     pipeline.clear_target()
+                elif key == ord("a") or key == 32:  # 'a' or Space
+                    if pipeline.target_manager.is_active():
+                        ok = pipeline.add_manual_target_sample(active_cam)
+                        if ok:
+                            logger.info(
+                                f"[USER ACTION] 'a' hotkey captured manual sample on '{active_cam}' "
+                                f"(Gallery: {pipeline.gallery.size}/{pipeline.gallery.max_size})"
+                            )
             else:
-                if track_result.count > 0 or target.track_id is not None:
-                    target_info = f", Target ID {target.track_id} [{target.state.value}]" if target.track_id else ""
+                if track_result and (track_result.count > 0 or (target and target.track_id is not None)):
+                    target_info = f", Target ID {target.track_id} [{target.state.value}]" if (target and target.track_id) else ""
                     logger.info(
-                        f"Frame {track_result.frame_id}: Active Tracks = {track_result.count}{target_info}"
+                        f"Frame {track_result.frame_id}: Active Tracks = {track_result.count}{target_info} | "
+                        f"Gallery: {pipeline.gallery.size}/{pipeline.gallery.max_size}"
                     )
     except KeyboardInterrupt:
         logger.info("Pipeline interrupted by user.")
@@ -777,4 +787,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -180,7 +180,21 @@ class Embedding:
     def __eq__(self, other: Any) -> bool:
         if not isinstance(other, Embedding):
             return False
-        return bool(np.array_equal(self.vector, other.vector))
+        return np.array_equal(self.vector, other.vector)
+
+
+@dataclass
+class GalleryEntry:
+    """A confirmed appearance sample of the active target."""
+    entry_id: str
+    embedding: Embedding
+    crop: Optional[np.ndarray] = None
+    is_manual: bool = False  # True = Human confirmed (protected from auto eviction)
+    timestamp_ms: float = 0.0
+    camera_id: str = "camera_0"
+    frame_id: int = 0
+    confidence: float = 1.0
+    quality_score: float = 1.0
 
 
 @dataclass

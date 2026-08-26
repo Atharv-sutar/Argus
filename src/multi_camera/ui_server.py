@@ -122,6 +122,92 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             self._send_json({"cameras": webcams})
             return
 
+        elif path == "/api/cameras/live":
+            if self.runtime_pipeline is not None:
+                cards = self.runtime_pipeline.get_all_camera_cards()
+                self._send_json({"cameras": cards, "active_camera": self.runtime_pipeline.active_camera_id})
+            elif self.graph_file.is_file():
+                try:
+                    with open(self.graph_file, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    cams = []
+                    for c in data.get("cameras", []):
+                        cams.append({
+                            "camera_id": c.get("camera_id"),
+                            "name": c.get("name"),
+                            "source": c.get("source"),
+                            "source_type": c.get("source_type", "webcam"),
+                            "enabled": c.get("enabled", True),
+                            "is_active": False,
+                            "is_searching": False,
+                            "status": "STANDBY",
+                            "fps": 0.0,
+                            "floor": c.get("floor"),
+                            "zone": c.get("zone"),
+                            "has_frame": False,
+                        })
+                    self._send_json({"cameras": cams, "active_camera": None})
+                except Exception:
+                    self._send_json({"cameras": [], "active_camera": None})
+            else:
+                self._send_json({"cameras": [], "active_camera": None})
+            return
+
+        elif path.startswith("/api/camera/") and path.endswith("/stream"):
+            parts = path.strip("/").split("/")
+            if len(parts) == 4 and parts[0] == "api" and parts[1] == "camera" and parts[3] == "stream":
+                cam_id = parts[2]
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+                self.send_header("Cache-Control", "no-cache, private, no-store, must-revalidate")
+                self.send_header("Pragma", "no-cache")
+                self.send_header("Expires", "0")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+
+                import time
+                try:
+                    while True:
+                        frame_bytes = None
+                        if self.runtime_pipeline is not None:
+                            frame_bytes = self.runtime_pipeline.get_camera_frame_jpeg(cam_id, quality=75)
+
+                        if frame_bytes is None:
+                            time.sleep(0.05)
+                            continue
+
+                        self.wfile.write(b"--frame\r\n")
+                        self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                        self.wfile.write(f"Content-Length: {len(frame_bytes)}\r\n\r\n".encode("utf-8"))
+                        self.wfile.write(frame_bytes)
+                        self.wfile.write(b"\r\n")
+                        self.wfile.flush()
+                        time.sleep(0.033)  # ~30 FPS throttle
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                except Exception as e:
+                    logger.debug(f"Stream client disconnected for camera '{cam_id}': {e}")
+                return
+
+        elif path.startswith("/api/camera/") and (path.endswith("/frame.jpg") or path.endswith("/frame")):
+            parts = path.strip("/").split("/")
+            if len(parts) >= 3:
+                cam_id = parts[2]
+                frame_bytes = None
+                if self.runtime_pipeline is not None:
+                    frame_bytes = self.runtime_pipeline.get_camera_frame_jpeg(cam_id, quality=75)
+                if frame_bytes is not None:
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Content-Length", str(len(frame_bytes)))
+                    self.send_header("Cache-Control", "no-cache")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(frame_bytes)
+                else:
+                    self.send_error(HTTPStatus.NOT_FOUND, f"No frame available for camera '{cam_id}'")
+                return
+
         elif path == "/api/graph":
             if self.graph_file.is_file():
                 try:
@@ -142,20 +228,52 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     for cid in self.runtime_pipeline.graph.all_camera_ids()
                     if self.runtime_pipeline.get_camera_status(cid)
                 }
+                gallery = self.runtime_pipeline.gallery
                 self._send_json({
                     "active_camera": self.runtime_pipeline.active_camera_id,
                     "target_state": getattr(self.runtime_pipeline, "target_state", "UNSELECTED"),
+                    "target_track_id": self.runtime_pipeline.target_manager.target.track_id if self.runtime_pipeline.target_manager.target else None,
                     "transit_history": getattr(self.runtime_pipeline, "transit_history", []),
                     "search_progress": progress.to_dict(),
                     "camera_statuses": statuses,
+                    "gallery_size": gallery.size,
+                    "gallery_max": gallery.max_size,
+                    "gallery_manual": gallery.manual_count,
+                    "gallery_auto": gallery.auto_count,
                 })
             else:
                 self._send_json({
                     "active_camera": None,
                     "target_state": "UNSELECTED",
+                    "target_track_id": None,
                     "transit_history": [],
                     "search_progress": None,
                     "camera_statuses": {},
+                    "gallery_size": 0,
+                    "gallery_max": 25,
+                    "gallery_manual": 0,
+                    "gallery_auto": 0,
+                })
+            return
+
+        elif path == "/api/target/gallery":
+            if self.runtime_pipeline is not None:
+                gallery = self.runtime_pipeline.gallery
+                thumbnails = gallery.get_thumbnails(max_count=25)
+                self._send_json({
+                    "size": gallery.size,
+                    "max_size": gallery.max_size,
+                    "manual_count": gallery.manual_count,
+                    "auto_count": gallery.auto_count,
+                    "thumbnails": thumbnails,
+                })
+            else:
+                self._send_json({
+                    "size": 0,
+                    "max_size": 25,
+                    "manual_count": 0,
+                    "auto_count": 0,
+                    "thumbnails": [],
                 })
             return
 
@@ -197,7 +315,16 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
         except Exception:
             payload = {}
 
-        if path == "/api/graph":
+        if path == "/api/camera/select_active":
+            cam_id = payload.get("camera_id")
+            if self.runtime_pipeline is not None and cam_id:
+                ok = self.runtime_pipeline.set_active_camera(cam_id)
+                self._send_json({"success": ok, "active_camera": self.runtime_pipeline.active_camera_id})
+            else:
+                self._send_json({"success": False, "error": "Pipeline not active or invalid camera_id"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        elif path == "/api/graph":
             try:
                 graph = CameraGraph.from_dict(payload)
                 errors = graph.validate()
@@ -222,11 +349,44 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/target/select":
             cam_id = payload.get("camera_id")
-            x = float(payload.get("x", 0.0))
-            y = float(payload.get("y", 0.0))
+            track_id = payload.get("track_id")
+            x = payload.get("x")
+            y = payload.get("y")
+
             if self.runtime_pipeline is not None and cam_id:
-                selected_id = self.runtime_pipeline.select_target_on_camera(cam_id, x, y)
-                self._send_json({"success": selected_id is not None, "selected_id": selected_id})
+                # Switch active camera to this camera
+                self.runtime_pipeline.set_active_camera(cam_id)
+
+                if track_id is not None:
+                    selected_id = self.runtime_pipeline.select_target_by_id(cam_id, int(track_id))
+                elif x is not None and y is not None:
+                    selected_id = self.runtime_pipeline.select_target_on_camera(cam_id, float(x), float(y))
+                else:
+                    selected_id = None
+
+                self._send_json({"success": selected_id is not None, "selected_id": selected_id, "camera_id": cam_id})
+            else:
+                self._send_json({"success": False, "error": "Runtime pipeline not active"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        elif path == "/api/target/add_sample":
+            if self.runtime_pipeline is not None:
+                cam_id = payload.get("camera_id")
+                ok = self.runtime_pipeline.add_manual_target_sample(cam_id)
+                self._send_json({
+                    "success": ok,
+                    "size": self.runtime_pipeline.gallery.size,
+                    "manual_count": self.runtime_pipeline.gallery.manual_count,
+                    "auto_count": self.runtime_pipeline.gallery.auto_count,
+                })
+            else:
+                self._send_json({"success": False, "error": "Runtime pipeline not active"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        elif path == "/api/target/clear":
+            if self.runtime_pipeline is not None:
+                self.runtime_pipeline.clear_target()
+                self._send_json({"success": True, "message": "Target cleared"})
             else:
                 self._send_json({"success": False, "error": "Runtime pipeline not active"}, status=HTTPStatus.BAD_REQUEST)
             return

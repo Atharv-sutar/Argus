@@ -26,27 +26,16 @@ tracking:
 
 reid:
   model_name: "osnet_x0_25"
-  similarity_threshold: 0.88
-  reacquisition_threshold: 0.90
-  reference_threshold: 0.85
-  upper_threshold: 0.82
+  match_threshold: 0.85
+  auto_add_threshold: 0.90
+  auto_add_min_consecutive: 3
+  diversity_threshold: 0.96
+  max_gallery_size: 25
   min_margin: 0.05
-  w_upper: 0.40
-  w_color: 0.15
-  w_deep: 0.35
-  w_lower: 0.10
   extract_interval_frames: 5
-
-  gallery_size: 6
-  reference_samples: 4
-  reference_window_frames: 30
-  adaptive_gallery_size: 6
   min_crop_width: 24
   min_crop_height: 60
   min_sharpness: 25.0
-  redundancy_threshold: 0.90
-  temporal_window_size: 5
-  reacquisition_min_frames: 5
 
 
 

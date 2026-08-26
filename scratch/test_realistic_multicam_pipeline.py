@@ -88,7 +88,7 @@ def run_fast_realistic_multicam():
                 b_crop = bystander_cam1[(trial + f) % len(bystander_cam1)]
                 eval_b = id_mgr.evaluate_candidate_crop(b_crop, target_id)
                 tr_b = Track(track_id=101, box=BoundingBox(10.0 + f*2, 10.0, 100.0 + f*2, 200.0), state=TrackState.TRACKED)
-                ev_cam1.register_observation(101, f, float(f * 33.3), 1.0, eval_b.candidate_score, 0.0, eval_b.is_match, tr_b.box)
+                ev_cam1.register_observation(101, f, f * 33.3, 1.0, eval_b.candidate_score, 0.0, eval_b.is_match, tr_b.box)
                 dec = ev_cam1.evaluate_all_candidates([(tr_b, eval_b.candidate_score, eval_b.is_match, 1.0)], target_id, is_reacquisition=True)
                 if dec.is_confirmed and dec.best_track_id == 101:
                     false_adoptions += 1
@@ -108,8 +108,8 @@ def run_fast_realistic_multicam():
                 tr_b = Track(track_id=303, box=BoundingBox(150.0 + f*5, 20.0, 250.0 + f*5, 200.0), state=TrackState.TRACKED)
                 
                 margin = eval_t.candidate_score - eval_b.candidate_score
-                ev_cam1.register_observation(202, 10 + f, float((10 + f) * 33.3), 1.0, eval_t.candidate_score, margin, eval_t.is_match, tr_t.box)
-                ev_cam1.register_observation(303, 10 + f, float((10 + f) * 33.3), 1.0, eval_b.candidate_score, margin, eval_b.is_match, tr_b.box)
+                ev_cam1.register_observation(202, 10 + f, (10 + f) * 33.3, 1.0, eval_t.candidate_score, margin, eval_t.is_match, tr_t.box)
+                ev_cam1.register_observation(303, 10 + f, (10 + f) * 33.3, 1.0, eval_b.candidate_score, margin, eval_b.is_match, tr_b.box)
                 
                 dec = ev_cam1.evaluate_all_candidates(
                     [(tr_t, eval_t.candidate_score, eval_t.is_match, 1.0), (tr_b, eval_b.candidate_score, eval_b.is_match, 1.0)],
@@ -122,7 +122,7 @@ def run_fast_realistic_multicam():
                         frames_cam1.append(f + 1)
                         reacq_cam1_success += 1
                         # Adaptive gallery update on successful confirmation
-                        id_mgr.verified_update(t_crop, target_id, float((10 + f) * 33.3))
+                        id_mgr.verified_update(t_crop, target_id, (10 + f) * 33.3)
                         break
                     elif dec.best_track_id == 303:
                         false_adoptions += 1
@@ -149,8 +149,8 @@ def run_fast_realistic_multicam():
                     tr_b2 = Track(track_id=505, box=BoundingBox(180.0 + f*5, 30.0, 280.0 + f*5, 210.0), state=TrackState.TRACKED)
                     
                     margin2 = eval_t2.candidate_score - eval_b2.candidate_score
-                    ev_cam2.register_observation(404, 30 + f, float((30 + f) * 33.3), 1.0, eval_t2.candidate_score, margin2, eval_t2.is_match, tr_t2.box)
-                    ev_cam2.register_observation(505, 30 + f, float((30 + f) * 33.3), 1.0, eval_b2.candidate_score, margin2, eval_b2.is_match, tr_b2.box)
+                    ev_cam2.register_observation(404, 30 + f, (30 + f) * 33.3, 1.0, eval_t2.candidate_score, margin2, eval_t2.is_match, tr_t2.box)
+                    ev_cam2.register_observation(505, 30 + f, (30 + f) * 33.3, 1.0, eval_b2.candidate_score, margin2, eval_b2.is_match, tr_b2.box)
                     
                     dec2 = ev_cam2.evaluate_all_candidates(
                         [(tr_t2, eval_t2.candidate_score, eval_t2.is_match, 1.0), (tr_b2, eval_b2.candidate_score, eval_b2.is_match, 1.0)],

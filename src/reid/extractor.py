@@ -56,7 +56,7 @@ class PyTorchReIDExtractor(BaseReID):
             elif "mobilenet" in self.model_name:
                 import torchvision.models as models
                 backbone = models.mobilenet_v3_small(weights=models.MobileNet_V3_Small_Weights.DEFAULT)
-                backbone.classifier = torch.nn.Identity()
+                backbone.classifier = torch.nn.Sequential(torch.nn.Identity())
                 self._model = backbone.to(self._device).eval()
                 self.feature_dim = 576
             else:

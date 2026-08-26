@@ -1,10 +1,10 @@
-"""Multi-camera pipeline coordinator orchestrating topology-aware search and handoff."""
+"""Unified surveillance pipeline coordinator with target-only gallery and graph-aware search."""
 
 from __future__ import annotations
 
 import logging
 import time
-from typing import Callable, Dict, Generator, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
 import numpy as np
 
 from src.camera.capture import OpenCVCamera, SyntheticCamera
@@ -17,106 +17,141 @@ from src.core.multi_camera_types import (
     SearchState,
     SourceType,
 )
-from src.core.types import BoundingBox, DetectionResult, Target, TargetState, Track, TrackResult
+from src.core.types import BoundingBox, DetectionResult, Embedding, Target, TargetState, Track, TrackResult
 from src.detection.yolo_detector import YOLODetector
-from src.identity.manager import IdentityManager
 from src.multi_camera.camera_graph import CameraGraph
 from src.multi_camera.camera_node import CameraNode
 from src.multi_camera.search_manager import SearchManager
-from src.pipeline.single_camera import SingleCameraPipeline
+from src.pipeline.camera_worker import CameraWorker
 from src.reid.extractor import PyTorchReIDExtractor
-from src.reid.quality import CropQualityEvaluator
+from src.reid.gallery import TargetGallery
+from src.reid.quality import ReIDCropQuality
 from src.target.manager import TargetManager
 from src.tracking.byte_tracker import ByteTracker
 from src.visualization.annotator import FrameAnnotator
 
 logger = logging.getLogger(__name__)
 
-GLOBAL_TARGET_IDENTITY_ID = "target_0"
-
 
 class MultiCameraPipeline:
     """
-    Orchestrates real-time multi-camera person surveillance and tracking.
+    Unified multi-camera surveillance pipeline.
 
     Key Invariants:
-    1. A single shared IdentityManager maintains the global target identity ('target_0')
-       across all cameras. Local tracker IDs remain strictly local.
-    2. Only the active camera (and neighbor cameras during active search) run
-       expensive AI inference. Standby cameras do not consume AI compute.
-    3. Cross-camera handoff occurs only after multi-frame ReID confirmation
-       against the immutable global reference gallery.
+    1. Target-Only Multi-Image Gallery: Holds up to N appearance samples for the single
+       actively tracked target. Manual entries are protected from eviction.
+    2. Exact Vectorized Matching: All candidate matching is computed in-memory via max-similarity
+       matrix multiplication against the target gallery.
+    3. Active-Set Inference Scaling: Only the active camera (and adjacent neighbors during
+       target loss) run detection and ReID. Standby cameras do not consume AI compute.
+    4. Single & Multi-Camera Unification: A single-camera system is treated as a 1-node graph (0 edges),
+       sharing identical tracking, gallery management, and UI logic.
     """
 
     def __init__(
         self,
         graph: CameraGraph,
         config: AppConfig,
-        identity_manager: Optional[IdentityManager] = None,
+        target_manager: Optional[TargetManager] = None,
+        reid_extractor: Optional[PyTorchReIDExtractor] = None,
         detector_factory: Optional[Callable[[], BaseDetector]] = None,
         tracker_factory: Optional[Callable[[], BaseTracker]] = None,
         camera_factory: Optional[Callable[[CameraNodeConfig], BaseCamera]] = None,
         shared_detector: Optional[BaseDetector] = None,
+        identity_manager: Optional[Any] = None,
     ) -> None:
         self.graph = graph
         self.config = config
         self.search_config = config.multi_camera.search
 
-        # Shared ReID & Identity Manager across all cameras
-        if identity_manager is not None:
-            self.identity_manager = identity_manager
+        # 1. ReID Extractor
+        if reid_extractor is not None:
+            self.reid_extractor = reid_extractor
+        elif identity_manager is not None and hasattr(identity_manager, "reid_extractor"):
+            self.reid_extractor = identity_manager.reid_extractor
         else:
-            reid_extractor = PyTorchReIDExtractor(
+            self.reid_extractor = PyTorchReIDExtractor(
                 model_name=config.reid.model_name,
                 device=config.inference.device,
             )
-            quality_eval = CropQualityEvaluator(
+
+        # 2. Target Gallery & Target Manager
+        if target_manager is not None:
+            self.target_manager = target_manager
+        else:
+            quality_eval = ReIDCropQuality(
                 min_width=config.reid.min_crop_width,
                 min_height=config.reid.min_crop_height,
                 min_sharpness=config.reid.min_sharpness,
             )
-            self.identity_manager = IdentityManager(
-                reid_extractor=reid_extractor,
-                similarity_threshold=config.reid.similarity_threshold,
-                reference_threshold=config.reid.reference_threshold,
-                upper_threshold=config.reid.upper_threshold,
-                min_margin=config.reid.min_margin,
-                max_reference_samples=config.reid.reference_samples,
-                max_gallery_size=config.reid.adaptive_gallery_size,
-                redundancy_threshold=config.reid.redundancy_threshold,
+            gallery = TargetGallery(
+                reid_extractor=self.reid_extractor,
                 quality_evaluator=quality_eval,
-                w_upper=config.reid.w_upper,
-                w_color=config.reid.w_color,
-                w_deep=config.reid.w_deep,
-                w_lower=config.reid.w_lower,
+                max_size=config.reid.max_gallery_size,
+                match_threshold=config.reid.match_threshold,
+                auto_add_threshold=config.reid.auto_add_threshold,
+                auto_add_min_consecutive=config.reid.auto_add_min_consecutive,
+                diversity_threshold=config.reid.diversity_threshold,
+            )
+            self.target_manager = TargetManager(
+                gallery=gallery,
+                min_margin=config.reid.min_margin,
             )
 
-
-
-        # Factories for per-camera pipeline construction
+        # 3. Factories
         self._shared_detector = shared_detector
         self._detector_factory = detector_factory or self._default_detector_factory
         self._tracker_factory = tracker_factory or self._default_tracker_factory
         self._camera_factory = camera_factory or self._default_camera_factory
 
-        # Node runtime states and single camera pipelines
+        # 4. Runtime state & Camera Workers
         self._nodes: Dict[str, CameraNode] = {}
-        self._pipelines: Dict[str, SingleCameraPipeline] = {}
+        self._workers: Dict[str, CameraWorker] = {}
         self._annotators: Dict[str, FrameAnnotator] = {}
 
-        # Search manager
+        # 5. Search manager
         self.search_manager = SearchManager(self.graph, self.search_config)
 
-        # Active camera tracking
+        # 6. Active tracking state
         self._active_camera_id: Optional[str] = None
         self._target_lost_timestamp: float = 0.0
         self._handoff_timestamp: float = 0.0
         self._is_running: bool = False
         self._transit_history: List[Dict[str, Any]] = []
+        self._frame_count: int = 0
+        self.reid_interval: int = config.reid.extract_interval_frames
 
-
-        # Initialize camera nodes from graph
+        # Sync nodes from graph
         self._sync_nodes_with_graph()
+
+    @property
+    def gallery(self) -> TargetGallery:
+        """The single target appearance gallery."""
+        return self.target_manager.gallery
+
+    @property
+    def _pipelines(self) -> Dict[str, CameraWorker]:
+        """Backward-compatible alias for _workers."""
+        return self._workers
+
+    @property
+    def active_camera_id(self) -> Optional[str]:
+        return self._active_camera_id
+
+    @property
+    def handoff_timestamp(self) -> float:
+        return self._handoff_timestamp
+
+    @property
+    def target_state(self) -> str:
+        """Current target state across the active camera."""
+        if self.target_manager.target:
+            return self.target_manager.target.state.value
+        return "UNSELECTED"
+
+    @property
+    def transit_history(self) -> List[Dict[str, Any]]:
+        return list(self._transit_history)
 
     def _default_detector_factory(self) -> BaseDetector:
         if self._shared_detector is None:
@@ -153,15 +188,15 @@ class MultiCameraPipeline:
         )
 
     def _sync_nodes_with_graph(self) -> None:
-        """Instantiate/sync CameraNode objects for all nodes defined in the graph."""
+        """Instantiate/sync CameraNode and CameraWorker objects for all nodes in the graph."""
         graph_ids = set(self.graph.all_camera_ids())
 
         # Remove deleted nodes
         for cid in list(self._nodes.keys()):
             if cid not in graph_ids:
-                if cid in self._pipelines:
-                    self._pipelines[cid].stop()
-                    del self._pipelines[cid]
+                if cid in self._workers:
+                    self._workers[cid].stop()
+                    del self._workers[cid]
                 del self._nodes[cid]
 
         # Add new nodes
@@ -178,10 +213,10 @@ class MultiCameraPipeline:
                         font_scale=self.config.visualization.font_scale,
                     )
 
-    def _get_or_create_pipeline(self, camera_id: str) -> Optional[SingleCameraPipeline]:
-        """Lazy-instantiates SingleCameraPipeline for a given camera node."""
-        if camera_id in self._pipelines:
-            return self._pipelines[camera_id]
+    def _get_or_create_worker(self, camera_id: str) -> Optional[CameraWorker]:
+        """Lazy-instantiates CameraWorker for a given camera node."""
+        if camera_id in self._workers:
+            return self._workers[camera_id]
 
         node = self._nodes.get(camera_id)
         if node is None or not node.config.enabled:
@@ -190,30 +225,22 @@ class MultiCameraPipeline:
         camera = self._camera_factory(node.config)
         detector = self._detector_factory()
         tracker = self._tracker_factory()
-        target_manager = TargetManager(min_margin=self.config.reid.min_margin)
         annotator = self._annotators.get(camera_id) or FrameAnnotator()
 
-        pipeline = SingleCameraPipeline(
+        worker = CameraWorker(
             camera=camera,
             detector=detector,
             tracker=tracker,
-            target_manager=target_manager,
-            identity_manager=self.identity_manager,
             annotator=annotator,
             camera_id=camera_id,
-            reid_interval=self.config.reid.extract_interval_frames,
-            min_margin=self.config.reid.min_margin,
-            identity_key=GLOBAL_TARGET_IDENTITY_ID,
-            reference_window_frames=self.config.reid.reference_window_frames,
         )
-        self._pipelines[camera_id] = pipeline
+        self._workers[camera_id] = worker
         node.mark_online()
-        return pipeline
+        return worker
 
-
-    @property
-    def active_camera_id(self) -> Optional[str]:
-        return self._active_camera_id
+    def _get_or_create_pipeline(self, camera_id: str) -> Optional[CameraWorker]:
+        """Backward-compatible alias for _get_or_create_worker."""
+        return self._get_or_create_worker(camera_id)
 
     def get_camera_status(self, camera_id: str) -> Optional[CameraStatus]:
         node = self._nodes.get(camera_id)
@@ -225,33 +252,38 @@ class MultiCameraPipeline:
     def select_target_on_camera(
         self, camera_id: str, x: float, y: float
     ) -> Optional[int]:
-        """Select a target at (x, y) on the specified camera, making it the active camera."""
+        """
+        Manually select target at pixel coordinates (x, y) on the specified camera.
+        Resets gallery and seeds it with the newly clicked person crop.
+        """
         self._sync_nodes_with_graph()
-        pipeline = self._get_or_create_pipeline(camera_id)
-        if pipeline is None:
+        worker = self._get_or_create_worker(camera_id)
+        if worker is None:
             logger.warning(f"Cannot select target: camera '{camera_id}' unavailable")
             return None
 
-        # If pipeline has not processed a frame yet, capture and process one to get tracks
-        if pipeline._last_track_result is None and pipeline.camera.is_opened():
-            success, frame, ts_ms = pipeline.camera.read()
+        # Capture and process frame if worker has not processed one yet
+        if worker._last_track_result is None and worker.camera.is_opened():
+            success, frame, ts_ms = worker.read_frame()
             if success and frame is not None:
-                pipeline.process_frame(frame, ts_ms)
+                worker.process_frame(frame, ts_ms)
 
-        # Deselect old active camera if different (preserving shared global identity)
-        if self._active_camera_id and self._active_camera_id != camera_id:
-            old_p = self._pipelines.get(self._active_camera_id)
-            if old_p:
-                old_p.clear_target(clear_identity=False)
-            if self._active_camera_id in self._nodes:
-                self._nodes[self._active_camera_id].mark_online()
+        if worker._last_track_result is None or worker._last_frame is None:
+            return None
 
-        self._active_camera_id = camera_id
-        self.search_manager.reset()
+        selected_id = self.target_manager.select_by_point(
+            x=x,
+            y=y,
+            track_result=worker._last_track_result,
+            frame=worker._last_frame,
+            camera_id=camera_id,
+        )
 
-        selected_id = pipeline.select_target_by_point(x, y)
         if selected_id is not None:
-            self._nodes[camera_id].mark_active_target()
+            self._active_camera_id = camera_id
+            self.search_manager.reset()
+            if camera_id in self._nodes:
+                self._nodes[camera_id].mark_active_target()
             self._transit_history.append({
                 "camera_id": camera_id,
                 "timestamp": time.time(),
@@ -259,37 +291,40 @@ class MultiCameraPipeline:
                 "track_id": selected_id,
             })
             logger.info(
-                f"[MULTI-CAM] Target selected on active camera '{camera_id}' | Tracker={selected_id}"
+                f"[MULTI-CAM] Target selected on camera '{camera_id}' | Tracker={selected_id} | Gallery seeded."
             )
             return selected_id
         return None
 
     def select_target_by_id(self, camera_id: str, track_id: int) -> bool:
-        """Select a target by track ID on the specified camera."""
+        """
+        Manually select target by track ID on the specified camera.
+        Resets gallery and seeds it with the newly chosen person crop.
+        """
         self._sync_nodes_with_graph()
-        pipeline = self._get_or_create_pipeline(camera_id)
-        if pipeline is None:
+        worker = self._get_or_create_worker(camera_id)
+        if worker is None:
             return False
 
-        if pipeline._last_track_result is None and pipeline.camera.is_opened():
-            success, frame, ts_ms = pipeline.camera.read()
+        if worker._last_track_result is None and worker.camera.is_opened():
+            success, frame, ts_ms = worker.read_frame()
             if success and frame is not None:
-                pipeline.process_frame(frame, ts_ms)
+                worker.process_frame(frame, ts_ms)
 
-        if self._active_camera_id and self._active_camera_id != camera_id:
-            old_p = self._pipelines.get(self._active_camera_id)
-            if old_p:
-                old_p.clear_target(clear_identity=False)
-            if self._active_camera_id in self._nodes:
-                self._nodes[self._active_camera_id].mark_online()
+        if worker._last_track_result is None or worker._last_frame is None:
+            return False
 
-
-        self._active_camera_id = camera_id
-        self.search_manager.reset()
-
-        ok = pipeline.select_target_by_id(track_id)
-        if ok and camera_id in self._nodes:
-            self._nodes[camera_id].mark_active_target()
+        ok = self.target_manager.select_by_track_id(
+            track_id=track_id,
+            track_result=worker._last_track_result,
+            frame=worker._last_frame,
+            camera_id=camera_id,
+        )
+        if ok:
+            self._active_camera_id = camera_id
+            self.search_manager.reset()
+            if camera_id in self._nodes:
+                self._nodes[camera_id].mark_active_target()
             self._transit_history.append({
                 "camera_id": camera_id,
                 "timestamp": time.time(),
@@ -297,66 +332,118 @@ class MultiCameraPipeline:
                 "track_id": track_id,
             })
             logger.info(
-                f"[MULTI-CAM] Target selected by ID on camera '{camera_id}' | Tracker={track_id}"
+                f"[MULTI-CAM] Target selected by ID on camera '{camera_id}' | Tracker={track_id} | Gallery seeded."
             )
         return ok
 
+    def add_manual_target_sample(self, camera_id: Optional[str] = None) -> bool:
+        """
+        Human-confirmed manual capture: adds the current locked target's appearance crop
+        to the target gallery as a protected entry (is_manual=True).
+        """
+        target = self.target_manager.target
+        if not self.target_manager.is_active() or target.track_id is None:
+            logger.warning("[MULTI-CAM] Cannot add manual sample: no target currently locked.")
+            return False
+
+        cam_id = camera_id or self._active_camera_id
+        if not cam_id:
+            return False
+
+        worker = self._workers.get(cam_id)
+        if worker is None or worker._last_frame is None or worker._last_track_result is None:
+            return False
+
+        # Find current target track
+        target_track: Optional[Track] = None
+        for track in worker._last_track_result.tracks:
+            if track.track_id == target.track_id:
+                target_track = track
+                break
+
+        if target_track is None and target.last_known_box is not None:
+            # Fall back to last known box if track dropped for a frame
+            box = target.last_known_box
+        elif target_track is not None:
+            box = target_track.box
+        else:
+            return False
+
+        crop = worker.extract_crop(worker._last_frame, box)
+        if crop is None or crop.size == 0:
+            return False
+
+        added = self.target_manager.add_manual_sample(
+            crop=crop,
+            camera_id=cam_id,
+            timestamp_ms=worker._last_track_result.timestamp_ms,
+            frame_id=worker._last_track_result.frame_id,
+        )
+        return added
+
     def clear_target(self) -> None:
-        """Clear target across all cameras and reset search."""
-        for pipeline in self._pipelines.values():
-            pipeline.clear_target()
+        """Clear the target and purge its appearance gallery."""
+        self.target_manager.clear()
         for node in self._nodes.values():
             if node.is_online:
                 node.mark_online()
         self._active_camera_id = None
         self.search_manager.reset()
         self._transit_history.clear()
-        logger.info("[MULTI-CAM] Global target cleared.")
+        logger.info("[MULTI-CAM] Target cleared and gallery purged.")
 
     def step(self) -> Dict[str, Tuple[Optional[np.ndarray], Optional[TrackResult], Optional[Target]]]:
         """
-        Execute one processing cycle across the active camera and any search cameras.
-
-        Returns a dictionary mapping camera_id -> (annotated_frame, track_result, target).
-        Only includes cameras that are actively being processed (active + search).
-        Monitoring-only frame reads are handled separately by read_monitoring_frames().
+        Executes one processing cycle across the active camera and any search cameras.
+        Returns mapping: camera_id -> (annotated_frame, track_result, target).
         """
         self._sync_nodes_with_graph()
+        self._frame_count += 1
         results: Dict[str, Tuple[Optional[np.ndarray], Optional[TrackResult], Optional[Target]]] = {}
         now = time.time()
 
-        # 1. If no active camera, pick the first available enabled camera as default
+        # 1. Default active camera if none selected
         if not self._active_camera_id:
             enabled_ids = [cid for cid, n in self._nodes.items() if n.config.enabled]
             if enabled_ids:
                 self._active_camera_id = enabled_ids[0]
 
         # 2. Process Active Camera
-        active_pipeline = self._get_or_create_pipeline(self._active_camera_id) if self._active_camera_id else None
-        active_target: Optional[Target] = None
+        active_cam_id = self._active_camera_id
+        active_worker = self._get_or_create_worker(active_cam_id) if active_cam_id else None
+        active_track_res: Optional[TrackResult] = None
+        active_frame: Optional[np.ndarray] = None
 
-        if active_pipeline and active_pipeline.camera.is_opened():
-            active_pipeline.target_evaluation_enabled = True
-            success, frame, ts_ms = active_pipeline.camera.read()
+        if active_cam_id is not None and active_worker and active_worker.camera.is_opened():
+            success, frame, ts_ms = active_worker.read_frame()
             if success and frame is not None:
-                self._nodes[self._active_camera_id].last_frame = frame
-                det_res, track_res, active_target, ann_frame = active_pipeline.process_frame(frame, ts_ms)
-                self._nodes[self._active_camera_id].fps = active_pipeline._fps
-                results[self._active_camera_id] = (ann_frame, track_res, active_target)
+                active_frame = frame
+                self._nodes[active_cam_id].last_frame = frame
+                det_res, active_track_res = active_worker.process_frame(frame, ts_ms)
+                self._nodes[active_cam_id].fps = active_worker.fps
+
+                # Target Appearance Evaluation on Active Camera
+                self._evaluate_active_camera_target(active_worker, frame, active_track_res, ts_ms)
+
+                ann_frame = active_worker.annotate(frame, active_track_res, self.target_manager.target)
+                results[active_cam_id] = (ann_frame, active_track_res, self.target_manager.target)
             else:
-                self._nodes[self._active_camera_id].mark_offline()
-        elif self._active_camera_id:
-            self._nodes[self._active_camera_id].mark_offline()
+                self._nodes[active_cam_id].mark_offline()
+        elif active_cam_id is not None:
+            self._nodes[active_cam_id].mark_offline()
 
         # 3. Check Target State on Active Camera
+        target = self.target_manager.target
         target_is_active = (
-            active_target is not None
-            and active_target.state in (TargetState.TRACKING, TargetState.OCCLUDED, TargetState.LOCKED, TargetState.ACQUIRING_REFERENCE)
+            self.target_manager.is_active()
+            and target.state in (TargetState.TRACKING, TargetState.OCCLUDED, TargetState.LOCKED)
         )
-        target_is_lost = (active_target is not None and active_target.state in (TargetState.LOST, TargetState.UNCERTAIN))
+        target_is_lost = (
+            self.target_manager.is_active()
+            and target.state in (TargetState.LOST, TargetState.UNCERTAIN)
+        )
 
         if target_is_active:
-            # Target is healthy on active camera
             if self.search_manager.is_searching:
                 self.search_manager.reset()
                 self._deactivate_search_cameras()
@@ -365,10 +452,9 @@ class MultiCameraPipeline:
                 self._nodes[self._active_camera_id].mark_active_target()
 
         elif target_is_lost and self._active_camera_id:
-            # Target lost on active camera!
             has_adjacent_cams = len(self.graph.get_neighbors(self._active_camera_id, 1)) > 0
             if not has_adjacent_cams:
-                # Single camera or isolated node: hold LOST state on current camera without futile search loop
+                # Single camera or isolated node: hold LOST state without futile search
                 if self.search_manager.is_searching:
                     self.search_manager.reset()
                     self._deactivate_search_cameras()
@@ -381,149 +467,227 @@ class MultiCameraPipeline:
                         f"Initiating graph search on {len(search_cams)} adjacent cameras."
                     )
                     self._activate_search_cameras([cid for cid, _ in search_cams])
-                else:
-                    logger.info(
-                        f"[MULTI-CAM] Target LOST on camera '{self._active_camera_id}'. "
-                        f"No reachable search cameras in graph."
-                    )
             else:
-                # Search is in progress, check for radius expansion or timeout
                 elapsed_s = now - self._target_lost_timestamp
                 expansion = self.search_manager.tick(elapsed_s)
                 if expansion is not None and len(expansion) > 0:
                     self._activate_search_cameras([cid for cid, _ in expansion])
                 elif expansion == []:
-                    # Search timed out
                     logger.warning("[MULTI-CAM] Multi-camera search timed out without recovery.")
                     self._deactivate_search_cameras()
 
         # 4. Process Search Cameras
-        progress = self.search_manager.get_progress()
-        candidate_recovered_camera: Optional[str] = None
-        active_search_set = set(progress.active_cameras)
-
-        # Ensure non-search pipelines do not run target evaluation
-        for cid, pipe in self._pipelines.items():
-            if cid != self._active_camera_id and cid not in active_search_set:
-                pipe.target_evaluation_enabled = False
+        candidate_recovered_cam: Optional[str] = None
+        candidate_recovered_track: Optional[Track] = None
+        candidate_recovered_crop: Optional[np.ndarray] = None
+        candidate_recovered_emb: Optional[Embedding] = None
 
         if self.search_manager.is_searching:
+            progress = self.search_manager.get_progress()
             for search_cam_id in progress.active_cameras:
                 if search_cam_id == self._active_camera_id:
                     continue
-                s_pipe = self._get_or_create_pipeline(search_cam_id)
-                if not s_pipe or not s_pipe.camera.is_opened():
+                s_worker = self._get_or_create_worker(search_cam_id)
+                if not s_worker or not s_worker.camera.is_opened():
                     continue
 
-                s_pipe.target_evaluation_enabled = True
-                success, s_frame, s_ts_ms = s_pipe.camera.read()
-                if not success or s_frame is None:
+                s_success, s_frame, s_ts_ms = s_worker.read_frame()
+                if not s_success or s_frame is None:
                     continue
 
                 self._nodes[search_cam_id].last_frame = s_frame
-                # Process frame headless to detect/track and test candidates against global ReID
-                s_det, s_track, s_target = s_pipe.process_frame_headless(s_frame, s_ts_ms)
-                s_ann = s_pipe.annotator.annotate(
-                    frame=s_frame,
-                    track_result=s_track,
-                    target=s_target,
-                    fps=s_pipe._fps,
-                    camera_id=search_cam_id,
-                )
-                results[search_cam_id] = (s_ann, s_track, s_target)
+                s_det, s_track = s_worker.process_frame(s_frame, s_ts_ms)
+                self._nodes[search_cam_id].fps = s_worker.fps
 
-                # Check if this search camera found the target
-                if s_target and s_target.state == TargetState.TRACKING:
-                    logger.info(
-                        f"[MULTI-CAM CANDIDATE] Candidate verified on '{search_cam_id}' (Tracker: {s_target.track_id})"
+                # Match candidate detections against target gallery
+                if self.target_manager.is_active() and not self.gallery.is_empty and s_track.count > 0:
+                    rec_track, rec_crop, rec_emb, rec_sim = self._match_candidates_against_gallery(
+                        s_worker, s_frame, s_track
                     )
-                    self.search_manager.on_candidate_found(search_cam_id, 0.85)
-                    candidate_recovered_camera = search_cam_id
-                    break
-                else:
-                    self.search_manager.on_candidate_lost(search_cam_id)
+                    if rec_track is not None and rec_sim >= self.config.reid.match_threshold:
+                        logger.info(
+                            f"[MULTI-CAM RECOVERY] Target identified on '{search_cam_id}' (Track={rec_track.track_id}, sim={rec_sim:.3f})"
+                        )
+                        self.search_manager.on_candidate_found(search_cam_id, rec_sim)
+                        candidate_recovered_cam = search_cam_id
+                        candidate_recovered_track = rec_track
+                        candidate_recovered_crop = rec_crop
+                        candidate_recovered_emb = rec_emb
+                        break
 
-        # 5. Handle Cross-Camera Handoff if confirmed
-        if candidate_recovered_camera:
-            self._perform_handoff(candidate_recovered_camera)
+                s_ann = s_worker.annotate(s_frame, s_track, None)
+                results[search_cam_id] = (s_ann, s_track, None)
+
+        # 5. Cross-Camera Handoff
+        if candidate_recovered_cam and candidate_recovered_track:
+            self._perform_handoff(
+                candidate_recovered_cam,
+                candidate_recovered_track,
+                candidate_recovered_crop,
+                candidate_recovered_emb,
+            )
+
+        # 6. Read standby camera frames for operator surveillance UI (No AI overhead)
+        active_and_search = {self._active_camera_id} if self._active_camera_id else set()
+        if self.search_manager.is_searching:
+            active_and_search.update(self.search_manager.get_progress().active_cameras)
+
+        for cid, node in self._nodes.items():
+            if cid not in active_and_search and node.config.enabled:
+                s_worker = self._get_or_create_worker(cid)
+                if s_worker and s_worker.camera.is_opened():
+                    s_ok, s_f, _ = s_worker.read_frame()
+                    if s_ok and s_f is not None:
+                        node.last_frame = s_f
+                        if not node.is_online:
+                            node.mark_online()
+                        if cid not in results:
+                            results[cid] = (s_f, None, None)
+
+        # Cache latest annotated/raw frames for web streaming
+        for cid, (f, _, _) in results.items():
+            if f is not None:
+                self._nodes[cid].last_frame = f
 
         return results
 
-    def read_monitoring_frames(self) -> Dict[str, np.ndarray]:
+    def _evaluate_active_camera_target(
+        self,
+        worker: CameraWorker,
+        frame: np.ndarray,
+        track_res: TrackResult,
+        timestamp_ms: float,
+    ) -> None:
         """
-        Grab a single live frame from each enabled camera WITHOUT running AI processing.
-
-        Used by the MONITORING UI state to show live feeds in the camera grid.
-        Cameras are lazily initialized on first call.
+        Manages target tracking continuity, ReID verification, candidate reassociation,
+        and automatic gallery accumulation on the active camera.
         """
-        self._sync_nodes_with_graph()
-        frames: Dict[str, np.ndarray] = {}
+        target = self.target_manager.target
+        if not self.target_manager.is_active():
+            return
 
-        for cid, node in self._nodes.items():
-            if not node.config.enabled:
-                continue
-            pipe = self._get_or_create_pipeline(cid)
-            if pipe and pipe.camera.is_opened():
-                success, frame, _ = pipe.camera.read()
-                if success and frame is not None:
-                    node.last_frame = frame
-                    frames[cid] = frame
-                    if not node.is_online:
-                        node.mark_online()
+        # Check if the locked track is in track_res
+        current_track: Optional[Track] = None
+        for track in track_res.tracks:
+            if track.track_id == target.track_id:
+                current_track = track
+                break
 
-        return frames
+        should_reid = (self._frame_count % self.reid_interval == 0) or (target.state == TargetState.LOST)
 
-    def read_camera_frame(self, camera_id: str) -> Optional[np.ndarray]:
-        """Read a single live frame from a specific camera without AI processing."""
-        pipe = self._get_or_create_pipeline(camera_id)
-        if pipe and pipe.camera.is_opened():
-            success, frame, _ = pipe.camera.read()
-            if success and frame is not None:
-                if camera_id in self._nodes:
-                    self._nodes[camera_id].last_frame = frame
-                return frame
-        return None
+        if current_track is not None:
+            if should_reid and not self.gallery.is_empty:
+                crop = worker.extract_crop(frame, current_track.box)
+                if crop is not None and crop.size > 0:
+                    emb = self.reid_extractor.extract(crop)
+                    max_sim, _ = self.gallery.match(emb)
+                    if max_sim < self.config.reid.match_threshold:
+                        # Tracker occupant mismatch (bystander swapped into same ID) -> transition to LOST
+                        self.target_manager.mark_lost(timestamp_ms)
+                        return
 
-    def process_single_camera_frame(self, camera_id: str) -> Optional[Tuple[np.ndarray, TrackResult, Target]]:
+                    self.target_manager.mark_tracking(current_track, track_res.frame_id, timestamp_ms)
+                    # Try automatic gallery growth
+                    if max_sim >= self.config.reid.auto_add_threshold:
+                        self.gallery.add_auto(
+                            crop=crop,
+                            embedding=emb,
+                            candidate_similarity=max_sim,
+                            camera_id=self._active_camera_id or "camera_0",
+                            timestamp_ms=timestamp_ms,
+                            frame_id=track_res.frame_id,
+                            track_id=current_track.track_id,
+                        )
+                else:
+                    self.target_manager.mark_tracking(current_track, track_res.frame_id, timestamp_ms)
+            else:
+                self.target_manager.mark_tracking(current_track, track_res.frame_id, timestamp_ms)
+        else:
+            # Target not found by motion tracker! Match all candidates in frame
+            if not self.gallery.is_empty and track_res.count > 0:
+                best_tr, best_cr, best_em, best_score = self._match_candidates_against_gallery(
+                    worker, frame, track_res
+                )
+                if best_tr is not None and best_score >= self.config.reid.match_threshold:
+                    self.target_manager.reassociate_target(
+                        track=best_tr,
+                        frame_id=track_res.frame_id,
+                        timestamp_ms=timestamp_ms,
+                        reid_verified=True,
+                    )
+                    # Auto-add reacquired target viewpoint
+                    if best_cr is not None and best_em is not None:
+                        self.gallery.add_auto(
+                            crop=best_cr,
+                            embedding=best_em,
+                            candidate_similarity=best_score,
+                            camera_id=self._active_camera_id or "camera_0",
+                            timestamp_ms=timestamp_ms,
+                            frame_id=track_res.frame_id,
+                            track_id=best_tr.track_id,
+                        )
+                else:
+                    self.target_manager.mark_lost(timestamp_ms)
+            else:
+                self.target_manager.mark_lost(timestamp_ms)
+
+    def _match_candidates_against_gallery(
+        self,
+        worker: CameraWorker,
+        frame: np.ndarray,
+        track_res: TrackResult,
+    ) -> Tuple[Optional[Track], Optional[np.ndarray], Optional[Embedding], float]:
         """
-        Process a single frame from a specific camera through the full AI pipeline.
-        Returns (annotated_frame, track_result, target) or None.
+        Extracts crops and embeddings for all candidate tracks in a frame
+        and matches them against the target gallery via batch matrix multiply.
         """
-        pipe = self._get_or_create_pipeline(camera_id)
-        if not pipe or not pipe.camera.is_opened():
-            return None
+        valid_candidates: List[Tuple[Track, np.ndarray, Embedding]] = []
+        for track in track_res.tracks:
+            crop = worker.extract_crop(frame, track.box)
+            if crop is not None and crop.size > 0:
+                emb = self.reid_extractor.extract(crop)
+                valid_candidates.append((track, crop, emb))
 
-        success, frame, ts_ms = pipe.camera.read()
-        if not success or frame is None:
-            return None
+        if not valid_candidates:
+            return None, None, None, 0.0
 
-        if camera_id in self._nodes:
-            self._nodes[camera_id].last_frame = frame
+        embs = [c[2] for c in valid_candidates]
+        match_results = self.gallery.match_batch(embs)
 
-        det_res, track_res, target, ann_frame = pipe.process_frame(frame, ts_ms)
-        if camera_id in self._nodes:
-            self._nodes[camera_id].fps = pipe._fps
-        return ann_frame, track_res, target
+        # Find best candidate with margin check
+        scores = [res[0] for res in match_results]
+        ranked_indices = np.argsort(scores)[::-1]
+        best_idx = int(ranked_indices[0])
+        best_score = scores[best_idx]
+        second_best_score = scores[ranked_indices[1]] if len(scores) > 1 else 0.0
+        margin = best_score - second_best_score
 
-    @property
-    def handoff_timestamp(self) -> float:
-        """Timestamp when the last handoff was performed (0.0 if none)."""
-        return self._handoff_timestamp
+        if best_score >= self.config.reid.match_threshold and margin >= self.config.reid.min_margin:
+            best_track, best_crop, best_emb = valid_candidates[best_idx]
+            return best_track, best_crop, best_emb, best_score
+
+        return None, None, None, best_score
 
     def _activate_search_cameras(self, camera_ids: List[str]) -> None:
-        """Activate AI processing on designated search camera nodes."""
+        """Activate AI processing on search cameras."""
         for cid in camera_ids:
             if cid in self._nodes:
                 self._nodes[cid].activate_ai()
-            self._get_or_create_pipeline(cid)
+            self._get_or_create_worker(cid)
 
     def _deactivate_search_cameras(self) -> None:
-        """Deactivate AI processing on search cameras when search finishes."""
+        """Deactivate AI processing on search cameras."""
         for cid, node in self._nodes.items():
             if cid != self._active_camera_id and node.status == CameraStatus.SEARCHING:
                 node.deactivate_ai()
 
-    def _perform_handoff(self, new_camera_id: str) -> None:
+    def _perform_handoff(
+        self,
+        new_camera_id: str,
+        recovered_track: Track,
+        crop: Optional[np.ndarray] = None,
+        embedding: Optional[Embedding] = None,
+    ) -> None:
         """Executes active camera handoff to the newly recovered camera."""
         old_camera_id = self._active_camera_id
         logger.info(
@@ -531,51 +695,157 @@ class MultiCameraPipeline:
             f"Handing off active camera: '{old_camera_id}' -> '{new_camera_id}'"
         )
 
-        # Deactivate old camera (preserving global identity in shared IdentityManager)
         if old_camera_id and old_camera_id in self._nodes:
             self._nodes[old_camera_id].mark_online()
-            old_p = self._pipelines.get(old_camera_id)
-            if old_p:
-                old_p.target_evaluation_enabled = False
-                old_p.clear_target(clear_identity=False)
 
-        # Update active camera
         self._active_camera_id = new_camera_id
         if new_camera_id in self._nodes:
             self._nodes[new_camera_id].mark_active_target()
-        new_p = self._pipelines.get(new_camera_id)
-        if new_p:
-            new_p.target_evaluation_enabled = True
 
-        # Record handoff timestamp for UI confirmation delay
+        # Reassociate target to the track on the new camera
+        self.target_manager.reassociate_target(
+            track=recovered_track,
+            frame_id=0,
+            timestamp_ms=time.time() * 1000.0,
+            reid_verified=True,
+        )
+
+        # Auto-enroll cross-camera viewpoint
+        if crop is not None and embedding is not None:
+            self.gallery.add_auto(
+                crop=crop,
+                embedding=embedding,
+                candidate_similarity=0.95,
+                camera_id=new_camera_id,
+                timestamp_ms=time.time() * 1000.0,
+                track_id=recovered_track.track_id,
+            )
+
         self._handoff_timestamp = time.time()
         self._transit_history.append({
             "camera_id": new_camera_id,
             "from_camera": old_camera_id,
             "timestamp": self._handoff_timestamp,
             "event": "HANDOFF",
+            "track_id": recovered_track.track_id,
         })
 
-        # Reset search manager and deactivate search cameras
         self.search_manager.reset()
         self._deactivate_search_cameras()
         self._target_lost_timestamp = 0.0
 
-    @property
-    def transit_history(self) -> List[Dict[str, Any]]:
-        """List of chronological target transition events across cameras."""
-        return list(self._transit_history)
+    def process_single_camera_frame(
+        self, camera_id: str
+    ) -> Optional[Tuple[np.ndarray, TrackResult, Optional[Target]]]:
+        """Runs detection and tracking for a single camera (used in CAMERA_FOCUS state)."""
+        self._sync_nodes_with_graph()
+        worker = self._get_or_create_worker(camera_id)
+        if worker and worker.camera.is_opened():
+            success, frame, ts_ms = worker.read_frame()
+            if success and frame is not None:
+                self._nodes[camera_id].last_frame = frame
+                det_res, track_res = worker.process_frame(frame, ts_ms)
+                self._nodes[camera_id].fps = worker.fps
+                ann_frame = worker.annotate(frame, track_res, self.target_manager.target)
+                return ann_frame, track_res, self.target_manager.target
+            else:
+                self._nodes[camera_id].mark_offline()
+        return None
 
-    @property
-    def target_state(self) -> str:
-        """Current target state across the active surveillance camera."""
-        if self._active_camera_id:
-            p = self._pipelines.get(self._active_camera_id)
-            if p and p.target_manager.target:
-                return p.target_manager.target.state.value
-        return "UNSELECTED"
+    def read_monitoring_frames(self) -> Dict[str, np.ndarray]:
+        """
+        Grab a single live frame from each enabled camera WITHOUT running AI processing.
+        Used by the MONITORING UI state.
+        """
+        self._sync_nodes_with_graph()
+        frames: Dict[str, np.ndarray] = {}
 
-    def stream(self) -> Generator[Dict[str, Tuple[Optional[np.ndarray], Optional[TrackResult], Optional[Target]]], None, None]:
+        for cid, node in self._nodes.items():
+            if not node.config.enabled:
+                continue
+            worker = self._get_or_create_worker(cid)
+            if worker and worker.camera.is_opened():
+                success, frame, _ = worker.read_frame()
+                if success and frame is not None:
+                    frames[cid] = frame
+                    node.last_frame = frame
+                    node.mark_online()
+                else:
+                    node.mark_offline()
+        return frames
+
+    def set_active_camera(self, camera_id: str) -> bool:
+        """Sets the active focused camera in the pipeline."""
+        if camera_id in self._nodes:
+            self._active_camera_id = camera_id
+            logger.info(f"[MULTI-CAM] Active camera manually switched to '{camera_id}'")
+            return True
+        return False
+
+    def get_camera_frame_jpeg(self, camera_id: str, quality: int = 75) -> Optional[bytes]:
+        """Returns the latest JPEG bytes for a camera feed."""
+        import cv2
+        node = self._nodes.get(camera_id)
+        if node is None or node.last_frame is None:
+            # Try to grab frame directly if worker exists
+            worker = self._get_or_create_worker(camera_id)
+            if worker and worker.camera.is_opened():
+                ok, f, _ = worker.read_frame()
+                if ok and f is not None:
+                    node.last_frame = f
+                else:
+                    return None
+            else:
+                return None
+
+        frame = node.last_frame
+        if frame is None or frame.size == 0:
+            return None
+
+        ret, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        if ret:
+            return buf.tobytes()
+        return None
+
+    def get_all_camera_cards(self) -> List[Dict[str, Any]]:
+        """Returns structured metadata for all cameras in the surveillance grid."""
+        cards = []
+        progress = self.search_manager.get_progress()
+        searching_cams = set(progress.active_cameras) if self.search_manager.is_searching else set()
+
+        for cid, node in self._nodes.items():
+            cfg = node.config
+            is_active = (cid == self._active_camera_id)
+            is_searching = (cid in searching_cams)
+            
+            if is_active:
+                status_str = "ACTIVE"
+            elif is_searching:
+                status_str = f"SEARCHING (R={self.search_manager.search_state})"
+            elif node.is_online:
+                status_str = "STANDBY"
+            else:
+                status_str = "OFFLINE"
+
+            cards.append({
+                "camera_id": cid,
+                "name": cfg.name or cid,
+                "source": cfg.source,
+                "source_type": cfg.source_type.value if hasattr(cfg.source_type, "value") else str(cfg.source_type),
+                "enabled": cfg.enabled,
+                "is_active": is_active,
+                "is_searching": is_searching,
+                "status": status_str,
+                "fps": round(node.fps, 1),
+                "floor": cfg.floor,
+                "zone": cfg.zone,
+                "has_frame": (node.last_frame is not None),
+            })
+        return cards
+
+    def stream(
+        self,
+    ) -> Generator[Dict[str, Tuple[Optional[np.ndarray], Optional[TrackResult], Optional[Target]]], None, None]:
         """Continuous generator yielding multi-camera step results."""
         self._is_running = True
         try:
@@ -586,10 +856,9 @@ class MultiCameraPipeline:
             self.stop()
 
     def stop(self) -> None:
-        """Stop all camera pipelines and release resources."""
+        """Stop all camera workers and release resources."""
         self._is_running = False
-        for pipeline in self._pipelines.values():
-            pipeline.stop()
-        self._pipelines.clear()
-        logger.info("MultiCameraPipeline stopped.")
-
+        for worker in self._workers.values():
+            worker.stop()
+        self._workers.clear()
+        logger.info("[MULTI-CAM] Pipeline stopped.")

@@ -116,3 +116,8 @@ class CropQualityEvaluator:
 
         quality_score = float(0.4 * sharp_factor + 0.3 * size_factor + 0.3 * conf_factor)
         return True, quality_score, "PASSED"
+
+
+# Alias for backward/forward compatibility
+ReIDCropQuality = CropQualityEvaluator
+
