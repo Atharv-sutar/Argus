@@ -86,6 +86,7 @@ class SingleCameraPipeline:
         self._last_track_result: Optional[TrackResult] = None
         self._last_frame: Optional[np.ndarray] = None
         self._acquisition_start_frame: int = 0
+        self._consecutive_mismatches: int = 0
         self._max_mismatches_before_lost: int = 3
         self.target_evaluation_enabled: bool = True
 
@@ -124,6 +125,7 @@ class SingleCameraPipeline:
         selected_id = self.target_manager.select_by_point(x, y, self._last_track_result)
         if selected_id is not None:
             self._acquisition_start_frame = self._frame_id
+            self._consecutive_mismatches = 0
             self._register_target_appearance(selected_id)
 
             ident = self.identity_manager.get_identity(self._identity_key) if self.identity_manager else None
@@ -152,6 +154,7 @@ class SingleCameraPipeline:
         result = self.target_manager.select_by_track_id(track_id, self._last_track_result)
         if result:
             self._acquisition_start_frame = self._frame_id
+            self._consecutive_mismatches = 0
             self._register_target_appearance(track_id)
 
             ident = self.identity_manager.get_identity(self._identity_key) if self.identity_manager else None
@@ -205,6 +208,7 @@ class SingleCameraPipeline:
 
     def clear_target(self, clear_identity: bool = True) -> None:
         """Deselect the current target on this camera, optionally clearing the shared identity."""
+        self._consecutive_mismatches = 0
         self.target_manager.clear()
         if clear_identity and self.identity_manager is not None:
             self.identity_manager.clear()

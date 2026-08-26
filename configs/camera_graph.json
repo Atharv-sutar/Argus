@@ -2,18 +2,6 @@
   "version": 1,
   "cameras": [
     {
-      "camera_id": "cam_0",
-      "name": "Webcam 0",
-      "source": 0,
-      "source_type": "webcam",
-      "enabled": true,
-      "position_x": 198.1346706658796,
-      "position_y": 243.30834842763556,
-      "floor": null,
-      "zone": null,
-      "description": null
-    },
-    {
       "camera_id": "cam_1",
       "name": "Webcam 1",
       "source": 1,
@@ -26,17 +14,6 @@
       "description": null
     }
   ],
-  "edges": [
-    {
-      "source_camera_id": "cam_0",
-      "target_camera_id": "cam_1",
-      "edge_type": "adjacent",
-      "direction": "bidirectional",
-      "enabled": true,
-      "expected_min_transition_s": null,
-      "expected_typical_transition_s": null,
-      "expected_max_transition_s": null
-    }
-  ],
+  "edges": [],
   "background_map": null
 }
