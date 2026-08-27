@@ -168,13 +168,13 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
 
                 import time
                 try:
-                    while True:
+                    while self.runtime_pipeline is None or getattr(self.runtime_pipeline, "is_running", True):
                         frame_bytes = None
                         if self.runtime_pipeline is not None:
                             frame_bytes = self.runtime_pipeline.get_camera_frame_jpeg(cam_id, quality=75)
 
                         if frame_bytes is None:
-                            time.sleep(0.05)
+                            time.sleep(0.04)
                             continue
 
                         self.wfile.write(b"--frame\r\n")
@@ -184,11 +184,12 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                         self.wfile.write(b"\r\n")
                         self.wfile.flush()
                         time.sleep(0.033)  # ~30 FPS throttle
-                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError):
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError, OSError):
                     pass
                 except Exception as e:
                     logger.debug(f"Stream client disconnected for camera '{cam_id}': {e}")
                 return
+
 
         elif path.startswith("/api/camera/") and (path.endswith("/frame.jpg") or path.endswith("/frame")):
             parts = path.strip("/").split("/")
@@ -365,17 +366,24 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 # Switch active camera to this camera
                 self.runtime_pipeline.set_active_camera(cam_id)
 
+                selected_id = None
                 if track_id is not None:
-                    selected_id = self.runtime_pipeline.select_target_by_id(cam_id, int(track_id))
+                    ok = self.runtime_pipeline.select_target_by_id(cam_id, int(track_id))
+                    selected_id = int(track_id) if ok else None
                 elif x is not None and y is not None:
                     selected_id = self.runtime_pipeline.select_target_on_camera(cam_id, float(x), float(y))
-                else:
-                    selected_id = None
 
-                self._send_json({"success": selected_id is not None, "selected_id": selected_id, "camera_id": cam_id})
+                self._send_json({
+                    "success": True,
+                    "target_locked": (selected_id is not None),
+                    "selected_id": selected_id,
+                    "camera_id": cam_id,
+                    "active_camera": self.runtime_pipeline.active_camera_id,
+                })
             else:
-                self._send_json({"success": False, "error": "Runtime pipeline not active"}, status=HTTPStatus.BAD_REQUEST)
+                self._send_json({"success": False, "error": "Runtime pipeline not active or missing camera_id"}, status=HTTPStatus.BAD_REQUEST)
             return
+
 
         elif path == "/api/target/add_sample":
             if self.runtime_pipeline is not None:
@@ -485,17 +493,29 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             return None
 
 
+class ArgusHTTPServer(ThreadingHTTPServer):
+    """Threading HTTP server with graceful client disconnection handling and daemon threads."""
+    daemon_threads = True
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        exc_type, exc_val, _ = sys.exc_info()
+        if exc_type in (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError, OSError):
+            logger.debug(f"Client disconnected gracefully from {client_address}")
+            return
+        logger.debug(f"HTTP Server exception from {client_address}: {exc_val}")
+
+
 def run_ui_server(
     port: int = 8765,
     graph_file: str = "configs/camera_graph.json",
     pipeline=None,
     block: bool = True,
-) -> ThreadingHTTPServer:
+) -> ArgusHTTPServer:
     """Starts the Camera Mapping UI server."""
     MappingAPIHandler.graph_file = Path(graph_file)
     MappingAPIHandler.runtime_pipeline = pipeline
 
-    server = ThreadingHTTPServer(("127.0.0.1", port), MappingAPIHandler)
+    server = ArgusHTTPServer(("127.0.0.1", port), MappingAPIHandler)
     logger.info(f"Camera Mapping UI server running at http://127.0.0.1:{port}")
 
     if block:
@@ -510,3 +530,4 @@ def run_ui_server(
         t.start()
 
     return server
+

@@ -49,9 +49,14 @@ class TargetGallery:
         self.diversity_threshold = diversity_threshold
 
         self._entries: List[GalleryEntry] = []
+        self._manual_entries: List[GalleryEntry] = []
+        self._auto_entries: List[GalleryEntry] = []
         self._matrix: Optional[np.ndarray] = None  # shape: (N, 512)
+        self._manual_matrix: Optional[np.ndarray] = None  # shape: (M, 512)
+        self._auto_matrix: Optional[np.ndarray] = None  # shape: (A, 512)
         self._consecutive_matches: Dict[int, int] = {}  # track_id -> consecutive frames
         self._target_label: str = "target_0"
+        self.max_auto_boost: float = 0.05  # Maximum score boost an auto entry can provide over manual anchor
 
     @property
     def size(self) -> int:
@@ -63,19 +68,34 @@ class TargetGallery:
 
     @property
     def manual_count(self) -> int:
-        return sum(1 for e in self._entries if e.is_manual)
+        return len(self._manual_entries)
 
     @property
     def auto_count(self) -> int:
-        return sum(1 for e in self._entries if not e.is_manual)
+        return len(self._auto_entries)
 
     def _rebuild_matrix(self) -> None:
-        """Rebuilds the cached 2D numpy matrix of normalized embedding vectors."""
-        if not self._entries:
+        """Rebuilds the cached 2D numpy matrices for pooled, manual, and auto entries."""
+        self._manual_entries = [e for e in self._entries if e.is_manual]
+        self._auto_entries = [e for e in self._entries if not e.is_manual]
+
+        if self._entries:
+            vectors = [e.embedding.vector for e in self._entries]
+            self._matrix = np.stack(vectors, axis=0)  # shape: (N, dim)
+        else:
             self._matrix = None
-            return
-        vectors = [e.embedding.vector for e in self._entries]
-        self._matrix = np.stack(vectors, axis=0)  # shape: (N, dim)
+
+        if self._manual_entries:
+            m_vectors = [e.embedding.vector for e in self._manual_entries]
+            self._manual_matrix = np.stack(m_vectors, axis=0)  # shape: (M, dim)
+        else:
+            self._manual_matrix = None
+
+        if self._auto_entries:
+            a_vectors = [e.embedding.vector for e in self._auto_entries]
+            self._auto_matrix = np.stack(a_vectors, axis=0)  # shape: (A, dim)
+        else:
+            self._auto_matrix = None
 
     def seed(
         self,
@@ -89,6 +109,7 @@ class TargetGallery:
         """
         Clears the existing gallery and seeds it with a newly selected target.
         Bypasses similarity thresholds (human-confirmed ground truth).
+        Always enrolled as a permanent, protected manual entry (is_manual=True).
         """
         self.clear()
         self._target_label = target_label
@@ -114,12 +135,13 @@ class TargetGallery:
             frame_id=frame_id,
             confidence=1.0,
             quality_score=q_score,
+            track_id=None,
         )
         self._entries.append(entry)
         self._rebuild_matrix()
         logger.info(
             f"[TARGET_GALLERY] Seeded new target '{self._target_label}' on camera '{camera_id}' "
-            f"(dim={embedding.dim}, quality={q_score:.2f})"
+            f"(dim={embedding.dim}, quality={q_score:.2f}, protected_manual=True)"
         )
         return True
 
@@ -168,6 +190,7 @@ class TargetGallery:
             frame_id=frame_id,
             confidence=1.0,
             quality_score=q_score,
+            track_id=None,
         )
         self._entries.append(entry)
         self._rebuild_matrix()
@@ -190,10 +213,11 @@ class TargetGallery:
         """
         Automatically accumulates a verified viewpoint when sightings meet strict criteria:
         1. candidate_similarity >= auto_add_threshold
-        2. Consecutive match hold >= auto_add_min_consecutive
-        3. Quality passes quality_evaluator
-        4. Diversity check: similarity to all existing gallery entries <= diversity_threshold
-        5. Evicts oldest auto-added entry if gallery is full (never evicts manual entries)
+        2. Ground-truth anchor: similarity against manual entries >= match_threshold (if manual entries exist)
+        3. Consecutive match hold >= auto_add_min_consecutive
+        4. Quality passes quality_evaluator
+        5. Diversity check: similarity to all existing gallery entries <= diversity_threshold
+        6. Evicts oldest auto-added entry if gallery is full (never evicts manual entries)
         """
         if self.is_empty:
             return False
@@ -204,34 +228,47 @@ class TargetGallery:
                 self._consecutive_matches.pop(track_id, None)
             return False
 
-        # 2. Consecutive match hold
+        # 2. Ground-truth manual anchor check (Anti-Contamination Guard)
+        if self._manual_matrix is not None and len(self._manual_matrix) > 0:
+            m_sims = self._manual_matrix @ embedding.vector
+            max_manual_sim = float(np.max(m_sims))
+            if max_manual_sim < self.match_threshold:
+                logger.debug(
+                    f"[TARGET_GALLERY] Auto-add rejected for Track #{track_id}: "
+                    f"failed manual anchor check (sim_manual={max_manual_sim:.3f} < {self.match_threshold:.2f})"
+                )
+                if track_id is not None:
+                    self._consecutive_matches.pop(track_id, None)
+                return False
+
+        # 3. Consecutive match hold
         if track_id is not None:
             self._consecutive_matches[track_id] = self._consecutive_matches.get(track_id, 0) + 1
             if self._consecutive_matches[track_id] < self.auto_add_min_consecutive:
                 return False
-        
-        # 3. Quality evaluation
+
+        # 4. Quality evaluation
         if crop is not None and crop.size > 0:
             is_valid, q_val, reason = self.quality_evaluator.evaluate(crop)
             if not is_valid:
-                logger.debug(f"[TARGET_GALLERY] Auto-add skipped: poor quality ({reason})")
+                logger.debug(f"[TARGET_GALLERY] Auto-add skipped for Track #{track_id}: poor quality ({reason})")
                 return False
             q_score = q_val
         else:
             return False
 
-        # 4. Diversity check against existing entries
+        # 5. Diversity check against existing entries
         if self._matrix is not None and len(self._matrix) > 0:
             sims = self._matrix @ embedding.vector
             max_sim_to_gallery = float(np.max(sims))
             if max_sim_to_gallery >= self.diversity_threshold:
                 logger.debug(
-                    f"[TARGET_GALLERY] Auto-add skipped: redundant appearance "
+                    f"[TARGET_GALLERY] Auto-add skipped for Track #{track_id}: redundant appearance "
                     f"(sim={max_sim_to_gallery:.3f} >= {self.diversity_threshold:.2f})"
                 )
                 return False
 
-        # 5. Capacity management (evict oldest auto-entry only)
+        # 6. Capacity management (evict oldest auto-entry only)
         if len(self._entries) >= self.max_size:
             auto_indices = [i for i, e in enumerate(self._entries) if not e.is_manual]
             if not auto_indices:
@@ -250,60 +287,143 @@ class TargetGallery:
             frame_id=frame_id,
             confidence=candidate_similarity,
             quality_score=q_score,
+            track_id=track_id,
         )
         self._entries.append(entry)
         self._rebuild_matrix()
         logger.info(
             f"[TARGET_GALLERY] Auto-enrolled verified viewpoint ({self.size}/{self.max_size}) "
-            f"on '{camera_id}' (sim={candidate_similarity:.3f}, quality={q_score:.2f}, "
+            f"on '{camera_id}' for Track #{track_id} (sim={candidate_similarity:.3f}, quality={q_score:.2f}, "
             f"manual={self.manual_count}, auto={self.auto_count})"
         )
         return True
 
     def match(self, candidate_embedding: Embedding) -> Tuple[float, Optional[GalleryEntry]]:
         """
-        Computes max-similarity of a candidate embedding against all gallery entries.
-        Returns (max_cosine_similarity, best_matching_entry).
+        Computes ground-truth anchored max-similarity of a candidate embedding.
+        Returns (effective_cosine_similarity, best_matching_entry).
         """
         if self._matrix is None or len(self._entries) == 0:
             return 0.0, None
 
-        if candidate_embedding.dim != self._matrix.shape[1]:
-            logger.warning(
-                f"[TARGET_GALLERY] Dim mismatch in match: {candidate_embedding.dim} vs {self._matrix.shape[1]}"
-            )
-            return 0.0, None
-
-        # Direct in-memory dot product against all N gallery vectors
-        sims = self._matrix @ candidate_embedding.vector
-        best_idx = int(np.argmax(sims))
-        max_sim = float(sims[best_idx])
-        return max_sim, self._entries[best_idx]
+        res = self.match_batch([candidate_embedding])
+        return res[0]
 
     def match_batch(
         self, candidate_embeddings: List[Embedding]
     ) -> List[Tuple[float, Optional[GalleryEntry]]]:
         """
-        Batch max-similarity matching for multiple person candidates in a frame.
-        Returns list of (max_cosine_similarity, best_matching_entry).
+        Batch ground-truth anchored max-similarity matching for candidate persons.
+        Returns list of (effective_cosine_similarity, best_matching_entry).
+        """
+        details = self.match_batch_details(candidate_embeddings)
+        return [(d[0], d[3]) for d in details]
+
+    def match_batch_details(
+        self, candidate_embeddings: List[Embedding]
+    ) -> List[Tuple[float, float, float, Optional[GalleryEntry]]]:
+        """
+        Detailed batch matching returning (effective_score, manual_score, auto_score, best_entry).
+        Anchors scoring to protected manual entries so auto entries cannot hijack locks.
         """
         if not candidate_embeddings:
             return []
         if self._matrix is None or len(self._entries) == 0:
-            return [(0.0, None) for _ in candidate_embeddings]
+            return [(0.0, 0.0, 0.0, None) for _ in candidate_embeddings]
 
         # Stack candidate vectors: shape (K, dim)
         c_matrix = np.stack([c.vector for c in candidate_embeddings], axis=0)
-        # Matrix multiply: (K, dim) @ (dim, N) -> (K, N)
-        sim_matrix = c_matrix @ self._matrix.T
 
-        best_indices = np.argmax(sim_matrix, axis=1)
-        max_scores = np.max(sim_matrix, axis=1)
+        has_manual = self._manual_matrix is not None and len(self._manual_entries) > 0
+        has_auto = self._auto_matrix is not None and len(self._auto_entries) > 0
 
-        return [
-            (float(max_scores[i]), self._entries[int(best_indices[i])])
-            for i in range(len(candidate_embeddings))
-        ]
+        # 1. Compute manual similarities
+        if has_manual:
+            m_sim_matrix = c_matrix @ self._manual_matrix.T  # (K, M)
+            m_best_indices = np.argmax(m_sim_matrix, axis=1)
+            m_max_scores = np.max(m_sim_matrix, axis=1)
+        else:
+            m_best_indices = np.zeros(len(candidate_embeddings), dtype=int)
+            m_max_scores = np.zeros(len(candidate_embeddings), dtype=np.float32)
+
+        # 2. Compute auto similarities
+        if has_auto:
+            a_sim_matrix = c_matrix @ self._auto_matrix.T  # (K, A)
+            a_best_indices = np.argmax(a_sim_matrix, axis=1)
+            a_max_scores = np.max(a_sim_matrix, axis=1)
+        else:
+            a_best_indices = np.zeros(len(candidate_embeddings), dtype=int)
+            a_max_scores = np.zeros(len(candidate_embeddings), dtype=np.float32)
+
+        results: List[Tuple[float, float, float, Optional[GalleryEntry]]] = []
+
+        for i in range(len(candidate_embeddings)):
+            m_score = float(m_max_scores[i]) if has_manual else 0.0
+            a_score = float(a_max_scores[i]) if has_auto else 0.0
+
+            if has_manual:
+                if has_auto:
+                    # Ground-truth anchored: auto entries can only refine/boost up to max_auto_boost
+                    boosted_auto = min(a_score, m_score + self.max_auto_boost)
+                    if boosted_auto > m_score:
+                        effective_score = boosted_auto
+                        best_entry = self._auto_entries[int(a_best_indices[i])]
+                    else:
+                        effective_score = m_score
+                        best_entry = self._manual_entries[int(m_best_indices[i])]
+                else:
+                    effective_score = m_score
+                    best_entry = self._manual_entries[int(m_best_indices[i])]
+            elif has_auto:
+                effective_score = a_score
+                best_entry = self._auto_entries[int(a_best_indices[i])]
+            else:
+                effective_score = 0.0
+                best_entry = None
+
+            results.append((effective_score, m_score, a_score, best_entry))
+
+        return results
+
+    def rollback_auto_entries(
+        self,
+        for_track_id: Optional[int] = None,
+    ) -> int:
+        """
+        Removes auto-enrolled entries associated with for_track_id (or all auto entries if None)
+        following a lock-switch or detected drift. NEVER removes protected manual entries.
+
+        Returns:
+            Number of purged auto entries.
+        """
+        initial_count = len(self._entries)
+        kept_entries = []
+        purged_count = 0
+
+        for entry in self._entries:
+            if entry.is_manual:
+                kept_entries.append(entry)
+            else:
+                if for_track_id is None or entry.track_id == for_track_id:
+                    purged_count += 1
+                else:
+                    kept_entries.append(entry)
+
+        if purged_count > 0:
+            self._entries = kept_entries
+            self._rebuild_matrix()
+            if for_track_id is not None:
+                self._consecutive_matches.pop(for_track_id, None)
+            else:
+                self._consecutive_matches.clear()
+
+            logger.info(
+                f"[TARGET_GALLERY] Rollback: purged {purged_count} auto-enrolled entries "
+                f"(track_filter={for_track_id}). Remaining gallery size={self.size} "
+                f"(manual={self.manual_count}, auto={self.auto_count})"
+            )
+
+        return purged_count
 
     def reset_track_consensus(self, track_id: Optional[int] = None) -> None:
         """Resets consecutive match counter for a specific track or all tracks."""
@@ -321,6 +441,7 @@ class TargetGallery:
                 logger.info(f"[TARGET_GALLERY] Removed entry '{entry_id}' (remaining={self.size})")
                 return True
         return False
+
 
     def clear(self) -> None:
         """Clears all entries, matrix, and state from the gallery."""

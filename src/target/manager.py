@@ -210,6 +210,11 @@ class TargetManager:
         self.gallery.clear()
         logger.info("[TARGET] Target cleared and gallery purged.")
 
+    def rollback_auto_entries(self, for_track_id: Optional[int] = None) -> int:
+        """Purges auto-enrolled entries associated with for_track_id while keeping manual entries."""
+        return self.gallery.rollback_auto_entries(for_track_id=for_track_id)
+
+
     def reassociate_target(
         self,
         track: Track,

@@ -195,6 +195,8 @@ class GalleryEntry:
     frame_id: int = 0
     confidence: float = 1.0
     quality_score: float = 1.0
+    track_id: Optional[int] = None
+
 
 
 @dataclass

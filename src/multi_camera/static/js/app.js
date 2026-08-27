@@ -280,20 +280,22 @@ class SurveillanceApp {
 
         try {
           const res = await API.selectTarget(cam.camera_id, targetX, targetY);
-          if (res.success && res.selected_id !== null) {
-            this.showToast(`Target locked! Tracker ID: ${res.selected_id} on ${cam.name}`, 'success');
+          if (res && res.selected_id !== null && res.selected_id !== undefined) {
+            this.showToast(`Target locked! Tracker ID: ${res.selected_id} on ${cam.name || cam.camera_id}`, 'success');
             this.activeCameraId = cam.camera_id;
             this.refreshStatus();
             this.refreshGallery();
           } else {
-            // Simply switch active camera if no person was directly clicked
+            // Simply switch active camera focus
             await API.setActiveCamera(cam.camera_id);
             this.activeCameraId = cam.camera_id;
             this.updateActiveTileVisuals();
-            this.showToast(`Switched active camera to '${cam.name}'`, 'info');
+            this.refreshStatus();
+            this.showToast(`Active focus set to '${cam.name || cam.camera_id}'`, 'info');
           }
         } catch (err) {
           console.error(err);
+          this.showToast(`Camera activation error: ${err.message}`, 'error');
         }
       });
 
@@ -306,11 +308,17 @@ class SurveillanceApp {
       // Overlay button handlers
       tile.querySelector('.btn-focus-cam').addEventListener('click', async (e) => {
         e.stopPropagation();
-        await API.setActiveCamera(cam.camera_id);
-        this.activeCameraId = cam.camera_id;
-        this.updateActiveTileVisuals();
-        this.showToast(`Focused on '${cam.name}'`, 'info');
+        try {
+          await API.setActiveCamera(cam.camera_id);
+          this.activeCameraId = cam.camera_id;
+          this.updateActiveTileVisuals();
+          this.refreshStatus();
+          this.showToast(`Focused on '${cam.name || cam.camera_id}'`, 'info');
+        } catch (err) {
+          this.showToast(`Focus error: ${err.message}`, 'error');
+        }
       });
+
 
       tile.querySelector('.btn-snap-cam').addEventListener('click', async (e) => {
         e.stopPropagation();
@@ -402,6 +410,13 @@ class SurveillanceApp {
         `).join('');
       }
 
+      // Dynamic topology sync: if backend cameras list changed, re-render matrix grid
+      const backendCamIds = Object.keys(st.camera_statuses || {});
+      const localCamIds = this.cameras.map(c => c.camera_id);
+      if (backendCamIds.length !== localCamIds.length || backendCamIds.some(id => !localCamIds.includes(id))) {
+        this.loadLiveMatrix();
+      }
+
       // Update Active/Searching tile indicators in the grid
       if (this.cameras.length > 0) {
         const searchingCams = new Set(st.search_progress ? st.search_progress.active_cameras : []);
@@ -432,6 +447,7 @@ class SurveillanceApp {
       console.debug('Status poll error', e);
     }
   }
+
 
   updateRadiusStepper(radius, stateStr) {
     for (let r = 0; r <= 3; r++) {

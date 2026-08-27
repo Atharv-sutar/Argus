@@ -372,10 +372,12 @@ def run_multi_camera_app(
 
     pipeline = build_multi_camera_pipeline(config, graph_path=graph_path)
 
+    server = None
     if serve_ui:
-        run_ui_server(port=ui_port, graph_file=graph_path or config.multi_camera.graph_file, pipeline=pipeline, block=False)
+        server = run_ui_server(port=ui_port, graph_file=graph_path or config.multi_camera.graph_file, pipeline=pipeline, block=False)
         logger.info(f"Surveillance Operations Center web UI available at http://127.0.0.1:{ui_port}")
         _launch_browser_when_ready(ui_port)
+
 
     show_window = not no_gui and config.visualization.show_window and (cv2 is not None)
     window_name = "Argus Multi-Camera Surveillance"
@@ -611,8 +613,15 @@ def run_multi_camera_app(
         logger.info("Multi-camera pipeline interrupted.")
     finally:
         pipeline.stop()
+        if server is not None:
+            try:
+                server.shutdown()
+                server.server_close()
+            except Exception:
+                pass
         if show_window:
             cv2.destroyAllWindows()
+
 
 
 def run_map_ui(
