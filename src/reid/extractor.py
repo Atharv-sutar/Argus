@@ -75,35 +75,14 @@ class PyTorchReIDExtractor(BaseReID):
                 logger.error(f"Fallback ReID initialization failed: {e2}")
                 self._model = None
 
-    def _apply_foreground_isolation(self, crop: np.ndarray) -> np.ndarray:
-        """Suppresses outer border background leakage using smooth center attenuation."""
-        if crop is None or crop.size == 0:
-            return crop
-        h, w = crop.shape[:2]
-        if h < 10 or w < 10:
-            return crop
-
-        # Create smooth center weighting
-        y = np.linspace(-1.0, 1.0, h, dtype=np.float32)
-        x = np.linspace(-1.0, 1.0, w, dtype=np.float32)
-        xx, yy = np.meshgrid(x, y)
-
-        # Elliptical person-focused mask (emphasize central 80% width)
-        mask = np.clip(1.25 - (0.9 * xx**2 + 0.25 * yy**2), 0.3, 1.0)
-        mask = np.expand_dims(mask, axis=-1)
-
-        mean_col = np.mean(crop, axis=(0, 1), keepdims=True)
-        weighted = (crop.astype(np.float32) * mask + mean_col * (1.0 - mask)).astype(np.uint8)
-        return weighted
-
     def _preprocess(self, crop: np.ndarray, target_size: Optional[Tuple[int, int]] = None) -> Optional[np.ndarray]:
-        """Preprocesses crop into (C, H, W) normalized float32 array with background suppression."""
+        """Preprocesses crop into (C, H, W) normalized float32 tensor."""
         if crop is None or crop.size == 0 or cv2 is None:
             return None
 
-        isolated = self._apply_foreground_isolation(crop)
         h, w = target_size or self.input_size
-        resized = cv2.resize(isolated, (w, h), interpolation=cv2.INTER_LINEAR)
+        # OSNet expects input format (H=256, W=128)
+        resized = cv2.resize(crop, (w, h), interpolation=cv2.INTER_LINEAR)
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
 
         mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)

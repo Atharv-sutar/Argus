@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 OSNET_URLS = {
     "osnet_x0_25_msmt17": "https://huggingface.co/paulosantiago/osnet_x0_25_msmt17/resolve/main/osnet_x0_25_msmt17.pt",
     "osnet_x0_25_market": "https://huggingface.co/paulosantiago/osnet_x0_25_msmt17/resolve/main/osnet_x0_25_msmt17.pt",
+    "osnet_x1_0_msmt17": "https://huggingface.co/paulosantiago/osnet_x1_0_msmt17/resolve/main/osnet_x1_0_msmt17.pt",
+    "osnet_x1_0_market": "https://huggingface.co/paulosantiago/osnet_x1_0_msmt17/resolve/main/osnet_x1_0_msmt17.pt",
 }
 
 

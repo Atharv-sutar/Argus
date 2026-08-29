@@ -25,18 +25,18 @@ tracking:
   min_box_area: 100.0
 
 reid:
-  model_name: "osnet_x0_25"
-  match_threshold: 0.75
-  auto_add_threshold: 0.85
+  model_name: "osnet_x1_0"
+  match_threshold: 0.72
+  auto_add_threshold: 0.82
   auto_add_min_consecutive: 3
-  diversity_threshold: 0.96
+  diversity_threshold: 0.95
   max_gallery_size: 25
-  min_margin: 0.05
-  lock_switch_margin: 0.05
-  extract_interval_frames: 5
+  min_margin: 0.06
+  lock_switch_margin: 0.08
+  extract_interval_frames: 3
   min_crop_width: 24
   min_crop_height: 60
-  min_sharpness: 25.0
+  min_sharpness: 20.0
 
 
 
