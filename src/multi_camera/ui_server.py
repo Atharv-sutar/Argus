@@ -17,8 +17,10 @@ from typing import Any, Dict, List, Optional
 
 try:
     import cv2
+    import numpy as np
 except ImportError:
     cv2 = None
+    np = None
 
 from src.core.multi_camera_types import (
     CameraEdgeConfig,
@@ -34,14 +36,15 @@ logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
 
 
-def probe_local_webcams(max_indices: int = 5) -> List[Dict[str, Any]]:
+def probe_local_webcams(max_indices: int = 4) -> List[Dict[str, Any]]:
     """Probes local webcam devices up to max_indices."""
     cameras = []
     if cv2 is None:
         return cameras
 
+    backend = cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY
     for i in range(max_indices):
-        cap = cv2.VideoCapture(i)
+        cap = cv2.VideoCapture(i, backend)
         if cap.isOpened():
             w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640
             h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
@@ -59,7 +62,10 @@ def probe_local_webcams(max_indices: int = 5) -> List[Dict[str, Any]]:
                     "status": "available",
                 })
         else:
-            cap.release()
+            try:
+                cap.release()
+            except Exception:
+                pass
 
     return cameras
 
@@ -113,199 +119,218 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self) -> None:
-        parsed_url = urllib.parse.urlparse(self.path)
-        path = parsed_url.path
-        query = urllib.parse.parse_qs(parsed_url.query)
+        try:
+            parsed_url = urllib.parse.urlparse(self.path)
+            path = parsed_url.path
+            query = urllib.parse.parse_qs(parsed_url.query)
 
-        # --- REST Endpoints ---
-        if path == "/api/cameras/discover":
-            webcams = probe_local_webcams()
-            self._send_json({"cameras": webcams})
-            return
-
-        elif path == "/api/cameras/live":
-            if self.runtime_pipeline is not None:
-                cards = self.runtime_pipeline.get_all_camera_cards()
-                self._send_json({"cameras": cards, "active_camera": self.runtime_pipeline.active_camera_id})
-            elif self.graph_file.is_file():
-                try:
-                    with open(self.graph_file, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    cams = []
-                    for c in data.get("cameras", []):
-                        cams.append({
-                            "camera_id": c.get("camera_id"),
-                            "name": c.get("name"),
-                            "source": c.get("source"),
-                            "source_type": c.get("source_type", "webcam"),
-                            "enabled": c.get("enabled", True),
-                            "is_active": False,
-                            "is_searching": False,
-                            "status": "STANDBY",
-                            "fps": 0.0,
-                            "floor": c.get("floor"),
-                            "zone": c.get("zone"),
-                            "has_frame": False,
-                        })
-                    self._send_json({"cameras": cams, "active_camera": None})
-                except Exception:
-                    self._send_json({"cameras": [], "active_camera": None})
-            else:
-                self._send_json({"cameras": [], "active_camera": None})
-            return
-
-        elif path.startswith("/api/camera/") and path.endswith("/stream"):
-            parts = path.strip("/").split("/")
-            if len(parts) == 4 and parts[0] == "api" and parts[1] == "camera" and parts[3] == "stream":
-                cam_id = parts[2]
-                self.send_response(HTTPStatus.OK)
-                self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
-                self.send_header("Cache-Control", "no-cache, private, no-store, must-revalidate")
-                self.send_header("Pragma", "no-cache")
-                self.send_header("Expires", "0")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-
-                import time
-                try:
-                    while self.runtime_pipeline is None or getattr(self.runtime_pipeline, "is_running", True):
-                        frame_bytes = None
-                        if self.runtime_pipeline is not None:
-                            frame_bytes = self.runtime_pipeline.get_camera_frame_jpeg(cam_id, quality=75)
-
-                        if frame_bytes is None:
-                            time.sleep(0.04)
-                            continue
-
-                        self.wfile.write(b"--frame\r\n")
-                        self.wfile.write(b"Content-Type: image/jpeg\r\n")
-                        self.wfile.write(f"Content-Length: {len(frame_bytes)}\r\n\r\n".encode("utf-8"))
-                        self.wfile.write(frame_bytes)
-                        self.wfile.write(b"\r\n")
-                        self.wfile.flush()
-                        time.sleep(0.033)  # ~30 FPS throttle
-                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError, OSError):
-                    pass
-                except Exception as e:
-                    logger.debug(f"Stream client disconnected for camera '{cam_id}': {e}")
+            # --- REST Endpoints ---
+            if path == "/api/cameras/discover":
+                webcams = probe_local_webcams()
+                self._send_json({"cameras": webcams})
                 return
 
-
-        elif path.startswith("/api/camera/") and (path.endswith("/frame.jpg") or path.endswith("/frame")):
-            parts = path.strip("/").split("/")
-            if len(parts) >= 3:
-                cam_id = parts[2]
-                frame_bytes = None
+            elif path == "/api/cameras/live":
                 if self.runtime_pipeline is not None:
-                    frame_bytes = self.runtime_pipeline.get_camera_frame_jpeg(cam_id, quality=75)
+                    cards = self.runtime_pipeline.get_all_camera_cards()
+                    self._send_json({"cameras": cards, "active_camera": self.runtime_pipeline.active_camera_id})
+                elif self.graph_file.is_file():
+                    try:
+                        with open(self.graph_file, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                        cams = []
+                        for c in data.get("cameras", []):
+                            cams.append({
+                                "camera_id": c.get("camera_id"),
+                                "name": c.get("name"),
+                                "source": c.get("source"),
+                                "source_type": c.get("source_type", "webcam"),
+                                "enabled": c.get("enabled", True),
+                                "is_active": False,
+                                "is_searching": False,
+                                "status": "STANDBY",
+                                "fps": 0.0,
+                                "floor": c.get("floor"),
+                                "zone": c.get("zone"),
+                                "has_frame": False,
+                            })
+                        self._send_json({"cameras": cams, "active_camera": None})
+                    except Exception:
+                        self._send_json({"cameras": [], "active_camera": None})
+                else:
+                    self._send_json({"cameras": [], "active_camera": None})
+                return
+
+            elif path.startswith("/api/camera/") and path.endswith("/stream"):
+                parts = path.strip("/").split("/")
+                if len(parts) == 4 and parts[0] == "api" and parts[1] == "camera" and parts[3] == "stream":
+                    cam_id = parts[2]
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+                    self.send_header("Cache-Control", "no-cache, private, no-store, must-revalidate")
+                    self.send_header("Pragma", "no-cache")
+                    self.send_header("Expires", "0")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+
+                    import time
+                    try:
+                        while self.runtime_pipeline is None or getattr(self.runtime_pipeline, "is_running", True):
+                            frame_bytes = None
+                            if self.runtime_pipeline is not None:
+                                frame_bytes = self.runtime_pipeline.get_camera_frame_jpeg(cam_id, quality=75)
+
+                            if frame_bytes is None:
+                                if cv2 is not None and np is not None:
+                                    blank = np.zeros((360, 640, 3), dtype=np.uint8)
+                                    cv2.putText(blank, f"CONNECTING [{cam_id}]...", (180, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 242, 254), 1, cv2.LINE_AA)
+                                    _, buf = cv2.imencode(".jpg", blank, [cv2.IMWRITE_JPEG_QUALITY, 50])
+                                    frame_bytes = buf.tobytes()
+
+                            if frame_bytes is not None:
+                                self.wfile.write(b"--frame\r\n")
+                                self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                                self.wfile.write(f"Content-Length: {len(frame_bytes)}\r\n\r\n".encode("utf-8"))
+                                self.wfile.write(frame_bytes)
+                                self.wfile.write(b"\r\n")
+                                self.wfile.flush()
+                            time.sleep(0.033)  # ~30 FPS throttle
+                    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError, OSError):
+                        pass
+                    except Exception as e:
+                        logger.debug(f"Stream client disconnected for camera '{cam_id}': {e}")
+                    return
+
+            elif path.startswith("/api/camera/") and (path.endswith("/frame.jpg") or path.endswith("/frame")):
+                parts = path.strip("/").split("/")
+                if len(parts) >= 3:
+                    cam_id = parts[2]
+                    frame_bytes = None
+                    if self.runtime_pipeline is not None:
+                        frame_bytes = self.runtime_pipeline.get_camera_frame_jpeg(cam_id, quality=75)
+                    
+                    if frame_bytes is None:
+                        if cv2 is not None and np is not None:
+                            blank = np.zeros((360, 640, 3), dtype=np.uint8)
+                            cv2.putText(blank, f"STANDBY [{cam_id}]", (200, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 242, 254), 1, cv2.LINE_AA)
+                            _, buf = cv2.imencode(".jpg", blank, [cv2.IMWRITE_JPEG_QUALITY, 50])
+                            frame_bytes = buf.tobytes()
+
+                    if frame_bytes is not None:
+                        self.send_response(HTTPStatus.OK)
+                        self.send_header("Content-Type", "image/jpeg")
+                        self.send_header("Content-Length", str(len(frame_bytes)))
+                        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+                        self.send_header("Access-Control-Allow-Origin", "*")
+                        self.end_headers()
+                        self.wfile.write(frame_bytes)
+                    else:
+                        self.send_error(HTTPStatus.NOT_FOUND, f"No frame available for camera '{cam_id}'")
+                    return
+
+            elif path == "/api/graph":
+                if self.graph_file.is_file():
+                    try:
+                        with open(self.graph_file, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                        self._send_json(data)
+                    except Exception as e:
+                        self._send_json({"error": str(e)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                else:
+                    self._send_json({"version": 1, "cameras": [], "edges": [], "background_map": None})
+                return
+
+            elif path == "/api/status":
+                if self.runtime_pipeline is not None:
+                    progress = self.runtime_pipeline.get_search_progress()
+                    statuses = {
+                        cid: self.runtime_pipeline.get_camera_status(cid).value
+                        for cid in self.runtime_pipeline.graph.all_camera_ids()
+                        if self.runtime_pipeline.get_camera_status(cid)
+                    }
+                    gallery = self.runtime_pipeline.gallery
+                    self._send_json({
+                        "active_camera": self.runtime_pipeline.active_camera_id,
+                        "target_state": getattr(self.runtime_pipeline, "target_state", "UNSELECTED"),
+                        "target_track_id": self.runtime_pipeline.target_manager.target.track_id if self.runtime_pipeline.target_manager.target else None,
+                        "transit_history": getattr(self.runtime_pipeline, "transit_history", []),
+                        "search_progress": progress.to_dict(),
+                        "camera_statuses": statuses,
+                        "candidate_scores": getattr(self.runtime_pipeline, "last_candidate_scores", {}),
+                        "gallery_size": gallery.size,
+                        "gallery_max": gallery.max_size,
+                        "gallery_manual": gallery.manual_count,
+                        "gallery_auto": gallery.auto_count,
+                    })
+                else:
+                    self._send_json({
+                        "active_camera": None,
+                        "target_state": "UNSELECTED",
+                        "target_track_id": None,
+                        "transit_history": [],
+                        "search_progress": None,
+                        "camera_statuses": {},
+                        "candidate_scores": {},
+                        "gallery_size": 0,
+                        "gallery_max": 25,
+                        "gallery_manual": 0,
+                        "gallery_auto": 0,
+                    })
+                return
+
+            elif path == "/api/target/gallery":
+                if self.runtime_pipeline is not None:
+                    gallery = self.runtime_pipeline.gallery
+                    thumbnails = gallery.get_thumbnails(max_count=25)
+                    self._send_json({
+                        "size": gallery.size,
+                        "max_size": gallery.max_size,
+                        "manual_count": gallery.manual_count,
+                        "auto_count": gallery.auto_count,
+                        "thumbnails": thumbnails,
+                    })
+                else:
+                    self._send_json({
+                        "size": 0,
+                        "max_size": 25,
+                        "manual_count": 0,
+                        "auto_count": 0,
+                        "thumbnails": [],
+                    })
+                return
+
+            elif path == "/api/preview":
+                # Return JPEG preview snapshot for a given source
+                source_param = query.get("source", ["0"])[0]
+                source_type = query.get("type", ["webcam"])[0]
+
+                frame_bytes = self._capture_preview_jpeg(source_param, source_type)
                 if frame_bytes is not None:
                     self.send_response(HTTPStatus.OK)
                     self.send_header("Content-Type", "image/jpeg")
                     self.send_header("Content-Length", str(len(frame_bytes)))
                     self.send_header("Cache-Control", "no-cache")
-                    self.send_header("Access-Control-Allow-Origin", "*")
                     self.end_headers()
                     self.wfile.write(frame_bytes)
                 else:
-                    self.send_error(HTTPStatus.NOT_FOUND, f"No frame available for camera '{cam_id}'")
+                    self.send_error(HTTPStatus.SERVICE_UNAVAILABLE, "Could not capture preview from source")
                 return
 
-        elif path == "/api/graph":
-            if self.graph_file.is_file():
-                try:
-                    with open(self.graph_file, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    self._send_json(data)
-                except Exception as e:
-                    self._send_json({"error": str(e)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            # --- Static File Serving ---
+            if path == "/" or path == "":
+                file_path = STATIC_DIR / "index.html"
             else:
-                self._send_json({"version": 1, "cameras": [], "edges": [], "background_map": None})
+                rel_path = path.lstrip("/")
+                file_path = STATIC_DIR / rel_path
+
+            self._send_file(file_path)
+        except Exception as err:
+            logger.exception(f"[HTTP GET ERROR] {err}")
+            try:
+                self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(err))
+            except Exception:
+                pass
             return
-
-        elif path == "/api/status":
-            if self.runtime_pipeline is not None:
-                progress = self.runtime_pipeline.get_search_progress()
-                statuses = {
-                    cid: self.runtime_pipeline.get_camera_status(cid).value
-                    for cid in self.runtime_pipeline.graph.all_camera_ids()
-                    if self.runtime_pipeline.get_camera_status(cid)
-                }
-                gallery = self.runtime_pipeline.gallery
-                self._send_json({
-                    "active_camera": self.runtime_pipeline.active_camera_id,
-                    "target_state": getattr(self.runtime_pipeline, "target_state", "UNSELECTED"),
-                    "target_track_id": self.runtime_pipeline.target_manager.target.track_id if self.runtime_pipeline.target_manager.target else None,
-                    "transit_history": getattr(self.runtime_pipeline, "transit_history", []),
-                    "search_progress": progress.to_dict(),
-                    "camera_statuses": statuses,
-                    "candidate_scores": getattr(self.runtime_pipeline, "last_candidate_scores", {}),
-                    "gallery_size": gallery.size,
-                    "gallery_max": gallery.max_size,
-                    "gallery_manual": gallery.manual_count,
-                    "gallery_auto": gallery.auto_count,
-                })
-            else:
-                self._send_json({
-                    "active_camera": None,
-                    "target_state": "UNSELECTED",
-                    "target_track_id": None,
-                    "transit_history": [],
-                    "search_progress": None,
-                    "camera_statuses": {},
-                    "candidate_scores": {},
-                    "gallery_size": 0,
-                    "gallery_max": 25,
-                    "gallery_manual": 0,
-                    "gallery_auto": 0,
-                })
-            return
-
-        elif path == "/api/target/gallery":
-            if self.runtime_pipeline is not None:
-                gallery = self.runtime_pipeline.gallery
-                thumbnails = gallery.get_thumbnails(max_count=25)
-                self._send_json({
-                    "size": gallery.size,
-                    "max_size": gallery.max_size,
-                    "manual_count": gallery.manual_count,
-                    "auto_count": gallery.auto_count,
-                    "thumbnails": thumbnails,
-                })
-            else:
-                self._send_json({
-                    "size": 0,
-                    "max_size": 25,
-                    "manual_count": 0,
-                    "auto_count": 0,
-                    "thumbnails": [],
-                })
-            return
-
-        elif path == "/api/preview":
-            # Return JPEG preview snapshot for a given source
-            source_param = query.get("source", ["0"])[0]
-            source_type = query.get("type", ["webcam"])[0]
-
-            frame_bytes = self._capture_preview_jpeg(source_param, source_type)
-            if frame_bytes is not None:
-                self.send_response(HTTPStatus.OK)
-                self.send_header("Content-Type", "image/jpeg")
-                self.send_header("Content-Length", str(len(frame_bytes)))
-                self.send_header("Cache-Control", "no-cache")
-                self.end_headers()
-                self.wfile.write(frame_bytes)
-            else:
-                self.send_error(HTTPStatus.SERVICE_UNAVAILABLE, "Could not capture preview from source")
-            return
-
-        # --- Static File Serving ---
-        if path == "/" or path == "":
-            file_path = STATIC_DIR / "index.html"
-        else:
-            rel_path = path.lstrip("/")
-            file_path = STATIC_DIR / rel_path
-
-        self._send_file(file_path)
 
     def do_POST(self) -> None:
         parsed_url = urllib.parse.urlparse(self.path)

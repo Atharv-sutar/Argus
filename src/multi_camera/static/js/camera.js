@@ -16,7 +16,18 @@ class CameraManager {
   }
 
   initEvents() {
-    document.getElementById('btn-discover').addEventListener('click', () => this.discover());
+    const btnDiscover = document.getElementById('btn-discover');
+    if (btnDiscover) {
+      btnDiscover.addEventListener('click', () => this.discover());
+    }
+
+    const btnDiscoverToolbar = document.getElementById('btn-discover-toolbar');
+    if (btnDiscoverToolbar) {
+      btnDiscoverToolbar.addEventListener('click', () => this.discover());
+    }
+
+    // Auto-discover webcams on initial load
+    setTimeout(() => this.discover(), 300);
 
     const customForm = document.getElementById('form-custom-camera');
     customForm.addEventListener('submit', (e) => {

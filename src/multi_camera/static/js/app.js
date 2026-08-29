@@ -248,9 +248,8 @@ class SurveillanceApp {
         <div class="camera-tile-video" id="stage-${cam.camera_id}">
           <img class="camera-feed-img" 
                id="img-${cam.camera_id}"
-               src="${streamUrl}" 
-               alt="${cam.name}" 
-               onerror="this.onerror=null; this.src='${fallbackUrl}'">
+               src="${fallbackUrl}" 
+               alt="${cam.name}">
           
           <div class="camera-tile-overlay">
             <button class="tile-overlay-btn btn-focus-cam" data-cam="${cam.camera_id}">Set Active</button>
@@ -260,9 +259,27 @@ class SurveillanceApp {
         </div>
       `;
 
-      // Click on tile video stage: Set active camera + select target at coordinates
+      // Live video smooth double-buffer frame streamer (Eliminates browser MJPEG black screen stalls)
       const stage = tile.querySelector('.camera-tile-video');
       const img = tile.querySelector('.camera-feed-img');
+      
+      let isTileActive = true;
+      const streamLiveFrame = () => {
+        if (!isTileActive || !tile.isConnected) return;
+        const loader = new Image();
+        loader.onload = () => {
+          img.src = loader.src;
+          setTimeout(streamLiveFrame, 40); // ~25 FPS smooth streaming
+        };
+        loader.onerror = () => {
+          setTimeout(streamLiveFrame, 200);
+        };
+        loader.src = `${API.baseUrl}/api/camera/${encodeURIComponent(cam.camera_id)}/frame.jpg?t=${Date.now()}`;
+      };
+      // Kick off live stream
+      streamLiveFrame();
+
+      // Click on tile video stage: Set active camera + select target at coordinates
 
       stage.addEventListener('click', async (e) => {
         if (e.target.classList.contains('tile-overlay-btn')) return;

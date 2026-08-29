@@ -7,8 +7,20 @@
       "source": 1,
       "source_type": "webcam",
       "enabled": true,
-      "position_x": 255.9403531844272,
-      "position_y": 200.43190842099386,
+      "position_x": 80.49461408554129,
+      "position_y": -216.03511333222013,
+      "floor": null,
+      "zone": null,
+      "description": null
+    },
+    {
+      "camera_id": "cam_test",
+      "name": "Test Room",
+      "source": "synthetic",
+      "source_type": "synthetic",
+      "enabled": true,
+      "position_x": 143.16729359922041,
+      "position_y": -65.81655051865758,
       "floor": null,
       "zone": null,
       "description": null

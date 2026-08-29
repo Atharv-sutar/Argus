@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 import time
 from typing import Any, Optional, Tuple, Union
@@ -63,8 +64,18 @@ class OpenCVCamera(BaseCamera):
         if isinstance(src, str) and src.isdigit():
             src = int(src)
 
-        # Use standard VideoCapture backend (MSMF on Windows)
-        self._cap = cv2.VideoCapture(src)
+        # On Windows, try DirectShow (cv2.CAP_DSHOW) first, and fallback if closed or delivering 0.0 black frames
+        if isinstance(src, int) and sys.platform.startswith("win"):
+            self._cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)
+            if self._cap and self._cap.isOpened():
+                ret, test_f = self._cap.read()
+                if not ret or test_f is None or float(np.mean(test_f)) == 0.0:
+                    self._cap.release()
+                    self._cap = cv2.VideoCapture(src, cv2.CAP_ANY)
+            else:
+                self._cap = cv2.VideoCapture(src, cv2.CAP_ANY)
+        else:
+            self._cap = cv2.VideoCapture(src)
 
         if not self._cap or not self._cap.isOpened():
             # Fallback to default if initial open failed

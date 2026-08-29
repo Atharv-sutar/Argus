@@ -123,6 +123,7 @@ class MultiCameraPipeline:
         self._frame_count: int = 0
         self.reid_interval: int = config.reid.extract_interval_frames
         self._frame_lock: threading.Lock = threading.Lock()
+        self._latest_jpegs: Dict[str, bytes] = {}
         self._last_candidate_scores: Dict[int, float] = {}
         self._switch_consensus: Dict[int, int] = {}
         self._current_track_misses: int = 0
@@ -436,6 +437,37 @@ class MultiCameraPipeline:
         self._transit_history.clear()
         logger.info("[MULTI-CAM] Target cleared and gallery purged.")
 
+    def update_graph(self, new_graph: CameraGraph) -> None:
+        """
+        Dynamically updates the running pipeline with a modified CameraGraph topology.
+        Safely creates/updates camera nodes, refreshes search manager, and releases removed workers.
+        """
+        with self._frame_lock:
+            self.graph = new_graph
+            self.search_manager = SearchManager(self.graph, self.search_config)
+            
+            # Sync nodes with new graph
+            self._sync_nodes_with_graph()
+
+            # Clean up workers for cameras removed from the graph
+            current_cams = set(self.graph.all_camera_ids())
+            for cid in list(self._workers.keys()):
+                if cid not in current_cams:
+                    try:
+                        self._workers[cid].stop()
+                    except Exception:
+                        pass
+                    del self._workers[cid]
+                    self._annotators.pop(cid, None)
+                    self._latest_jpegs.pop(cid, None)
+
+            # If active camera was removed or none set, pick first available
+            if self._active_camera_id not in current_cams or not self._active_camera_id:
+                enabled_cams = [cid for cid, n in self._nodes.items() if n.config.enabled]
+                self._active_camera_id = enabled_cams[0] if enabled_cams else None
+
+        logger.info(f"[MULTI-CAM] Topology updated: {len(self._nodes)} cameras, {self.graph.edge_count()} edges.")
+
     def step(self) -> Dict[str, Tuple[Optional[np.ndarray], Optional[TrackResult], Optional[Target]]]:
         """
         Executes a single processing step across the multi-camera network.
@@ -449,11 +481,10 @@ class MultiCameraPipeline:
         results: Dict[str, Tuple[Optional[np.ndarray], Optional[TrackResult], Optional[Target]]] = {}
         now = time.time()
 
-        # 1. Default active camera if none selected
-        if not self._active_camera_id:
+        # 1. Default active camera if none selected or if removed
+        if not self._active_camera_id or self._active_camera_id not in self._nodes:
             enabled_ids = [cid for cid, n in self._nodes.items() if n.config.enabled]
-            if enabled_ids:
-                self._active_camera_id = enabled_ids[0]
+            self._active_camera_id = enabled_ids[0] if enabled_ids else None
 
         # 2. Process Active Camera
         active_cam_id = self._active_camera_id
@@ -466,7 +497,8 @@ class MultiCameraPipeline:
             if success and frame is not None:
                 active_frame = frame
                 det_res, active_track_res = active_worker.process_frame(frame, ts_ms)
-                self._nodes[active_cam_id].fps = active_worker.fps
+                if active_cam_id in self._nodes:
+                    self._nodes[active_cam_id].fps = active_worker.fps
 
                 # Target Appearance Evaluation on Active Camera
                 self._evaluate_active_camera_target(active_worker, frame, active_track_res, ts_ms)
@@ -479,8 +511,9 @@ class MultiCameraPipeline:
                 )
                 results[active_cam_id] = (ann_frame, active_track_res, self.target_manager.target)
             else:
-                self._nodes[active_cam_id].mark_offline()
-        elif active_cam_id is not None:
+                if active_cam_id in self._nodes:
+                    self._nodes[active_cam_id].mark_offline()
+        elif active_cam_id is not None and active_cam_id in self._nodes:
             self._nodes[active_cam_id].mark_offline()
 
         # 3. Check Target State on Active Camera
@@ -605,7 +638,7 @@ class MultiCameraPipeline:
 
         # Cache latest annotated/raw frames and pre-encode JPEGs for rock-solid, flicker-free web streaming
         for cid, (f, _, _) in results.items():
-            if f is not None:
+            if f is not None and cid in self._nodes:
                 self._nodes[cid].last_frame = f
                 try:
                     ret, buf = cv2.imencode(".jpg", f, [cv2.IMWRITE_JPEG_QUALITY, 75])
@@ -1055,10 +1088,19 @@ class MultiCameraPipeline:
             if camera_id in self._latest_jpegs:
                 return self._latest_jpegs[camera_id]
 
+        # Check node last_frame
         node = self._nodes.get(camera_id)
-        if node is not None and node.last_frame is not None:
+        frame = node.last_frame if node is not None else None
+
+        # Fallback to worker last_frame
+        if frame is None:
+            worker = self._workers.get(camera_id)
+            if worker is not None and worker._last_frame is not None:
+                frame = worker._last_frame
+
+        if frame is not None:
             try:
-                ret, buf = cv2.imencode(".jpg", node.last_frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+                ret, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
                 if ret:
                     raw_bytes = buf.tobytes()
                     with self._frame_lock:
