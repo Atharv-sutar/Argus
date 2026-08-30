@@ -36,35 +36,69 @@ logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
 
 
-def probe_local_webcams(max_indices: int = 4) -> List[Dict[str, Any]]:
-    """Probes local webcam devices up to max_indices."""
-    cameras = []
+import concurrent.futures
+
+def probe_local_webcams(max_indices: int = 3, pipeline: Any = None) -> List[Dict[str, Any]]:
+    """Fast non-blocking probe of local webcam devices, including active pipeline cameras."""
+    cameras: List[Dict[str, Any]] = []
+    
+    # 1. Include already-active pipeline cameras
+    known_sources = set()
+    if pipeline is not None:
+        for cid, node in getattr(pipeline, "_nodes", {}).items():
+            src = node.config.source
+            known_sources.add(str(src))
+            cameras.append({
+                "source": src,
+                "name": node.config.name or f"Camera [{cid}]",
+                "source_type": node.config.source_type.value if hasattr(node.config.source_type, "value") else str(node.config.source_type),
+                "width": 640,
+                "height": 480,
+                "fps": 30,
+                "status": "in-use",
+            })
+
     if cv2 is None:
         return cameras
 
-    backend = cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY
-    for i in range(max_indices):
-        cap = cv2.VideoCapture(i, backend)
-        if cap.isOpened():
-            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640
-            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
-            fps = int(cap.get(cv2.CAP_PROP_FPS)) or 30
-            ret, frame = cap.read()
-            cap.release()
-            if ret and frame is not None:
-                cameras.append({
-                    "source": i,
-                    "name": f"Webcam {i}",
-                    "source_type": "webcam",
-                    "width": w,
-                    "height": h,
-                    "fps": fps,
-                    "status": "available",
-                })
-        else:
-            try:
+    def _probe_index(idx: int) -> Optional[Dict[str, Any]]:
+        try:
+            backend = cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY
+            cap = cv2.VideoCapture(idx, backend)
+            if not cap or not cap.isOpened():
+                cap = cv2.VideoCapture(idx, cv2.CAP_ANY)
+            
+            if cap and cap.isOpened():
+                w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640
+                h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
+                fps = int(cap.get(cv2.CAP_PROP_FPS)) or 30
+                ret, frame = cap.read()
                 cap.release()
-            except Exception:
+                if ret and frame is not None:
+                    return {
+                        "source": idx,
+                        "name": f"Webcam {idx}",
+                        "source_type": "webcam",
+                        "width": w,
+                        "height": h,
+                        "fps": fps,
+                        "status": "available",
+                    }
+        except Exception:
+            pass
+        return None
+
+    # 2. Probe unused physical indices in parallel with tight timeout
+    indices_to_probe = [i for i in range(max_indices) if str(i) not in known_sources]
+    if indices_to_probe:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(indices_to_probe)) as executor:
+            future_to_idx = {executor.submit(_probe_index, idx): idx for idx in indices_to_probe}
+            try:
+                for future in concurrent.futures.as_completed(future_to_idx, timeout=1.5):
+                    res = future.result()
+                    if res is not None:
+                        cameras.append(res)
+            except concurrent.futures.TimeoutError:
                 pass
 
     return cameras
@@ -126,7 +160,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
 
             # --- REST Endpoints ---
             if path == "/api/cameras/discover":
-                webcams = probe_local_webcams()
+                webcams = probe_local_webcams(pipeline=self.runtime_pipeline)
                 self._send_json({"cameras": webcams})
                 return
 
@@ -188,11 +222,12 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                                     frame_bytes = buf.tobytes()
 
                             if frame_bytes is not None:
-                                self.wfile.write(b"--frame\r\n")
-                                self.wfile.write(b"Content-Type: image/jpeg\r\n")
-                                self.wfile.write(f"Content-Length: {len(frame_bytes)}\r\n\r\n".encode("utf-8"))
-                                self.wfile.write(frame_bytes)
-                                self.wfile.write(b"\r\n")
+                                header = (
+                                    b"--frame\r\n"
+                                    b"Content-Type: image/jpeg\r\n"
+                                    b"Content-Length: " + str(len(frame_bytes)).encode("ascii") + b"\r\n\r\n"
+                                )
+                                self.wfile.write(header + frame_bytes + b"\r\n")
                                 self.wfile.flush()
                             time.sleep(0.033)  # ~30 FPS throttle
                     except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError, OSError):
@@ -451,22 +486,23 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/system/quit":
             logger.info("[SERVER] Safe shutdown requested via /api/system/quit endpoint.")
-            if self.runtime_pipeline is not None:
-                try:
-                    self.runtime_pipeline.stop()
-                except Exception as e:
-                    logger.warning(f"Error stopping pipeline: {e}")
-
             self._send_json({"success": True, "message": "Argus Surveillance shutting down cleanly."})
 
             def _delayed_shutdown():
-                time.sleep(0.4)
+                time.sleep(0.3)
+                if self.runtime_pipeline is not None:
+                    try:
+                        self.runtime_pipeline.stop()
+                    except Exception as e:
+                        logger.warning(f"Error stopping pipeline: {e}")
+                time.sleep(0.1)
                 try:
                     self.server.shutdown()
                 except Exception:
                     pass
                 logger.info("[SERVER] Process exiting cleanly.")
-                os._exit(0)
+                if "PYTEST_CURRENT_TEST" not in os.environ:
+                    os._exit(0)
 
             threading.Thread(target=_delayed_shutdown, daemon=True).start()
             return
@@ -475,7 +511,18 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
 
     def _capture_preview_jpeg(self, source_param: str, source_type: str) -> Optional[bytes]:
         """Capture a single test frame as JPEG, reusing pipeline frame if available."""
-        # 1. Reuse existing pipeline capture if source is already managed by pipeline
+        # 1. Synthetic preview generator
+        if source_type == "synthetic" or source_param == "synthetic":
+            if cv2 is not None and np is not None:
+                img = np.zeros((360, 640, 3), dtype=np.uint8)
+                img[:] = (20, 24, 36)
+                cv2.putText(img, "SYNTHETIC TEST CAMERA", (180, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 240, 255), 2, cv2.LINE_AA)
+                cv2.rectangle(img, (220, 190), (420, 320), (0, 255, 128), 2)
+                cv2.putText(img, "Target Simulator Active", (230, 260), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+                _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                return buf.tobytes()
+
+        # 2. Reuse existing pipeline capture if source is already managed by pipeline
         if self.runtime_pipeline is not None:
             for cid, node in getattr(self.runtime_pipeline, "_nodes", {}).items():
                 if str(node.config.source) == str(source_param) or cid == source_param:
@@ -494,8 +541,11 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 src = 0
 
         try:
-            cap = cv2.VideoCapture(src)
+            backend = cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY
+            cap = cv2.VideoCapture(src, backend)
             if not cap.isOpened():
+                cap = cv2.VideoCapture(src, cv2.CAP_ANY)
+            if not cap or not cap.isOpened():
                 return None
 
             ret, frame = cap.read()

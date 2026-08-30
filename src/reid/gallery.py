@@ -35,10 +35,10 @@ class TargetGallery:
         reid_extractor: Optional[PyTorchReIDExtractor] = None,
         quality_evaluator: Optional[ReIDCropQuality] = None,
         max_size: int = 25,
-        match_threshold: float = 0.85,
-        auto_add_threshold: float = 0.90,
+        match_threshold: float = 0.65,
+        auto_add_threshold: float = 0.80,
         auto_add_min_consecutive: int = 3,
-        diversity_threshold: float = 0.96,
+        diversity_threshold: float = 0.92,
     ) -> None:
         self.reid_extractor = reid_extractor
         self.quality_evaluator = quality_evaluator or ReIDCropQuality()
@@ -56,7 +56,6 @@ class TargetGallery:
         self._auto_matrix: Optional[np.ndarray] = None  # shape: (A, 512)
         self._consecutive_matches: Dict[int, int] = {}  # track_id -> consecutive frames
         self._target_label: str = "target_0"
-        self.max_auto_boost: float = 0.05  # Maximum score boost an auto entry can provide over manual anchor
 
     @property
     def size(self) -> int:
@@ -232,10 +231,11 @@ class TargetGallery:
         if self._manual_matrix is not None and len(self._manual_matrix) > 0:
             m_sims = self._manual_matrix @ embedding.vector
             max_manual_sim = float(np.max(m_sims))
-            if max_manual_sim < self.match_threshold:
+            min_anchor = max(0.40, self.match_threshold - 0.20)
+            if max_manual_sim < min_anchor:
                 logger.debug(
                     f"[TARGET_GALLERY] Auto-add rejected for Track #{track_id}: "
-                    f"failed manual anchor check (sim_manual={max_manual_sim:.3f} < {self.match_threshold:.2f})"
+                    f"failed broad manual anchor check (sim_manual={max_manual_sim:.3f} < {min_anchor:.2f})"
                 )
                 if track_id is not None:
                     self._consecutive_matches.pop(track_id, None)
@@ -324,7 +324,7 @@ class TargetGallery:
     ) -> List[Tuple[float, float, float, Optional[GalleryEntry]]]:
         """
         Detailed batch matching returning (effective_score, manual_score, auto_score, best_entry).
-        Anchors scoring to protected manual entries so auto entries cannot hijack locks.
+        Computes true vectorized max cosine similarity across all gallery entries.
         """
         if not candidate_embeddings:
             return []
@@ -361,19 +361,16 @@ class TargetGallery:
             m_score = float(m_max_scores[i]) if has_manual else 0.0
             a_score = float(a_max_scores[i]) if has_auto else 0.0
 
-            if has_manual:
-                if has_auto:
-                    # Ground-truth anchored: auto entries can only refine/boost up to max_auto_boost
-                    boosted_auto = min(a_score, m_score + self.max_auto_boost)
-                    if boosted_auto > m_score:
-                        effective_score = boosted_auto
-                        best_entry = self._auto_entries[int(a_best_indices[i])]
-                    else:
-                        effective_score = m_score
-                        best_entry = self._manual_entries[int(m_best_indices[i])]
+            if has_manual and has_auto:
+                if a_score > m_score:
+                    effective_score = a_score
+                    best_entry = self._auto_entries[int(a_best_indices[i])]
                 else:
                     effective_score = m_score
                     best_entry = self._manual_entries[int(m_best_indices[i])]
+            elif has_manual:
+                effective_score = m_score
+                best_entry = self._manual_entries[int(m_best_indices[i])]
             elif has_auto:
                 effective_score = a_score
                 best_entry = self._auto_entries[int(a_best_indices[i])]

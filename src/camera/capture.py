@@ -102,13 +102,10 @@ class OpenCVCamera(BaseCamera):
             self._thread = threading.Thread(target=self._capture_loop, daemon=True)
             self._thread.start()
 
-            # Block until the first frame arrives so read() never returns None
-            # on a healthy camera immediately after construction.
-            deadline = time.time() + 2.0
+            # Non-blocking short wait for initial frame arrival (max 0.2s)
+            deadline = time.time() + 0.2
             while self._latest_frame is None and time.time() < deadline and not self._is_closed:
-                time.sleep(0.01)
-            if self._latest_frame is None and not self._is_closed:
-                logger.warning(f"Camera '{self.source}' thread started but no frame received within 2s")
+                time.sleep(0.005)
 
     def _capture_loop(self) -> None:
         """Background thread continuously pulling frames to prevent driver buffer buildup."""
@@ -159,7 +156,19 @@ class OpenCVCamera(BaseCamera):
             src = self.source
             if isinstance(src, str) and src.isdigit():
                 src = int(src)
-            self._cap = cv2.VideoCapture(src)
+
+            if isinstance(src, int) and sys.platform.startswith("win"):
+                self._cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)
+                if self._cap and self._cap.isOpened():
+                    ret, test_f = self._cap.read()
+                    if not ret or test_f is None or float(np.mean(test_f)) == 0.0:
+                        self._cap.release()
+                        self._cap = cv2.VideoCapture(src, cv2.CAP_ANY)
+                else:
+                    self._cap = cv2.VideoCapture(src, cv2.CAP_ANY)
+            else:
+                self._cap = cv2.VideoCapture(src)
+
             if self._cap and self._cap.isOpened():
                 if self.width is not None and isinstance(src, int):
                     self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)

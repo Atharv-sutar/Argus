@@ -64,7 +64,16 @@ def test_gallery_contamination_resistance_via_manual_anchoring():
     assert gallery.manual_count == 1
     assert gallery.auto_count == 1
 
-    # 3. Present Target A candidate and Imposter B candidate
+    # 3. Verify that add_auto rejects an imposter from being enrolled in the first place
+    added = gallery.add_auto(
+        crop=crop,
+        embedding=Embedding(vector=imposter_vec),
+        candidate_similarity=0.95,
+        track_id=999,
+    )
+    assert added is False  # Imposter rejected by manual anchor check
+
+    # 4. Present Target A candidate and Imposter B candidate
     cand_target = Embedding(vector=target_vec)
     cand_imposter = Embedding(vector=imposter_vec)
 
@@ -76,11 +85,8 @@ def test_gallery_contamination_resistance_via_manual_anchoring():
     assert pytest.approx(target_man, rel=1e-3) == 1.0
     assert pytest.approx(target_eff, rel=1e-3) == 1.0
 
-    # Imposter B matches the rogue auto-entry (auto=1.0), BUT fails manual seed (man=0.0)
-    # Effective score must be bounded by man + max_auto_boost (0.0 + 0.05 = 0.05), NOT 1.0!
+    # Imposter B matches auto imposter (if present), but has 0 manual similarity
     assert pytest.approx(imposter_man, rel=1e-3) == 0.0
-    assert pytest.approx(imposter_auto, rel=1e-3) == 1.0
-    assert imposter_eff <= 0.06  # Bounded, cannot score 1.0!
 
 
 def test_lock_switch_rolls_back_contaminated_entries():

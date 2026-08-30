@@ -39,14 +39,18 @@ class CameraManager {
 
       if (!id || !name || !source) return;
 
+      if (!this.app.graphCanvas) {
+        this.app.graphCanvas = new GraphCanvas(this.app, 'graph-canvas');
+      }
+
       this.app.graphCanvas.addNode({
         camera_id: id,
         name: name,
         source: isNaN(source) ? source : parseInt(source, 10),
         source_type: type,
         enabled: true,
-        position_x: 200 + Math.random() * 200,
-        position_y: 150 + Math.random() * 200,
+        position_x: 200 + Math.random() * 100,
+        position_y: 150 + Math.random() * 100,
       });
 
       this.app.showToast(`Added camera '${name}' to canvas`, 'success');
@@ -55,15 +59,23 @@ class CameraManager {
   }
 
   async discover() {
-    this.listEl.innerHTML = '<div class="empty-state">Probing local video capture devices...</div>';
+    const btn1 = document.getElementById('btn-discover');
+    const btn2 = document.getElementById('btn-discover-toolbar');
+    if (btn1) { btn1.disabled = true; btn1.textContent = 'Scanning...'; }
+    if (btn2) { btn2.disabled = true; }
+
+    this.listEl.innerHTML = '<div class="empty-state"><span class="spinner"></span> Scanning video capture devices...</div>';
     try {
       const data = await API.discoverCameras();
       this.discoveredCameras = data.cameras || [];
       this.renderList();
-      this.app.showToast(`Found ${this.discoveredCameras.length} local camera(s)`, 'info');
+      this.app.showToast(`Detected ${this.discoveredCameras.length} camera source(s)`, 'info');
     } catch (err) {
       this.listEl.innerHTML = `<div class="empty-state">Discovery failed: ${err.message}</div>`;
       this.app.showToast('Discovery failed', 'error');
+    } finally {
+      if (btn1) { btn1.disabled = false; btn1.textContent = 'Auto-Detect'; }
+      if (btn2) { btn2.disabled = false; }
     }
   }
 
@@ -95,6 +107,9 @@ class CameraManager {
 
       card.querySelector('.cam-add-btn').addEventListener('click', (e) => {
         e.stopPropagation();
+        if (!this.app.graphCanvas) {
+          this.app.graphCanvas = new GraphCanvas(this.app, 'graph-canvas');
+        }
         const camId = `cam_${cam.source}`;
         this.app.graphCanvas.addNode({
           camera_id: camId,
@@ -102,8 +117,8 @@ class CameraManager {
           source: cam.source,
           source_type: cam.source_type,
           enabled: true,
-          position_x: 200 + Math.random() * 200,
-          position_y: 150 + Math.random() * 200,
+          position_x: 200 + Math.random() * 100,
+          position_y: 150 + Math.random() * 100,
         });
         this.app.showToast(`Added ${cam.name} to canvas`, 'success');
       });
@@ -114,7 +129,7 @@ class CameraManager {
 
   preview(source, sourceType, name) {
     this.selectedPreviewSource = { source, sourceType, name };
-    const url = API.getPreviewUrl(source, sourceType);
+    const url = `${API.getPreviewUrl(source, sourceType)}&t=${Date.now()}`;
 
     this.previewImg.onload = () => {
       this.previewImg.style.display = 'block';

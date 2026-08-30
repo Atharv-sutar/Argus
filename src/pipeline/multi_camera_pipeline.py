@@ -804,7 +804,7 @@ class MultiCameraPipeline:
                     if margin >= switch_margin:
                         other_tid = best_other_track.track_id
                         self._switch_consensus[other_tid] = self._switch_consensus.get(other_tid, 0) + 1
-                        if self._switch_consensus[other_tid] >= 2:
+                        if current_sim < (match_thresh - 0.20) or self._switch_consensus[other_tid] >= 2:
                             should_switch = True
                     else:
                         self._switch_consensus.clear()

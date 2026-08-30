@@ -40,7 +40,7 @@ class PyTorchReIDExtractor(BaseReID):
         self._model = None
         self._osnet_model = None
         self._device = None
-        self.color_normalizer = ColorNormalizer(apply_gray_world=True, apply_clahe=True)
+        self.color_normalizer = ColorNormalizer(apply_gray_world=False, apply_clahe=False)
         self._init_model()
 
     def _init_model(self) -> None:
@@ -76,13 +76,39 @@ class PyTorchReIDExtractor(BaseReID):
                 self._model = None
 
     def _preprocess(self, crop: np.ndarray, target_size: Optional[Tuple[int, int]] = None) -> Optional[np.ndarray]:
-        """Preprocesses crop into (C, H, W) normalized float32 tensor."""
+        """Preprocesses crop into (C, H, W) normalized float32 tensor with aspect-ratio preservation."""
         if crop is None or crop.size == 0 or cv2 is None:
             return None
 
-        h, w = target_size or self.input_size
+        target_h, target_w = target_size or self.input_size  # (256, 128)
+        
+        # Letterbox to maintain 1:2 human aspect ratio without squash distortion
+        h, w = crop.shape[:2]
+        if h <= 0 or w <= 0:
+            return None
+            
+        target_aspect = target_w / float(target_h)  # 0.5
+        current_aspect = w / float(h)
+
+        if current_aspect > target_aspect:
+            # Crop is wider than 1:2 -> pad top and bottom
+            new_h = int(w / target_aspect)
+            pad_total = max(0, new_h - h)
+            pad_top = pad_total // 2
+            pad_bottom = pad_total - pad_top
+            padded = cv2.copyMakeBorder(crop, pad_top, pad_bottom, 0, 0, cv2.BORDER_CONSTANT, value=[114, 114, 114])
+        elif current_aspect < target_aspect:
+            # Crop is narrower than 1:2 -> pad left and right
+            new_w = int(h * target_aspect)
+            pad_total = max(0, new_w - w)
+            pad_left = pad_total // 2
+            pad_right = pad_total - pad_left
+            padded = cv2.copyMakeBorder(crop, 0, 0, pad_left, pad_right, cv2.BORDER_CONSTANT, value=[114, 114, 114])
+        else:
+            padded = crop
+
         # OSNet expects input format (H=256, W=128)
-        resized = cv2.resize(crop, (w, h), interpolation=cv2.INTER_LINEAR)
+        resized = cv2.resize(padded, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
 
         mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)

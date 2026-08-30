@@ -157,8 +157,13 @@ class SurveillanceApp {
       this.viewTopology.style.display = 'flex';
       if (!this.graphCanvas) {
         this.graphCanvas = new GraphCanvas(this, 'graph-canvas');
-        this.loadGraphTopology();
       }
+      setTimeout(() => {
+        if (this.graphCanvas) {
+          this.graphCanvas.resize();
+          this.loadGraphTopology();
+        }
+      }, 50);
     }
   }
 
@@ -248,7 +253,7 @@ class SurveillanceApp {
         <div class="camera-tile-video" id="stage-${cam.camera_id}">
           <img class="camera-feed-img" 
                id="img-${cam.camera_id}"
-               src="${fallbackUrl}" 
+               src="${streamUrl}" 
                alt="${cam.name}">
           
           <div class="camera-tile-overlay">
@@ -259,25 +264,17 @@ class SurveillanceApp {
         </div>
       `;
 
-      // Live video smooth double-buffer frame streamer (Eliminates browser MJPEG black screen stalls)
       const stage = tile.querySelector('.camera-tile-video');
       const img = tile.querySelector('.camera-feed-img');
-      
-      let isTileActive = true;
-      const streamLiveFrame = () => {
-        if (!isTileActive || !tile.isConnected) return;
-        const loader = new Image();
-        loader.onload = () => {
-          img.src = loader.src;
-          setTimeout(streamLiveFrame, 40); // ~25 FPS smooth streaming
-        };
-        loader.onerror = () => {
-          setTimeout(streamLiveFrame, 200);
-        };
-        loader.src = `${API.baseUrl}/api/camera/${encodeURIComponent(cam.camera_id)}/frame.jpg?t=${Date.now()}`;
+
+      // Auto-reconnect stream if disconnected
+      img.onerror = () => {
+        setTimeout(() => {
+          if (tile.isConnected) {
+            img.src = `${API.baseUrl}/api/camera/${encodeURIComponent(cam.camera_id)}/stream?t=${Date.now()}`;
+          }
+        }, 1000);
       };
-      // Kick off live stream
-      streamLiveFrame();
 
       // Click on tile video stage: Set active camera + select target at coordinates
 
@@ -425,13 +422,6 @@ class SurveillanceApp {
           <span class="step-pill step-active">${t.camera_id || t}</span>
           ${idx < trail.length - 1 ? '<span class="step-arrow">&rarr;</span>' : ''}
         `).join('');
-      }
-
-      // Dynamic topology sync: if backend cameras list changed, re-render matrix grid
-      const backendCamIds = Object.keys(st.camera_statuses || {});
-      const localCamIds = this.cameras.map(c => c.camera_id);
-      if (backendCamIds.length !== localCamIds.length || backendCamIds.some(id => !localCamIds.includes(id))) {
-        this.loadLiveMatrix();
       }
 
       // Update Active/Searching tile indicators in the grid

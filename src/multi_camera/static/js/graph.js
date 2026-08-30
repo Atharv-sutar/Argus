@@ -42,14 +42,19 @@ class GraphCanvas {
   }
 
   initCanvasSize() {
+    this.resize();
+    window.addEventListener('resize', () => this.resize());
+  }
+
+  resize() {
     const container = this.canvas.parentElement;
-    const resize = () => {
-      this.canvas.width = container.clientWidth * window.devicePixelRatio;
-      this.canvas.height = container.clientHeight * window.devicePixelRatio;
-      this.ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-    };
-    resize();
-    window.addEventListener('resize', resize);
+    if (container) {
+      const rect = container.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        this.canvas.width = rect.width;
+        this.canvas.height = rect.height;
+      }
+    }
   }
 
   initEvents() {
@@ -311,28 +316,42 @@ class GraphCanvas {
   }
 
   fitToScreen() {
+    const rect = this.canvas.getBoundingClientRect();
+    const w = rect.width || this.canvas.width || 800;
+    const h = rect.height || this.canvas.height || 600;
+
     if (this.nodes.length === 0) {
       this.scale = 1.0;
-      this.panX = 0;
-      this.panY = 0;
+      this.panX = w / 2;
+      this.panY = h / 2;
       return;
     }
-    const xs = this.nodes.map(n => n.position_x);
-    const ys = this.nodes.map(n => n.position_y);
-    const minX = Math.min(...xs) - 80;
-    const maxX = Math.max(...xs) + 80;
-    const minY = Math.min(...ys) - 80;
-    const maxY = Math.max(...ys) + 80;
 
-    const w = maxX - minX;
-    const h = maxY - minY;
-    const rect = this.canvas.getBoundingClientRect();
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    this.nodes.forEach((n, idx) => {
+      if (isNaN(n.position_x) || n.position_x === null || n.position_x === undefined) {
+        n.position_x = 200 + (idx % 3) * 180;
+      }
+      if (isNaN(n.position_y) || n.position_y === null || n.position_y === undefined) {
+        n.position_y = 180 + Math.floor(idx / 3) * 160;
+      }
+      minX = Math.min(minX, n.position_x);
+      maxX = Math.max(maxX, n.position_x);
+      minY = Math.min(minY, n.position_y);
+      maxY = Math.max(maxY, n.position_y);
+    });
 
-    const scaleX = rect.width / w;
-    const scaleY = rect.height / h;
-    this.scale = Math.max(0.4, Math.min(1.5, Math.min(scaleX, scaleY)));
-    this.panX = rect.width / 2 - ((minX + maxX) / 2) * this.scale;
-    this.panY = rect.height / 2 - ((minY + maxY) / 2) * this.scale;
+    const boxW = Math.max(120, maxX - minX + 160);
+    const boxH = Math.max(120, maxY - minY + 160);
+
+    const scaleX = (w - 80) / boxW;
+    const scaleY = (h - 80) / boxH;
+    this.scale = Math.max(0.5, Math.min(1.4, Math.min(scaleX, scaleY)));
+
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+    this.panX = w / 2 - centerX * this.scale;
+    this.panY = h / 2 - centerY * this.scale;
   }
 
   selectNode(node) {
@@ -357,15 +376,26 @@ class GraphCanvas {
 
   draw() {
     const rect = this.canvas.getBoundingClientRect();
-    const w = rect.width;
-    const h = rect.height;
+    const w = rect.width || this.canvas.width;
+    const h = rect.height || this.canvas.height;
+    if (w <= 0 || h <= 0) return;
 
+    if (this.canvas.width !== w || this.canvas.height !== h) {
+      this.canvas.width = w;
+      this.canvas.height = h;
+    }
+
+    this.ctx.setTransform(1, 0, 0, 1, 0, 0);
     this.ctx.clearRect(0, 0, w, h);
     this.ctx.save();
 
-    // Apply Viewport Transform
-    this.ctx.translate(this.panX, this.panY);
-    this.ctx.scale(this.scale, this.scale);
+    // Apply Viewport Transform safely
+    const panX = isNaN(this.panX) ? 0 : this.panX;
+    const panY = isNaN(this.panY) ? 0 : this.panY;
+    const scale = isNaN(this.scale) || this.scale <= 0 ? 1.0 : this.scale;
+
+    this.ctx.translate(panX, panY);
+    this.ctx.scale(scale, scale);
 
     // 1. Draw Grid
     this.drawGrid(w, h);

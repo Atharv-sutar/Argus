@@ -2,30 +2,41 @@
   "version": 1,
   "cameras": [
     {
-      "camera_id": "cam_1",
-      "name": "Webcam 1",
-      "source": 1,
-      "source_type": "webcam",
-      "enabled": true,
-      "position_x": 80.49461408554129,
-      "position_y": -216.03511333222013,
-      "floor": null,
-      "zone": null,
-      "description": null
-    },
-    {
       "camera_id": "cam_test",
-      "name": "Test Room",
+      "name": "Synthetic Corridor",
       "source": "synthetic",
       "source_type": "synthetic",
       "enabled": true,
-      "position_x": 143.16729359922041,
-      "position_y": -65.81655051865758,
+      "position_x": 480,
+      "position_y": 200,
+      "floor": "1",
+      "zone": "Corridor",
+      "description": "Synthetic Target Simulator"
+    },
+    {
+      "camera_id": "cam_0",
+      "name": "Webcam 0",
+      "source": 0,
+      "source_type": "webcam",
+      "enabled": true,
+      "position_x": 256.5639602599093,
+      "position_y": 204.4311417310311,
       "floor": null,
       "zone": null,
       "description": null
     }
   ],
-  "edges": [],
+  "edges": [
+    {
+      "source_camera_id": "cam_0",
+      "target_camera_id": "cam_test",
+      "edge_type": "adjacent",
+      "direction": "bidirectional",
+      "enabled": true,
+      "expected_min_transition_s": null,
+      "expected_typical_transition_s": null,
+      "expected_max_transition_s": null
+    }
+  ],
   "background_map": null
 }

@@ -43,17 +43,17 @@ class TrackingConfig:
 @dataclass
 class ReIDConfig:
     model_name: str = "osnet_x0_25"
-    match_threshold: float = 0.75
-    auto_add_threshold: float = 0.85
+    match_threshold: float = 0.65
+    auto_add_threshold: float = 0.80
     auto_add_min_consecutive: int = 3
-    diversity_threshold: float = 0.96
+    diversity_threshold: float = 0.92
     max_gallery_size: int = 25
     min_margin: float = 0.05
     lock_switch_margin: float = 0.05
     extract_interval_frames: int = 5
-    min_crop_width: int = 24
-    min_crop_height: int = 60
-    min_sharpness: float = 25.0
+    min_crop_width: int = 32
+    min_crop_height: int = 64
+    min_sharpness: float = 20.0
 
     # Backward-compatible property aliases
     @property
