@@ -27,6 +27,7 @@ tracking:
 reid:
   model_name: "osnet_x1_0"
   match_threshold: 0.65
+  reacquisition_threshold: 0.75
   auto_add_threshold: 0.80
   auto_add_min_consecutive: 3
   diversity_threshold: 0.92

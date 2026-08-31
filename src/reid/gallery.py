@@ -231,7 +231,7 @@ class TargetGallery:
         if self._manual_matrix is not None and len(self._manual_matrix) > 0:
             m_sims = self._manual_matrix @ embedding.vector
             max_manual_sim = float(np.max(m_sims))
-            min_anchor = max(0.40, self.match_threshold - 0.20)
+            min_anchor = max(0.55, self.match_threshold - 0.05)
             if max_manual_sim < min_anchor:
                 logger.debug(
                     f"[TARGET_GALLERY] Auto-add rejected for Track #{track_id}: "

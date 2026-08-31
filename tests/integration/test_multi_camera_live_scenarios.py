@@ -172,3 +172,41 @@ def test_cross_camera_handoff_and_reacquisition():
     assert pipe.active_camera_id == "cam_B"
     pipe_b = pipe._pipelines["cam_B"]
     assert pipe_b.current_target.state == TargetState.TRACKING
+
+
+def test_lone_bystander_anti_scoop_and_legitimate_reacquisition():
+    """Verify that a lone bystander (moderate similarity) is never scooped, but the true target reacquires."""
+    pipe, det_a, det_b, mock_reid = _build_test_setup()
+
+    # 1. Target selected on Cam A
+    det_a.set_person(50.0, 50.0, 150.0, 180.0)
+    det_b.clear()
+    pipe.step()
+    pipe.select_target_on_camera("cam_A", 100.0, 100.0)
+    for _ in range(3):
+        pipe.step()
+
+    # 2. Target leaves -> marked LOST
+    det_a.clear()
+    pipe.step()
+    assert pipe.target_manager.target.state in (TargetState.LOST, TargetState.UNCERTAIN)
+
+    # 3. Lone bystander appears (is_target_mode = False)
+    det_a.set_person(60.0, 60.0, 160.0, 190.0)
+    mock_reid.is_target_mode = False
+
+    for _ in range(10):
+        pipe.step()
+
+    # Bystander must NOT be scooped!
+    assert pipe.target_manager.target.state == TargetState.LOST
+
+    # 4. True target returns alone (is_target_mode = True)
+    mock_reid.is_target_mode = True
+    for _ in range(5):
+        pipe.step()
+
+    # Target is successfully reacquired!
+    assert pipe.target_manager.target.state == TargetState.TRACKING
+    assert pipe.target_manager.target.track_id is not None
+

@@ -7,6 +7,8 @@ class SurveillanceApp {
     this.mode = 'matrix'; // 'matrix' | 'topology'
     this.cameras = [];
     this.activeCameraId = null;
+    this._pendingActiveCameraSwitch = null;
+    this._pendingActiveCameraSwitchTime = 0;
     this.targetState = 'UNSELECTED';
     this.searchProgress = null;
     this.statusPollTimer = null;
@@ -286,8 +288,16 @@ class SurveillanceApp {
         const clickY = e.clientY - rect.top;
 
         // Scale to image actual pixel dimensions
-        const scaleX = (img.naturalWidth || 640) / rect.width;
-        const scaleY = (img.naturalHeight || 480) / rect.height;
+        let imgW = img.naturalWidth;
+        let imgH = img.naturalHeight;
+        if (!imgW || imgW === 0) {
+          imgW = (cam.width && cam.width > 0) ? cam.width : 640;
+        }
+        if (!imgH || imgH === 0) {
+          imgH = (cam.height && cam.height > 0) ? cam.height : 480;
+        }
+        const scaleX = imgW / rect.width;
+        const scaleY = imgH / rect.height;
 
         const targetX = clickX * scaleX;
         const targetY = clickY * scaleY;
@@ -297,12 +307,16 @@ class SurveillanceApp {
           if (res && res.selected_id !== null && res.selected_id !== undefined) {
             this.showToast(`Target locked! Tracker ID: ${res.selected_id} on ${cam.name || cam.camera_id}`, 'success');
             this.activeCameraId = cam.camera_id;
+            this._pendingActiveCameraSwitch = cam.camera_id;
+            this._pendingActiveCameraSwitchTime = Date.now();
             this.refreshStatus();
             this.refreshGallery();
           } else {
             // Simply switch active camera focus
             await API.setActiveCamera(cam.camera_id);
             this.activeCameraId = cam.camera_id;
+            this._pendingActiveCameraSwitch = cam.camera_id;
+            this._pendingActiveCameraSwitchTime = Date.now();
             this.updateActiveTileVisuals();
             this.refreshStatus();
             this.showToast(`Active focus set to '${cam.name || cam.camera_id}'`, 'info');
@@ -325,6 +339,8 @@ class SurveillanceApp {
         try {
           await API.setActiveCamera(cam.camera_id);
           this.activeCameraId = cam.camera_id;
+          this._pendingActiveCameraSwitch = cam.camera_id;
+          this._pendingActiveCameraSwitchTime = Date.now();
           this.updateActiveTileVisuals();
           this.refreshStatus();
           this.showToast(`Focused on '${cam.name || cam.camera_id}'`, 'info');
@@ -336,12 +352,16 @@ class SurveillanceApp {
 
       tile.querySelector('.btn-snap-cam').addEventListener('click', async (e) => {
         e.stopPropagation();
-        const res = await API.addSample(cam.camera_id);
-        if (res.success) {
-          this.showToast(`Angle captured on ${cam.name}!`, 'success');
-          this.refreshGallery();
-        } else {
-          this.showToast('No active target locked to add angle', 'error');
+        try {
+          const res = await API.addSample(cam.camera_id);
+          if (res.success) {
+            this.showToast(`Angle captured on ${cam.name || cam.camera_id}!`, 'success');
+            this.refreshGallery();
+          } else {
+            this.showToast('No active target locked to add angle', 'error');
+          }
+        } catch (err) {
+          this.showToast(`Failed to capture angle: ${err.message}`, 'error');
         }
       });
 
@@ -354,10 +374,16 @@ class SurveillanceApp {
       const cid = t.dataset.cameraId;
       const isAct = (cid === this.activeCameraId);
       t.classList.toggle('tile-active', isAct);
+      t.classList.remove('tile-searching');
       const badge = document.getElementById(`badge-${cid}`);
-      if (badge && isAct) {
-        badge.className = 'tile-cam-badge badge-active';
-        badge.textContent = 'ACTIVE FOCUS';
+      if (badge) {
+        if (isAct) {
+          badge.className = 'tile-cam-badge badge-active';
+          badge.textContent = 'ACTIVE FOCUS';
+        } else {
+          badge.className = 'tile-cam-badge badge-standby';
+          badge.textContent = 'STANDBY';
+        }
       }
     });
   }
@@ -379,7 +405,16 @@ class SurveillanceApp {
       const st = await API.getStatus();
       if (!st) return;
 
-      this.activeCameraId = st.active_camera;
+      const pendingGraceMs = 2000;
+      if (this._pendingActiveCameraSwitch && (Date.now() - this._pendingActiveCameraSwitchTime) < pendingGraceMs) {
+        if (st.active_camera === this._pendingActiveCameraSwitch) {
+          this._pendingActiveCameraSwitch = null;
+        }
+      } else {
+        this._pendingActiveCameraSwitch = null;
+        this.activeCameraId = st.active_camera;
+      }
+
       this.targetState = st.target_state || 'UNSELECTED';
       this.searchProgress = st.search_progress;
 

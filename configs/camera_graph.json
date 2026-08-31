@@ -2,41 +2,18 @@
   "version": 1,
   "cameras": [
     {
-      "camera_id": "cam_test",
-      "name": "Synthetic Corridor",
-      "source": "synthetic",
-      "source_type": "synthetic",
-      "enabled": true,
-      "position_x": 480,
-      "position_y": 200,
-      "floor": "1",
-      "zone": "Corridor",
-      "description": "Synthetic Target Simulator"
-    },
-    {
       "camera_id": "cam_0",
       "name": "Webcam 0",
       "source": 0,
       "source_type": "webcam",
       "enabled": true,
-      "position_x": 256.5639602599093,
-      "position_y": 204.4311417310311,
+      "position_x": 267.1583014473547,
+      "position_y": 182.472001257669,
       "floor": null,
       "zone": null,
       "description": null
     }
   ],
-  "edges": [
-    {
-      "source_camera_id": "cam_0",
-      "target_camera_id": "cam_test",
-      "edge_type": "adjacent",
-      "direction": "bidirectional",
-      "enabled": true,
-      "expected_min_transition_s": null,
-      "expected_typical_transition_s": null,
-      "expected_max_transition_s": null
-    }
-  ],
+  "edges": [],
   "background_map": null
 }

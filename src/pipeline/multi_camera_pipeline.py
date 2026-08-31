@@ -128,6 +128,23 @@ class MultiCameraPipeline:
         self._switch_consensus: Dict[int, int] = {}
         self._current_track_misses: int = 0
 
+        # 7. Reacquisition threshold (strictly higher than match_threshold)
+        self._reacquisition_threshold: float = getattr(
+            config.reid, 'reacquisition_threshold',
+            max(0.75, config.reid.match_threshold + 0.10)
+        )
+
+        # 8. EvidenceEngine for temporal evidence accumulation (anti-scoop)
+        from src.identity.evidence import EvidenceEngine
+        self._evidence_engine = EvidenceEngine(
+            window_size=5,
+            min_similarity_threshold=config.reid.match_threshold,
+            reacquisition_threshold=self._reacquisition_threshold,
+            reacquisition_min_frames=3,
+            min_margin_threshold=config.reid.min_margin,
+            min_consistency_ratio=0.70,
+        )
+
         # Sync nodes from graph
         self._sync_nodes_with_graph()
 
@@ -463,7 +480,7 @@ class MultiCameraPipeline:
 
             # If active camera was removed or none set, pick first available
             if self._active_camera_id not in current_cams or not self._active_camera_id:
-                enabled_cams = [cid for cid, n in self._nodes.items() if n.config.enabled]
+                enabled_cams = [cid for cid in self.graph.all_camera_ids() if cid in self._nodes and self._nodes[cid].config.enabled]
                 self._active_camera_id = enabled_cams[0] if enabled_cams else None
 
         logger.info(f"[MULTI-CAM] Topology updated: {len(self._nodes)} cameras, {self.graph.edge_count()} edges.")
@@ -483,7 +500,7 @@ class MultiCameraPipeline:
 
         # 1. Default active camera if none selected or if removed
         if not self._active_camera_id or self._active_camera_id not in self._nodes:
-            enabled_ids = [cid for cid, n in self._nodes.items() if n.config.enabled]
+            enabled_ids = [cid for cid in self.graph.all_camera_ids() if cid in self._nodes and self._nodes[cid].config.enabled]
             self._active_camera_id = enabled_ids[0] if enabled_ids else None
 
         # 2. Process Active Camera
@@ -587,12 +604,14 @@ class MultiCameraPipeline:
                     rec_track, rec_crop, rec_emb, rec_sim = self._match_candidates_against_gallery(
                         s_worker, s_frame, s_track
                     )
-                    if rec_track is not None and rec_sim >= self.config.reid.match_threshold:
+                    # Cross-camera recovery uses reacquisition_threshold (higher than match_threshold)
+                    if rec_track is not None and rec_sim >= self._reacquisition_threshold:
                         confirmed = self.search_manager.on_candidate_found(search_cam_id, rec_sim)
                         if confirmed:
                             logger.info(
                                 f"[MULTI-CAM RECOVERY] Target CONFIRMED on '{search_cam_id}' "
-                                f"(Track={rec_track.track_id}, sim={rec_sim:.3f})"
+                                f"(Track={rec_track.track_id}, sim={rec_sim:.3f}, "
+                                f"reacq_thresh={self._reacquisition_threshold:.3f})"
                             )
                             candidate_recovered_cam = search_cam_id
                             candidate_recovered_track = rec_track
@@ -703,9 +722,7 @@ class MultiCameraPipeline:
                 elif target.state in (TargetState.TRACKING, TargetState.LOCKED, TargetState.OCCLUDED):
                     self.target_manager.mark_tracking(current_track, track_res.frame_id, timestamp_ms)
             elif current_track is None and target.state in (TargetState.TRACKING, TargetState.LOCKED, TargetState.OCCLUDED):
-                self._current_track_misses += 1
-                if self._current_track_misses >= 3:
-                    self.target_manager.mark_lost(timestamp_ms)
+                self.target_manager.mark_lost(timestamp_ms)
             return
 
         # Case B: On frames where ReID IS evaluated (or target is LOST / OCCLUDED)
@@ -720,9 +737,7 @@ class MultiCameraPipeline:
 
         if not crops_list:
             if target.state in (TargetState.TRACKING, TargetState.LOCKED, TargetState.OCCLUDED):
-                self._current_track_misses += 1
-                if self._current_track_misses >= 3:
-                    self.target_manager.mark_lost(timestamp_ms)
+                self.target_manager.mark_lost(timestamp_ms)
             return
 
         try:
@@ -804,7 +819,22 @@ class MultiCameraPipeline:
                     if margin >= switch_margin:
                         other_tid = best_other_track.track_id
                         self._switch_consensus[other_tid] = self._switch_consensus.get(other_tid, 0) + 1
-                        if current_sim < (match_thresh - 0.20) or self._switch_consensus[other_tid] >= 2:
+
+                        # Anti-scoop: verify switch candidate against manual gallery entries
+                        manual_anchor_pass = True
+                        if best_other_emb is not None and self.gallery._manual_matrix is not None and len(self.gallery._manual_entries) > 0:
+                            m_sims = self.gallery._manual_matrix @ best_other_emb.vector
+                            max_manual_sim = float(np.max(m_sims))
+                            manual_anchor_pass = max_manual_sim >= max(0.55, match_thresh - 0.05)
+                            if not manual_anchor_pass:
+                                logger.info(
+                                    f"[ANTI-SCOOP] Lock-switch to Track #{other_tid} REJECTED: "
+                                    f"manual anchor check failed (sim_manual={max_manual_sim:.3f})"
+                                )
+
+                        if manual_anchor_pass and (
+                            current_sim < (match_thresh - 0.20) or self._switch_consensus[other_tid] >= 3
+                        ):
                             should_switch = True
                     else:
                         self._switch_consensus.clear()
@@ -817,8 +847,9 @@ class MultiCameraPipeline:
                         f"Track #{current_track.track_id} (sim={current_sim:.3f}) to Track #{best_other_track.track_id} "
                         f"(sim={best_other_sim:.3f})"
                     )
-                    # Purge any auto-enrolled entries from the deposed track
+                    # Purge auto-enrolled entries from the deposed track AND any stale entries for the new track
                     self.gallery.rollback_auto_entries(for_track_id=current_track.track_id)
+                    self.gallery.rollback_auto_entries(for_track_id=best_other_track.track_id)
                     self._switch_consensus.clear()
                     self._current_track_misses = 0
 
@@ -842,7 +873,7 @@ class MultiCameraPipeline:
 
                 # Grace period before declaring LOST (to avoid flipping on single noisy frame)
                 self._current_track_misses += 1
-                if self._current_track_misses < 3:
+                if self._current_track_misses < 2:
                     self.target_manager.mark_tracking(current_track, track_res.frame_id, timestamp_ms)
                     self.target_manager.target.state = TargetState.UNCERTAIN
                 else:
@@ -853,12 +884,13 @@ class MultiCameraPipeline:
                     self.target_manager.mark_lost(timestamp_ms)
             else:
                 # Current track dropped out of view
-                if best_other_track is not None and best_other_sim >= match_thresh:
+                if best_other_track is not None and best_other_sim >= self._reacquisition_threshold:
                     other_tid = best_other_track.track_id
                     self._switch_consensus[other_tid] = self._switch_consensus.get(other_tid, 0) + 1
-                    if self._switch_consensus[other_tid] >= 2:
+                    if self._switch_consensus[other_tid] >= 3:
                         logger.info(
-                            f"[TARGET REASSOCIATED] Track switched to #{best_other_track.track_id} (sim={best_other_sim:.3f})"
+                            f"[TARGET REASSOCIATED] Track switched to #{best_other_track.track_id} "
+                            f"(sim={best_other_sim:.3f}, reacq_thresh={self._reacquisition_threshold:.3f})"
                         )
                         self._switch_consensus.clear()
                         self._current_track_misses = 0
@@ -869,55 +901,114 @@ class MultiCameraPipeline:
                             reid_verified=True,
                         )
                         return
-                self._current_track_misses += 1
-                if self._current_track_misses >= 2:
-                    self.target_manager.mark_lost(timestamp_ms)
+                self.target_manager.mark_lost(timestamp_ms)
 
-        # Scenario 2: Target was LOST or UNCERTAIN - reacquire when candidate passes match threshold
+        # Scenario 2: Target was LOST or UNCERTAIN — Evidence-gated reacquisition (anti-scoop)
         else:
-            best_candidate: Optional[Track] = None
-            best_cand_sim = 0.0
-            best_cand_crop: Optional[np.ndarray] = None
-            best_cand_emb: Optional[Embedding] = None
+            # Feed all candidates into the EvidenceEngine
+            evidence_records = []
+            all_sorted = []
+            for (cand_track, cand_crop), cand_emb, (eff_sim, man_sim, auto_sim, _) in zip(
+                candidates_to_extract, embs, match_details
+            ):
+                eff_sim_f = float(eff_sim)
+                is_match = eff_sim_f >= self._reacquisition_threshold
 
-            if current_track is not None and current_sim >= match_thresh:
-                best_candidate = current_track
-                best_cand_sim = current_sim
-                best_cand_crop = current_crop
-                best_cand_emb = current_emb
-
-            if best_other_track is not None and best_other_sim > best_cand_sim and best_other_sim >= match_thresh:
-                best_candidate = best_other_track
-                best_cand_sim = best_other_sim
-                best_cand_crop = best_other_crop
-                best_cand_emb = best_other_emb
-
-            if best_candidate is not None:
-                cand_tid = best_candidate.track_id
-                self._switch_consensus[cand_tid] = self._switch_consensus.get(cand_tid, 0) + 1
-                if self._switch_consensus[cand_tid] >= 2:
-                    logger.info(
-                        f"[TARGET REACQUIRED] Target reacquired on '{self._active_camera_id}' "
-                        f"as Track #{best_candidate.track_id} (sim={best_cand_sim:.3f})"
-                    )
-                    self._switch_consensus.clear()
-                    self._current_track_misses = 0
-                    self.target_manager.reassociate_target(
-                        track=best_candidate,
-                        frame_id=track_res.frame_id,
-                        timestamp_ms=timestamp_ms,
-                        reid_verified=True,
-                    )
-                    if best_cand_crop is not None and best_cand_emb is not None and best_cand_sim >= auto_thresh:
-                        self.gallery.add_auto(
-                            crop=best_cand_crop,
-                            embedding=best_cand_emb,
-                            candidate_similarity=best_cand_sim,
-                            camera_id=self._active_camera_id or "camera_0",
-                            timestamp_ms=timestamp_ms,
-                            frame_id=track_res.frame_id,
-                            track_id=best_candidate.track_id,
+                # Lone-bystander anti-scoop: when only 1 person in frame, require higher threshold
+                lone_person = len(candidates_to_extract) == 1
+                if lone_person:
+                    lone_thresh = self._reacquisition_threshold + 0.05
+                    is_match = eff_sim_f >= lone_thresh
+                    if not is_match:
+                        logger.info(
+                            f"[ANTI-SCOOP] LONE_PERSON_ANTILOCK: Track #{cand_track.track_id} "
+                            f"sim={eff_sim_f:.3f} < lone_thresh={lone_thresh:.3f} | "
+                            f"Refusing to lock onto single person in frame while target is LOST"
                         )
+
+                # Manual anchor verification for reacquisition
+                if is_match and cand_emb is not None and self.gallery._manual_matrix is not None and len(self.gallery._manual_entries) > 0:
+                    m_sims = self.gallery._manual_matrix @ cand_emb.vector
+                    max_manual_sim = float(np.max(m_sims))
+                    manual_anchor_thresh = max(0.55, self._reacquisition_threshold - 0.15)
+                    if max_manual_sim < manual_anchor_thresh:
+                        logger.info(
+                            f"[ANTI-SCOOP] Reacquisition of Track #{cand_track.track_id} REJECTED: "
+                            f"manual anchor check failed (sim_manual={max_manual_sim:.3f} < {manual_anchor_thresh:.3f})"
+                        )
+                        is_match = False
+
+                self._evidence_engine.register_observation(
+                    track_id=cand_track.track_id,
+                    frame_id=self._frame_count,
+                    timestamp_ms=timestamp_ms,
+                    crop_quality=1.0,
+                    similarity=eff_sim_f,
+                    margin=0.0,
+                    is_match=is_match,
+                    box=cand_track.box,
+                )
+                evidence_records.append((cand_track, eff_sim_f, is_match, 1.0))
+                all_sorted.append((cand_track, cand_crop, cand_emb, eff_sim_f))
+
+            # Prune stale tracks
+            self._evidence_engine.prune_stale_tracks(
+                [t.track_id for t in track_res.tracks],
+                current_frame_id=self._frame_count,
+                max_stale_frames=30,
+            )
+
+            # Evaluate through the EvidenceEngine
+            if evidence_records:
+                evidence_dec = self._evidence_engine.evaluate_all_candidates(
+                    evidence_records,
+                    target_identity_id="target_0",
+                    current_tracked_id=target.track_id,
+                    is_reacquisition=True,
+                )
+
+                if evidence_dec.is_confirmed and evidence_dec.best_track_id is not None:
+                    # Find the confirmed track's data
+                    confirmed_track = None
+                    confirmed_crop = None
+                    confirmed_emb = None
+                    confirmed_sim = evidence_dec.best_score
+                    for (ct, cc, ce, cs) in all_sorted:
+                        if ct.track_id == evidence_dec.best_track_id:
+                            confirmed_track = ct
+                            confirmed_crop = cc
+                            confirmed_emb = ce
+                            confirmed_sim = cs
+                            break
+
+                    if confirmed_track is not None:
+                        logger.info(
+                            f"[TARGET REACQUIRED] Target reacquired on '{self._active_camera_id}' "
+                            f"as Track #{confirmed_track.track_id} (sim={confirmed_sim:.3f}, "
+                            f"evidence_score={evidence_dec.best_score:.3f}, "
+                            f"reason={evidence_dec.decision_reason})"
+                        )
+                        self._switch_consensus.clear()
+                        self._current_track_misses = 0
+                        self.target_manager.reassociate_target(
+                            track=confirmed_track,
+                            frame_id=track_res.frame_id,
+                            timestamp_ms=timestamp_ms,
+                            decision=evidence_dec.verified_token,
+                            reid_verified=True,
+                        )
+                        if confirmed_crop is not None and confirmed_emb is not None and confirmed_sim >= auto_thresh:
+                            self.gallery.add_auto(
+                                crop=confirmed_crop,
+                                embedding=confirmed_emb,
+                                candidate_similarity=confirmed_sim,
+                                camera_id=self._active_camera_id or "camera_0",
+                                timestamp_ms=timestamp_ms,
+                                frame_id=track_res.frame_id,
+                                track_id=confirmed_track.track_id,
+                            )
+                elif evidence_dec.diagnostic_log:
+                    logger.debug(evidence_dec.diagnostic_log)
 
     def _match_candidates_against_gallery(
         self,
@@ -998,12 +1089,14 @@ class MultiCameraPipeline:
             reid_verified=True,
         )
 
-        # Auto-enroll cross-camera viewpoint
+        # Auto-enroll cross-camera viewpoint (use actual measured similarity, NOT hardcoded)
         if crop is not None and embedding is not None:
+            # Compute actual similarity against gallery for honest enrollment
+            actual_sim, _ = self.gallery.match(embedding)
             self.gallery.add_auto(
                 crop=crop,
                 embedding=embedding,
-                candidate_similarity=0.95,
+                candidate_similarity=actual_sim,
                 camera_id=new_camera_id,
                 timestamp_ms=time.time() * 1000.0,
                 track_id=recovered_track.track_id,
