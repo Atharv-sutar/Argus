@@ -70,6 +70,9 @@ class CameraManager {
       this.discoveredCameras = data.cameras || [];
       this.renderList();
       this.app.showToast(`Detected ${this.discoveredCameras.length} camera source(s)`, 'info');
+      if (this.app.mode === 'matrix') {
+        this.app.loadLiveMatrix();
+      }
     } catch (err) {
       this.listEl.innerHTML = `<div class="empty-state">Discovery failed: ${err.message}</div>`;
       this.app.showToast('Discovery failed', 'error');

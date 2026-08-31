@@ -99,6 +99,35 @@ class SurveillanceApp {
     document.getElementById('btn-clear-target-global').addEventListener('click', clearTargetFn);
     document.getElementById('btn-card-clear').addEventListener('click', clearTargetFn);
 
+    // Refresh / Restart Feeds Button
+    const refreshCamerasFn = async () => {
+      const btnRefresh = document.getElementById('btn-refresh-cameras');
+      if (btnRefresh) btnRefresh.disabled = true;
+      this.showToast('Restarting camera hardware capture streams...', 'info');
+      try {
+        await API.restartCameras();
+        await new Promise((r) => setTimeout(r, 400));
+        await this.loadLiveMatrix();
+        document.querySelectorAll('.camera-feed-img').forEach((img) => {
+          if (img.src) {
+            const base = img.src.split('?')[0];
+            img.src = `${base}?t=${Date.now()}`;
+          }
+        });
+        this.showToast('All camera streams restarted successfully', 'success');
+      } catch (err) {
+        this.showToast(`Failed to restart cameras: ${err.message}`, 'error');
+      } finally {
+        if (btnRefresh) btnRefresh.disabled = false;
+      }
+    };
+    this.refreshCamerasFn = refreshCamerasFn;
+
+    const btnRefresh = document.getElementById('btn-refresh-cameras');
+    if (btnRefresh) {
+      btnRefresh.addEventListener('click', refreshCamerasFn);
+    }
+
     const btnQuit = document.getElementById('btn-quit-global');
     if (btnQuit) {
       btnQuit.addEventListener('click', () => this.safeQuit());
@@ -114,6 +143,9 @@ class SurveillanceApp {
       } else if (key === 'c') {
         e.preventDefault();
         clearTargetFn();
+      } else if (key === 'r') {
+        e.preventDefault();
+        refreshCamerasFn();
       } else if (key === 'q') {
         e.preventDefault();
         this.safeQuit();
@@ -235,7 +267,7 @@ class SurveillanceApp {
         badgeText = 'DISABLED';
       }
 
-      const streamUrl = API.getCameraStreamUrl(cam.camera_id);
+      const streamUrl = `${API.getCameraStreamUrl(cam.camera_id)}?t=${Date.now()}`;
       const fallbackUrl = API.getCameraFrameUrl(cam.camera_id);
 
       const tile = document.createElement('div');

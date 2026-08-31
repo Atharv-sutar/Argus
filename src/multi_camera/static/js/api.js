@@ -42,6 +42,16 @@ const API = {
     return await res.json();
   },
 
+  async restartCameras() {
+    const res = await fetch(`${this.baseUrl}/api/cameras/restart`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to restart cameras');
+    return data;
+  },
+
   async setActiveCamera(cameraId) {
     const res = await fetch(`${this.baseUrl}/api/camera/select_active`, {
       method: 'POST',

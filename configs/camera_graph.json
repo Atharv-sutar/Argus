@@ -2,13 +2,13 @@
   "version": 1,
   "cameras": [
     {
-      "camera_id": "cam_0",
-      "name": "Webcam 0",
-      "source": 0,
+      "camera_id": "cam_1",
+      "name": "Webcam 1",
+      "source": 1,
       "source_type": "webcam",
       "enabled": true,
-      "position_x": 267.1583014473547,
-      "position_y": 182.472001257669,
+      "position_x": 448.3306496507121,
+      "position_y": 181.25932796155482,
       "floor": null,
       "zone": null,
       "description": null

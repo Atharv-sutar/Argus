@@ -119,6 +119,8 @@ class MultiCameraPipeline:
         self._target_lost_timestamp: float = 0.0
         self._handoff_timestamp: float = 0.0
         self._is_running: bool = True
+        self._is_paused: bool = False
+        self._pipeline_lock: threading.RLock = threading.RLock()
         self._transit_history: List[Dict[str, Any]] = []
         self._frame_count: int = 0
         self.reid_interval: int = config.reid.extract_interval_frames
@@ -220,6 +222,17 @@ class MultiCameraPipeline:
             height=self.config.camera.height,
             fps=self.config.camera.fps,
         )
+
+    def update_graph(self, new_graph: CameraGraph) -> None:
+        """Dynamically updates the camera graph topology and syncs active workers."""
+        logger.info(f"[MULTI-CAM] Updating pipeline camera topology graph ({len(new_graph.nodes)} cameras)...")
+        with self._pipeline_lock:
+            self.graph = new_graph
+            self.search_manager.graph = new_graph
+            self._sync_nodes_with_graph()
+            if not self._active_camera_id or self._active_camera_id not in self._nodes:
+                enabled_ids = [cid for cid in self.graph.all_camera_ids() if cid in self._nodes and self._nodes[cid].config.enabled]
+                self._active_camera_id = enabled_ids[0] if enabled_ids else None
 
     def _sync_nodes_with_graph(self) -> None:
         """Instantiate/sync CameraNode and CameraWorker objects for all nodes in the graph."""
@@ -490,7 +503,7 @@ class MultiCameraPipeline:
         Executes a single processing step across the multi-camera network.
         Processes active camera first, and only processes search-radius cameras if target is LOST.
         """
-        if not self._is_running:
+        if not self._is_running or self._is_paused:
             return {}
 
         self._frame_count += 1
@@ -752,8 +765,10 @@ class MultiCameraPipeline:
         best_other_crop: Optional[np.ndarray] = None
         best_other_emb: Optional[Embedding] = None
         best_other_sim = 0.0
+        best_other_man_sim = 0.0
 
         current_sim = 0.0
+        current_man_sim = 0.0
         current_crop: Optional[np.ndarray] = None
         current_emb: Optional[Embedding] = None
 
@@ -761,22 +776,25 @@ class MultiCameraPipeline:
 
         for (cand_track, cand_crop), cand_emb, (eff_sim, man_sim, auto_sim, _) in zip(candidates_to_extract, embs, match_details):
             eff_sim_f = float(eff_sim)
+            man_sim_f = float(man_sim)
             self._last_candidate_scores[cand_track.track_id] = eff_sim_f
-            cand_telemetry.append(f"#{cand_track.track_id}:{eff_sim_f:.2f}")
+            cand_telemetry.append(f"#{cand_track.track_id}:{eff_sim_f:.2f}(m:{man_sim_f:.2f})")
 
             if current_track is not None and cand_track.track_id == current_track.track_id:
                 current_sim = eff_sim_f
+                current_man_sim = man_sim_f
                 current_crop = cand_crop
                 current_emb = cand_emb
             else:
                 if eff_sim_f > best_other_sim:
                     best_other_sim = eff_sim_f
+                    best_other_man_sim = man_sim_f
                     best_other_track = cand_track
                     best_other_crop = cand_crop
                     best_other_emb = cand_emb
 
         # Diagnostic telemetry
-        cur_id_str = f"Track #{target.track_id} (sim={current_sim:.3f})" if (current_track and target.track_id) else "None (LOST)"
+        cur_id_str = f"Track #{target.track_id} (sim={current_sim:.3f}, man={current_man_sim:.3f})" if (current_track and target.track_id) else "None (LOST)"
         logger.info(
             f"[REID] ActiveCam='{self._active_camera_id}' | Locked={cur_id_str} | "
             f"Candidates=[{', '.join(cand_telemetry)}] | Gallery=(man={self.gallery.manual_count}, auto={self.gallery.auto_count})"
@@ -822,14 +840,12 @@ class MultiCameraPipeline:
 
                         # Anti-scoop: verify switch candidate against manual gallery entries
                         manual_anchor_pass = True
-                        if best_other_emb is not None and self.gallery._manual_matrix is not None and len(self.gallery._manual_entries) > 0:
-                            m_sims = self.gallery._manual_matrix @ best_other_emb.vector
-                            max_manual_sim = float(np.max(m_sims))
-                            manual_anchor_pass = max_manual_sim >= max(0.55, match_thresh - 0.05)
+                        if self.gallery._manual_matrix is not None and len(self.gallery._manual_entries) > 0:
+                            manual_anchor_pass = best_other_man_sim >= max(0.55, match_thresh - 0.05)
                             if not manual_anchor_pass:
                                 logger.info(
                                     f"[ANTI-SCOOP] Lock-switch to Track #{other_tid} REJECTED: "
-                                    f"manual anchor check failed (sim_manual={max_manual_sim:.3f})"
+                                    f"manual anchor check failed (sim_manual={best_other_man_sim:.3f})"
                                 )
 
                         if manual_anchor_pass and (
@@ -845,7 +861,7 @@ class MultiCameraPipeline:
                     logger.info(
                         f"[TARGET LOCK SWITCH] Camera '{self._active_camera_id}': Switching target lock from "
                         f"Track #{current_track.track_id} (sim={current_sim:.3f}) to Track #{best_other_track.track_id} "
-                        f"(sim={best_other_sim:.3f})"
+                        f"(sim={best_other_sim:.3f}, man={best_other_man_sim:.3f})"
                     )
                     # Purge auto-enrolled entries from the deposed track AND any stale entries for the new track
                     self.gallery.rollback_auto_entries(for_track_id=current_track.track_id)
@@ -927,14 +943,12 @@ class MultiCameraPipeline:
                         )
 
                 # Manual anchor verification for reacquisition
-                if is_match and cand_emb is not None and self.gallery._manual_matrix is not None and len(self.gallery._manual_entries) > 0:
-                    m_sims = self.gallery._manual_matrix @ cand_emb.vector
-                    max_manual_sim = float(np.max(m_sims))
+                if is_match and self.gallery._manual_matrix is not None and len(self.gallery._manual_entries) > 0:
                     manual_anchor_thresh = max(0.55, self._reacquisition_threshold - 0.15)
-                    if max_manual_sim < manual_anchor_thresh:
+                    if man_sim_f < manual_anchor_thresh:
                         logger.info(
                             f"[ANTI-SCOOP] Reacquisition of Track #{cand_track.track_id} REJECTED: "
-                            f"manual anchor check failed (sim_manual={max_manual_sim:.3f} < {manual_anchor_thresh:.3f})"
+                            f"manual anchor check failed (sim_manual={man_sim_f:.3f} < {manual_anchor_thresh:.3f})"
                         )
                         is_match = False
 
@@ -1326,14 +1340,55 @@ class MultiCameraPipeline:
             else:
                 logger.info("[MULTI-CAM] No active camera remaining in graph.")
 
+    def release_all_cameras(self) -> None:
+        """Safely stops and releases all active camera capture handles."""
+        logger.info("[MULTI-CAM] Releasing all camera capture handles...")
+        with self._frame_lock:
+            for cid, worker in list(self._workers.items()):
+                try:
+                    worker.stop()
+                except Exception as e:
+                    logger.debug(f"Error stopping worker '{cid}': {e}")
+            self._workers.clear()
+            self._latest_jpegs.clear()
+            for node in self._nodes.values():
+                node.last_frame = None
+
+    def restart_cameras(self) -> None:
+        """Safely releases all active camera handles and re-initializes enabled camera workers."""
+        logger.info("[MULTI-CAM] Restarting all camera workers...")
+        self.release_all_cameras()
+        time.sleep(0.15)
+        with self._frame_lock:
+            self._sync_nodes_with_graph()
+            for cid, node in self._nodes.items():
+                if node.config.enabled:
+                    self._get_or_create_worker(cid)
+        logger.info(f"[MULTI-CAM] Re-initialized {len(self._workers)} camera workers.")
+
+    def pause_processing(self) -> None:
+        """Safely pauses pipeline step loop and releases all camera handles for hardware probing."""
+        logger.info("[MULTI-CAM] Pausing pipeline processing for hardware access...")
+        self._is_paused = True
+        with self._pipeline_lock:
+            self.release_all_cameras()
+
+    def resume_processing(self) -> None:
+        """Restores camera handles and resumes pipeline step loop."""
+        logger.info("[MULTI-CAM] Resuming pipeline processing...")
+        with self._pipeline_lock:
+            self.restart_cameras()
+            self._is_paused = False
+
     def stop(self) -> None:
         """Stop all camera workers and release resources."""
         self._is_running = False
-        for worker in self._workers.values():
-            try:
-                worker.stop()
-            except Exception:
-                pass
-        self._workers.clear()
+        with self._pipeline_lock:
+            for worker in self._workers.values():
+                try:
+                    worker.stop()
+                except Exception:
+                    pass
+            self._workers.clear()
         logger.info("[MULTI-CAM] Pipeline stopped.")
 

@@ -229,7 +229,8 @@ class TargetGallery:
 
         # 2. Ground-truth manual anchor check (Anti-Contamination Guard)
         if self._manual_matrix is not None and len(self._manual_matrix) > 0:
-            m_sims = self._manual_matrix @ embedding.vector
+            raw_m_dots = self._manual_matrix @ embedding.vector
+            m_sims = np.exp(-np.maximum(0.0, 1.0 - raw_m_dots) / 0.009025)
             max_manual_sim = float(np.max(m_sims))
             min_anchor = max(0.55, self.match_threshold - 0.05)
             if max_manual_sim < min_anchor:
@@ -240,6 +241,8 @@ class TargetGallery:
                 if track_id is not None:
                     self._consecutive_matches.pop(track_id, None)
                 return False
+        else:
+            max_manual_sim = 1.0
 
         # 3. Consecutive match hold
         if track_id is not None:
@@ -259,7 +262,8 @@ class TargetGallery:
 
         # 5. Diversity check against existing entries
         if self._matrix is not None and len(self._matrix) > 0:
-            sims = self._matrix @ embedding.vector
+            raw_dots = self._matrix @ embedding.vector
+            sims = np.exp(-np.maximum(0.0, 1.0 - raw_dots) / 0.009025)
             max_sim_to_gallery = float(np.max(sims))
             if max_sim_to_gallery >= self.diversity_threshold:
                 logger.debug(
@@ -292,9 +296,8 @@ class TargetGallery:
         self._entries.append(entry)
         self._rebuild_matrix()
         logger.info(
-            f"[TARGET_GALLERY] Auto-enrolled verified viewpoint ({self.size}/{self.max_size}) "
-            f"on '{camera_id}' for Track #{track_id} (sim={candidate_similarity:.3f}, quality={q_score:.2f}, "
-            f"manual={self.manual_count}, auto={self.auto_count})"
+            f"[TARGET_GALLERY] Auto-added verified viewpoint ({self.size}/{self.max_size}) "
+            f"on '{camera_id}' Track #{track_id} (sim={candidate_similarity:.3f}, manual_anchor={max_manual_sim:.3f})"
         )
         return True
 
@@ -324,7 +327,10 @@ class TargetGallery:
     ) -> List[Tuple[float, float, float, Optional[GalleryEntry]]]:
         """
         Detailed batch matching returning (effective_score, manual_score, auto_score, best_entry).
-        Computes true vectorized max cosine similarity across all gallery entries.
+        Applies Gaussian RBF kernel scaling (sigma=0.095, sigma_sq=0.009025) on L2-normalized embeddings:
+            sim = exp(- (1.0 - C @ G.T) / sigma_sq)
+        Anchors composite similarity strongly to the human-confirmed manual seed:
+            effective_score = 0.70 * manual_score + 0.30 * auto_score
         """
         if not candidate_embeddings:
             return []
@@ -337,20 +343,25 @@ class TargetGallery:
         has_manual = self._manual_matrix is not None and len(self._manual_entries) > 0
         has_auto = self._auto_matrix is not None and len(self._auto_entries) > 0
 
+        # Gaussian RBF kernel scale parameter: sigma = 0.095 => sigma^2 = 0.009025
+        sigma_sq = 0.009025
+
         # 1. Compute manual similarities
         if has_manual:
-            m_sim_matrix = c_matrix @ self._manual_matrix.T  # (K, M)
-            m_best_indices = np.argmax(m_sim_matrix, axis=1)
-            m_max_scores = np.max(m_sim_matrix, axis=1)
+            raw_m_dots = c_matrix @ self._manual_matrix.T  # (K, M)
+            cal_m_sim = np.exp(-np.maximum(0.0, 1.0 - raw_m_dots) / sigma_sq).astype(np.float32)
+            m_best_indices = np.argmax(cal_m_sim, axis=1)
+            m_max_scores = np.max(cal_m_sim, axis=1)
         else:
             m_best_indices = np.zeros(len(candidate_embeddings), dtype=int)
             m_max_scores = np.zeros(len(candidate_embeddings), dtype=np.float32)
 
         # 2. Compute auto similarities
         if has_auto:
-            a_sim_matrix = c_matrix @ self._auto_matrix.T  # (K, A)
-            a_best_indices = np.argmax(a_sim_matrix, axis=1)
-            a_max_scores = np.max(a_sim_matrix, axis=1)
+            raw_a_dots = c_matrix @ self._auto_matrix.T  # (K, A)
+            cal_a_sim = np.exp(-np.maximum(0.0, 1.0 - raw_a_dots) / sigma_sq).astype(np.float32)
+            a_best_indices = np.argmax(cal_a_sim, axis=1)
+            a_max_scores = np.max(cal_a_sim, axis=1)
         else:
             a_best_indices = np.zeros(len(candidate_embeddings), dtype=int)
             a_max_scores = np.zeros(len(candidate_embeddings), dtype=np.float32)
@@ -362,12 +373,9 @@ class TargetGallery:
             a_score = float(a_max_scores[i]) if has_auto else 0.0
 
             if has_manual and has_auto:
-                if a_score > m_score:
-                    effective_score = a_score
-                    best_entry = self._auto_entries[int(a_best_indices[i])]
-                else:
-                    effective_score = m_score
-                    best_entry = self._manual_entries[int(m_best_indices[i])]
+                # Anti-drift anchoring: 70% manual ground-truth, 30% temporal adaptive
+                effective_score = 0.70 * m_score + 0.30 * a_score
+                best_entry = self._manual_entries[int(m_best_indices[i])] if m_score >= a_score else self._auto_entries[int(a_best_indices[i])]
             elif has_manual:
                 effective_score = m_score
                 best_entry = self._manual_entries[int(m_best_indices[i])]
