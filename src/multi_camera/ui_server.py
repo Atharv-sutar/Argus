@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
 import mimetypes
@@ -31,68 +32,123 @@ from src.core.multi_camera_types import (
 )
 from src.multi_camera.camera_graph import CameraGraph
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("argus.ui_server")
 
 STATIC_DIR = Path(__file__).parent / "static"
 
+_SHUTDOWN_EVENT = threading.Event()
 
-import concurrent.futures
 
-def probe_local_webcams(max_indices: int = 4, pipeline: Any = None) -> List[Dict[str, Any]]:
+def is_shutdown_requested() -> bool:
+    """Returns True if a system shutdown has been requested."""
+    return _SHUTDOWN_EVENT.is_set()
+
+
+def _probe_single_device(idx: int) -> Optional[Dict[str, Any]]:
+    """Probes a single camera index using DirectShow (Windows) or native capture."""
+    if cv2 is None or _SHUTDOWN_EVENT.is_set():
+        return None
+    backend = cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY
+    t0 = time.time()
+    cap = None
+    try:
+        cap = cv2.VideoCapture(idx, backend)
+        if not cap or not cap.isOpened():
+            cap = cv2.VideoCapture(idx, cv2.CAP_ANY)
+
+        if cap and cap.isOpened():
+            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640
+            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
+            fps = int(cap.get(cv2.CAP_PROP_FPS)) or 30
+            ret, frame = cap.read()
+            cap.release()
+            cap = None
+            elapsed = time.time() - t0
+            if ret and frame is not None:
+                logger.info(f"[PROBE] Webcam index {idx}: SUCCESS ({w}x{h} @ {fps}fps, took {elapsed:.2f}s)")
+                return {
+                    "source": idx,
+                    "name": f"Webcam {idx}",
+                    "source_type": "webcam",
+                    "width": w,
+                    "height": h,
+                    "fps": fps,
+                    "status": "available",
+                }
+            else:
+                logger.debug(f"[PROBE] Webcam index {idx}: opened but read() failed (took {elapsed:.2f}s)")
+        else:
+            elapsed = time.time() - t0
+            logger.debug(f"[PROBE] Webcam index {idx}: could not open / device absent (took {elapsed:.2f}s)")
+    except Exception as e:
+        elapsed = time.time() - t0
+        logger.debug(f"[PROBE] Webcam index {idx}: probe exception (took {elapsed:.2f}s): {e}")
+    finally:
+        if cap is not None:
+            try:
+                cap.release()
+            except Exception:
+                pass
+    return None
+
+
+def probe_local_webcams(
+    max_indices: int = 4,
+    pipeline: Any = None,
+    timeout_per_index: float = 1.5,
+) -> List[Dict[str, Any]]:
     """
-    Safe sequential probe of local webcam devices.
+    Safe sequential probe of local webcam devices with timeout per index.
     If a pipeline is active, safely pauses processing and releases camera handles first so that
     DirectShow on Windows can probe devices without access conflict, then restores pipeline cameras.
     """
+    if _SHUTDOWN_EVENT.is_set():
+        return []
+
     cameras: List[Dict[str, Any]] = []
+    t_start = time.time()
+    logger.info(f"[TOPOLOGY/PROBE] Starting hardware camera probe (indices 0..{max_indices - 1})...")
 
     # 1. If pipeline is running, safely pause processing and release cameras during probe
     was_pipeline_active = False
-    if pipeline is not None and hasattr(pipeline, "pause_processing"):
+    if pipeline is not None and hasattr(pipeline, "pause_processing") and not _SHUTDOWN_EVENT.is_set():
         was_pipeline_active = True
         try:
+            logger.info("[TOPOLOGY/PROBE] Pausing pipeline processing to release DirectShow camera handles...")
             pipeline.pause_processing()
-            time.sleep(0.20)  # brief pause for OS to release DirectShow handles
+            time.sleep(0.15)  # brief pause for OS to release DirectShow handles
         except Exception as e:
-            logger.debug(f"Error pausing pipeline for probe: {e}")
+            logger.warning(f"[TOPOLOGY/PROBE] Error pausing pipeline for probe: {e}")
 
-    if cv2 is not None:
-        for idx in range(max_indices):
-            try:
-                backend = cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY
-                cap = cv2.VideoCapture(idx, backend)
-                if not cap or not cap.isOpened():
-                    cap = cv2.VideoCapture(idx, cv2.CAP_ANY)
-
-                if cap and cap.isOpened():
-                    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640
-                    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
-                    fps = int(cap.get(cv2.CAP_PROP_FPS)) or 30
-                    ret, frame = cap.read()
-                    cap.release()
-                    if ret and frame is not None:
-                        cameras.append({
-                            "source": idx,
-                            "name": f"Webcam {idx}",
-                            "source_type": "webcam",
-                            "width": w,
-                            "height": h,
-                            "fps": fps,
-                            "status": "available",
-                        })
-            except Exception as e:
-                logger.debug(f"Probe exception for index {idx}: {e}")
+    if cv2 is not None and not _SHUTDOWN_EVENT.is_set():
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            for idx in range(max_indices):
+                if _SHUTDOWN_EVENT.is_set():
+                    break
+                future = executor.submit(_probe_single_device, idx)
+                try:
+                    res = future.result(timeout=timeout_per_index)
+                    if res is not None:
+                        cameras.append(res)
+                except concurrent.futures.TimeoutError:
+                    logger.warning(f"[TOPOLOGY/PROBE] Webcam index {idx} probe timed out after {timeout_per_index}s (skipped)")
+                except Exception as e:
+                    logger.debug(f"[TOPOLOGY/PROBE] Error probing index {idx}: {e}")
 
         # Sort discovered cameras by source index
         cameras.sort(key=lambda c: str(c["source"]))
 
-    # 2. Restore pipeline cameras if they were active
-    if was_pipeline_active and pipeline is not None and hasattr(pipeline, "resume_processing"):
+    # 2. Restore pipeline cameras if they were active and shutdown not requested
+    if was_pipeline_active and pipeline is not None and hasattr(pipeline, "resume_processing") and not _SHUTDOWN_EVENT.is_set():
         try:
+            logger.info("[TOPOLOGY/PROBE] Resuming pipeline processing and restoring camera workers...")
             pipeline.resume_processing()
         except Exception as e:
-            logger.warning(f"Error resuming pipeline after probe: {e}")
+            logger.warning(f"[TOPOLOGY/PROBE] Error resuming pipeline after probe: {e}")
 
+    total_elapsed = time.time() - t_start
+    cam_names = [c["name"] for c in cameras]
+    logger.info(f"[TOPOLOGY/PROBE] Probe finished in {total_elapsed:.2f}s. Discovered {len(cameras)} camera(s): {cam_names}")
     return cameras
 
 
@@ -103,8 +159,8 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
     runtime_pipeline = None  # Optional MultiCameraPipeline reference
 
     def log_message(self, format: str, *args: Any) -> None:
-        # Suppress noisy standard request logging
-        logger.debug(f"{self.address_string()} - {format % args}")
+        # Route standard HTTP access logs to debug file log
+        logger.debug(f"[HTTP ACCESS] {self.address_string()} - {format % args}")
 
     def _send_json(self, data: Any, status: int = HTTPStatus.OK) -> None:
         body = json.dumps(data).encode("utf-8")
@@ -152,14 +208,19 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
 
             # --- REST Endpoints ---
             if path == "/api/cameras/discover":
+                logger.info(f"[TOPOLOGY/DISCOVERY] [GET /api/cameras/discover] Hardware scan initiated from {self.address_string()}")
                 webcams = probe_local_webcams(pipeline=self.runtime_pipeline)
+                logger.info(f"[TOPOLOGY/DISCOVERY] Returning {len(webcams)} discovered camera(s) to {self.address_string()}")
                 self._send_json({"cameras": webcams})
                 return
 
             elif path == "/api/cameras/live":
                 if self.runtime_pipeline is not None:
                     cards = self.runtime_pipeline.get_all_camera_cards()
-                    self._send_json({"cameras": cards, "active_camera": self.runtime_pipeline.active_camera_id})
+                    active_cam = self.runtime_pipeline.active_camera_id
+                    card_summary = [f"{c['camera_id']}:{c['status']}(fps={c.get('fps',0):.1f},frame={c.get('has_frame')})" for c in cards]
+                    logger.debug(f"[LIVE MATRIX] [GET /api/cameras/live] Returning {len(cards)} card(s), active='{active_cam}'. Details: {card_summary}")
+                    self._send_json({"cameras": cards, "active_camera": active_cam})
                 elif self.graph_file.is_file():
                     try:
                         with open(self.graph_file, "r", encoding="utf-8") as f:
@@ -180,8 +241,10 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                                 "zone": c.get("zone"),
                                 "has_frame": False,
                             })
+                        logger.debug(f"[LIVE MATRIX] [GET /api/cameras/live] Returning {len(cams)} static graph camera(s)")
                         self._send_json({"cameras": cams, "active_camera": None})
-                    except Exception:
+                    except Exception as e:
+                        logger.warning(f"[LIVE MATRIX] [GET /api/cameras/live] Error loading fallback graph: {e}")
                         self._send_json({"cameras": [], "active_camera": None})
                 else:
                     self._send_json({"cameras": [], "active_camera": None})
@@ -191,6 +254,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 parts = path.strip("/").split("/")
                 if len(parts) == 4 and parts[0] == "api" and parts[1] == "camera" and parts[3] == "stream":
                     cam_id = parts[2]
+                    logger.info(f"[LIVE MATRIX] [STREAM START] Client {self.address_string()} connected to MJPEG stream for '{cam_id}'")
                     self.send_response(HTTPStatus.OK)
                     self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
                     self.send_header("Cache-Control", "no-cache, private, no-store, must-revalidate")
@@ -199,9 +263,8 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     self.send_header("Access-Control-Allow-Origin", "*")
                     self.end_headers()
 
-                    import time
                     try:
-                        while self.runtime_pipeline is None or getattr(self.runtime_pipeline, "is_running", True):
+                        while not _SHUTDOWN_EVENT.is_set() and (self.runtime_pipeline is None or getattr(self.runtime_pipeline, "is_running", True)):
                             frame_bytes = None
                             if self.runtime_pipeline is not None:
                                 frame_bytes = self.runtime_pipeline.get_camera_frame_jpeg(cam_id, quality=75)
@@ -225,7 +288,9 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError, OSError):
                         pass
                     except Exception as e:
-                        logger.debug(f"Stream client disconnected for camera '{cam_id}': {e}")
+                        logger.debug(f"[LIVE MATRIX] Stream client disconnected for camera '{cam_id}': {e}")
+                    finally:
+                        logger.info(f"[LIVE MATRIX] [STREAM END] Client {self.address_string()} disconnected from MJPEG stream for '{cam_id}'")
                     return
 
             elif path.startswith("/api/camera/") and (path.endswith("/frame.jpg") or path.endswith("/frame")):
@@ -235,7 +300,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     frame_bytes = None
                     if self.runtime_pipeline is not None:
                         frame_bytes = self.runtime_pipeline.get_camera_frame_jpeg(cam_id, quality=75)
-                    
+
                     if frame_bytes is None:
                         if cv2 is not None and np is not None:
                             blank = np.zeros((360, 640, 3), dtype=np.uint8)
@@ -256,14 +321,20 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     return
 
             elif path == "/api/graph":
+                logger.info(f"[TOPOLOGY] [GET /api/graph] Reading topology from '{self.graph_file.resolve()}' (exists={self.graph_file.is_file()})")
                 if self.graph_file.is_file():
                     try:
                         with open(self.graph_file, "r", encoding="utf-8") as f:
                             data = json.load(f)
+                        cams = data.get("cameras", [])
+                        edges = data.get("edges", [])
+                        logger.info(f"[TOPOLOGY] Loaded topology: {len(cams)} cameras ({[c.get('camera_id') for c in cams]}), {len(edges)} edges")
                         self._send_json(data)
                     except Exception as e:
+                        logger.exception(f"[TOPOLOGY] Error reading graph file '{self.graph_file}': {e}")
                         self._send_json({"error": str(e)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
                 else:
+                    logger.info("[TOPOLOGY] No graph file found. Returning default empty topology.")
                     self._send_json({"version": 1, "cameras": [], "edges": [], "background_map": None})
                 return
 
@@ -276,7 +347,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                         if self.runtime_pipeline.get_camera_status(cid)
                     }
                     gallery = self.runtime_pipeline.gallery
-                    self._send_json({
+                    status_data = {
                         "active_camera": self.runtime_pipeline.active_camera_id,
                         "target_state": getattr(self.runtime_pipeline, "target_state", "UNSELECTED"),
                         "target_track_id": self.runtime_pipeline.target_manager.target.track_id if self.runtime_pipeline.target_manager.target else None,
@@ -288,7 +359,9 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                         "gallery_max": gallery.max_size,
                         "gallery_manual": gallery.manual_count,
                         "gallery_auto": gallery.auto_count,
-                    })
+                    }
+                    logger.debug(f"[STATUS] [GET /api/status] active={status_data['active_camera']}, target_state={status_data['target_state']}, gallery={gallery.size}/{gallery.max_size}")
+                    self._send_json(status_data)
                 else:
                     self._send_json({
                         "active_camera": None,
@@ -327,9 +400,9 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 return
 
             elif path == "/api/preview":
-                # Return JPEG preview snapshot for a given source
                 source_param = query.get("source", ["0"])[0]
                 source_type = query.get("type", ["webcam"])[0]
+                logger.info(f"[TOPOLOGY/PREVIEW] [GET /api/preview] Snapshot requested for source='{source_param}', type='{source_type}' from {self.address_string()}")
 
                 frame_bytes = self._capture_preview_jpeg(source_param, source_type)
                 if frame_bytes is not None:
@@ -340,6 +413,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(frame_bytes)
                 else:
+                    logger.warning(f"[TOPOLOGY/PREVIEW] Preview capture failed for source='{source_param}'")
                     self.send_error(HTTPStatus.SERVICE_UNAVAILABLE, "Could not capture preview from source")
                 return
 
@@ -368,22 +442,27 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
 
         try:
             payload = json.loads(body.decode("utf-8")) if body else {}
-        except Exception:
+        except Exception as e:
+            logger.warning(f"[HTTP POST] Could not parse JSON body from {self.address_string()}: {e}")
             payload = {}
 
         if path == "/api/camera/select_active":
             cam_id = payload.get("camera_id")
+            logger.info(f"[LIVE MATRIX] [POST /api/camera/select_active] Switching active camera to '{cam_id}' requested from {self.address_string()}")
             if self.runtime_pipeline is not None and cam_id:
                 ok = self.runtime_pipeline.set_active_camera(cam_id)
+                logger.info(f"[LIVE MATRIX] Set active camera '{cam_id}' -> result={ok} (now active='{self.runtime_pipeline.active_camera_id}')")
                 self._send_json({"success": ok, "active_camera": self.runtime_pipeline.active_camera_id})
             else:
                 self._send_json({"success": False, "error": "Pipeline not active or invalid camera_id"}, status=HTTPStatus.BAD_REQUEST)
             return
 
         elif path == "/api/cameras/restart":
+            logger.info(f"[LIVE MATRIX] [POST /api/cameras/restart] Hardware camera restart requested from {self.address_string()}")
             if self.runtime_pipeline is not None:
                 self.runtime_pipeline.restart_cameras()
                 cards = self.runtime_pipeline.get_all_camera_cards()
+                logger.info(f"[LIVE MATRIX] All cameras restarted. Active workers: {len(self.runtime_pipeline._workers)}, cards: {len(cards)}")
                 self._send_json({
                     "success": True,
                     "message": "All cameras restarted successfully",
@@ -395,30 +474,44 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             return
 
         elif path == "/api/graph":
+            logger.info(f"[TOPOLOGY] [POST /api/graph] Topology save requested from {self.address_string()} ({content_length} bytes)")
             try:
+                cam_ids = [c.get("camera_id") for c in payload.get("cameras", [])]
+                edges_count = len(payload.get("edges", []))
+                logger.info(f"[TOPOLOGY] Received graph with {len(cam_ids)} cameras ({cam_ids}) and {edges_count} edges")
+                logger.debug(f"[TOPOLOGY] Full payload JSON: {json.dumps(payload, indent=2)}")
+
                 graph = CameraGraph.from_dict(payload)
                 errors = graph.validate()
                 if errors:
+                    logger.warning(f"[TOPOLOGY] Graph validation failed: {errors}")
                     self._send_json({"success": False, "errors": errors}, status=HTTPStatus.BAD_REQUEST)
                     return
 
                 graph.save(self.graph_file)
+                logger.info(f"[TOPOLOGY] Graph saved successfully to '{self.graph_file.resolve()}'")
 
-                # Dynamically sync running pipeline with updated topology graph (Issue 2)
+                # Dynamically sync running pipeline with updated topology graph
                 if self.runtime_pipeline is not None:
+                    logger.info("[TOPOLOGY] Updating live pipeline with new graph topology...")
                     self.runtime_pipeline.update_graph(graph)
+                    logger.info(f"[TOPOLOGY] Live pipeline synced: {len(self.runtime_pipeline._nodes)} nodes configured, active camera='{self.runtime_pipeline.active_camera_id}'")
 
                 self._send_json({"success": True, "message": "Graph saved and live pipeline updated successfully"})
             except Exception as e:
+                logger.exception(f"[TOPOLOGY] Exception during graph save: {e}")
                 self._send_json({"success": False, "error": str(e)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
 
         elif path == "/api/graph/validate":
+            logger.info(f"[TOPOLOGY] [POST /api/graph/validate] Validating graph from {self.address_string()}...")
             try:
                 graph = CameraGraph.from_dict(payload)
                 errors = graph.validate()
+                logger.info(f"[TOPOLOGY] Validation result: valid={len(errors) == 0}, errors={errors}")
                 self._send_json({"valid": len(errors) == 0, "errors": errors})
             except Exception as e:
+                logger.warning(f"[TOPOLOGY] Exception during validation: {e}")
                 self._send_json({"valid": False, "errors": [str(e)]})
             return
 
@@ -427,11 +520,10 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             track_id = payload.get("track_id")
             x = payload.get("x")
             y = payload.get("y")
+            logger.info(f"[TARGET] [POST /api/target/select] Target selection on camera '{cam_id}' (track_id={track_id}, x={x}, y={y})")
 
             if self.runtime_pipeline is not None and cam_id:
-                # Switch active camera to this camera
                 self.runtime_pipeline.set_active_camera(cam_id)
-
                 selected_id = None
                 if track_id is not None:
                     ok = self.runtime_pipeline.select_target_by_id(cam_id, int(track_id))
@@ -439,6 +531,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 elif x is not None and y is not None:
                     selected_id = self.runtime_pipeline.select_target_on_camera(cam_id, float(x), float(y))
 
+                logger.info(f"[TARGET] Target locked: ID={selected_id}, ActiveCam='{self.runtime_pipeline.active_camera_id}'")
                 self._send_json({
                     "success": True,
                     "target_locked": (selected_id is not None),
@@ -450,11 +543,12 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": False, "error": "Runtime pipeline not active or missing camera_id"}, status=HTTPStatus.BAD_REQUEST)
             return
 
-
         elif path == "/api/target/add_sample":
+            logger.info(f"[TARGET] [POST /api/target/add_sample] Manual sample capture requested from {self.address_string()}")
             if self.runtime_pipeline is not None:
                 cam_id = payload.get("camera_id")
                 ok = self.runtime_pipeline.add_manual_target_sample(cam_id)
+                logger.info(f"[TARGET] Manual sample captured on '{cam_id}' -> success={ok}, gallery size={self.runtime_pipeline.gallery.size}")
                 self._send_json({
                     "success": ok,
                     "size": self.runtime_pipeline.gallery.size,
@@ -466,6 +560,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             return
 
         elif path == "/api/target/clear":
+            logger.info(f"[TARGET] [POST /api/target/clear] Target clear requested from {self.address_string()}")
             if self.runtime_pipeline is not None:
                 self.runtime_pipeline.clear_target()
                 self._send_json({"success": True, "message": "Target cleared"})
@@ -474,8 +569,9 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             return
 
         elif path == "/api/target/gallery/delete":
+            entry_id = payload.get("entry_id")
+            logger.info(f"[TARGET] [POST /api/target/gallery/delete] Deleting gallery entry '{entry_id}'")
             if self.runtime_pipeline is not None:
-                entry_id = payload.get("entry_id")
                 if entry_id:
                     ok = self.runtime_pipeline.gallery.remove_entry(entry_id)
                     self._send_json({
@@ -491,30 +587,32 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             return
 
         elif path == "/api/system/quit":
-            logger.info("[SERVER] Safe shutdown requested via /api/system/quit endpoint.")
-            self._send_json({"success": True, "message": "Argus Surveillance shutting down cleanly."})
+            logger.info(f"[SERVER] Safe shutdown requested via /api/system/quit endpoint from {self.address_string()}")
+            _SHUTDOWN_EVENT.set()
+            try:
+                self._send_json({"success": True, "message": "Argus Surveillance shutting down cleanly."})
+            except Exception:
+                pass
 
-            def _delayed_shutdown():
-                import os
-                time.sleep(0.2)
+            def _instant_shutdown():
+                time.sleep(0.08)
                 if self.runtime_pipeline is not None:
                     try:
                         self.runtime_pipeline.stop()
                     except Exception as e:
                         logger.warning(f"Error stopping pipeline: {e}")
-                time.sleep(0.2)
-                logger.info("[SERVER] Process exiting cleanly.")
+                logger.info("[SERVER] All pipeline workers and camera handles released. Process exiting cleanly.")
+                time.sleep(0.05)
                 if "PYTEST_CURRENT_TEST" not in os.environ:
                     os._exit(0)
 
-            threading.Thread(target=_delayed_shutdown, daemon=True).start()
+            threading.Thread(target=_instant_shutdown, daemon=True, name="shutdown_thread").start()
             return
 
         self.send_error(HTTPStatus.NOT_FOUND, "Endpoint not found")
 
     def _capture_preview_jpeg(self, source_param: str, source_type: str) -> Optional[bytes]:
         """Capture a single test frame as JPEG, reusing pipeline frame if available."""
-        # 1. Synthetic preview generator
         if source_type == "synthetic" or source_param == "synthetic":
             if cv2 is not None and np is not None:
                 img = np.zeros((360, 640, 3), dtype=np.uint8)
@@ -525,7 +623,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
                 return buf.tobytes()
 
-        # 2. Reuse existing pipeline capture if source is already managed by pipeline
+        # Reuse existing pipeline capture if source is already managed by pipeline
         if self.runtime_pipeline is not None:
             for cid, node in getattr(self.runtime_pipeline, "_nodes", {}).items():
                 if str(node.config.source) == str(source_param) or cid == source_param:
@@ -557,7 +655,6 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             if not ret or frame is None:
                 return None
 
-            # Resize preview for fast network transfer
             h, w = frame.shape[:2]
             if w > 640:
                 scale = 640.0 / w
@@ -602,10 +699,18 @@ def run_ui_server(
         except KeyboardInterrupt:
             logger.info("UI server stopping...")
         finally:
-            server.server_close()
+            try:
+                server.server_close()
+            except Exception:
+                pass
     else:
-        t = threading.Thread(target=server.serve_forever, daemon=True)
+        def _serve_loop():
+            try:
+                server.serve_forever()
+            except Exception:
+                pass
+
+        t = threading.Thread(target=_serve_loop, daemon=True, name="ui_server_thread")
         t.start()
 
     return server
-

@@ -154,26 +154,40 @@ class SurveillanceApp {
   }
 
   async safeQuit() {
-    if (!confirm('Are you sure you want to cleanly shut down Argus Surveillance? All camera connections and models will be released.')) {
-      return;
+    if (this._isShuttingDown) return;
+    this._isShuttingDown = true;
+
+    // 1. Immediately clear all polling timers
+    if (this.statusPollTimer) {
+      clearInterval(this.statusPollTimer);
+      this.statusPollTimer = null;
     }
-    if (this.statusPollTimer) clearInterval(this.statusPollTimer);
-    if (this.galleryPollTimer) clearInterval(this.galleryPollTimer);
+    if (this.galleryPollTimer) {
+      clearInterval(this.galleryPollTimer);
+      this.galleryPollTimer = null;
+    }
+
+    // 2. Disconnect all live MJPEG video streams immediately to release sockets & server threads
+    document.querySelectorAll('.camera-feed-img').forEach(img => {
+      img.onerror = null;
+      img.src = '';
+    });
+
+    // 3. Immediately render clean shutdown screen for instant user feedback
+    document.body.innerHTML = `
+      <div style="height:100vh;display:flex;align-items:center;justify-content:center;background:#0b0f17;color:#94a3b8;font-family:system-ui,-apple-system,sans-serif;flex-direction:column;gap:14px;text-align:center;">
+        <div style="width:52px;height:52px;border-radius:50%;background:rgba(0,242,254,0.1);border:1px solid #00f2fe;display:flex;align-items:center;justify-content:center;color:#00f2fe;font-size:24px;">&#10003;</div>
+        <h2 style="color:#f8fafc;margin:0;font-weight:600;font-size:20px;">Argus Surveillance Operations Center Closed</h2>
+        <p style="margin:0;max-width:420px;font-size:13px;line-height:1.5;color:#94a3b8;">All camera capture streams, AI models, and background workers have been terminated cleanly.</p>
+        <p style="font-size:11px;color:#64748b;margin-top:8px;">You can safely close this browser window or tab.</p>
+      </div>
+    `;
+
+    // 4. Send quit signal to server
     try {
-      this.showToast('Shutting down surveillance pipeline and releasing camera resources...', 'info');
       await API.quit();
-      setTimeout(() => {
-        document.body.innerHTML = `
-          <div style="height:100vh;display:flex;align-items:center;justify-content:center;background:#0b0f17;color:#94a3b8;font-family:system-ui,-apple-system,sans-serif;flex-direction:column;gap:14px;text-align:center;">
-            <div style="width:48px;height:48px;border-radius:50%;background:rgba(0,242,254,0.1);border:1px solid #00f2fe;display:flex;align-items:center;justify-content:center;color:#00f2fe;font-size:20px;">&#10003;</div>
-            <h2 style="color:#f8fafc;margin:0;font-weight:600;">Argus Surveillance Operations Center Closed</h2>
-            <p style="margin:0;max-width:400px;font-size:13px;line-height:1.5;">All camera capture streams, AI models, and background workers have been released safely.</p>
-            <p style="font-size:11px;color:#64748b;">You can safely close this browser window.</p>
-          </div>
-        `;
-      }, 400);
     } catch (err) {
-      this.showToast(`Shutdown: ${err.message}`, 'info');
+      console.log('Shutdown signal dispatched');
     }
   }
 
@@ -300,6 +314,22 @@ class SurveillanceApp {
 
       const stage = tile.querySelector('.camera-tile-video');
       const img = tile.querySelector('.camera-feed-img');
+      const header = tile.querySelector('.camera-tile-header');
+
+      // Click on tile header: Instantly focus active camera
+      header.addEventListener('click', async () => {
+        try {
+          await API.setActiveCamera(cam.camera_id);
+          this.activeCameraId = cam.camera_id;
+          this._pendingActiveCameraSwitch = cam.camera_id;
+          this._pendingActiveCameraSwitchTime = Date.now();
+          this.updateActiveTileVisuals();
+          this.refreshStatus();
+          this.showToast(`Focused on '${cam.name || cam.camera_id}'`, 'info');
+        } catch (err) {
+          this.showToast(`Focus error: ${err.message}`, 'error');
+        }
+      });
 
       // Auto-reconnect stream if disconnected
       img.onerror = () => {
@@ -311,7 +341,6 @@ class SurveillanceApp {
       };
 
       // Click on tile video stage: Set active camera + select target at coordinates
-
       stage.addEventListener('click', async (e) => {
         if (e.target.classList.contains('tile-overlay-btn')) return;
 
@@ -341,6 +370,7 @@ class SurveillanceApp {
             this.activeCameraId = cam.camera_id;
             this._pendingActiveCameraSwitch = cam.camera_id;
             this._pendingActiveCameraSwitchTime = Date.now();
+            this.updateActiveTileVisuals();
             this.refreshStatus();
             this.refreshGallery();
           } else {
@@ -380,7 +410,6 @@ class SurveillanceApp {
           this.showToast(`Focus error: ${err.message}`, 'error');
         }
       });
-
 
       tile.querySelector('.btn-snap-cam').addEventListener('click', async (e) => {
         e.stopPropagation();

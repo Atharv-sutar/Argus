@@ -49,6 +49,7 @@ class OpenCVCamera(BaseCamera):
         self._is_closed = False
         self._consecutive_failures = 0
         self._lock: threading.Lock = threading.Lock()
+        self._cap_lock: threading.Lock = threading.Lock()
         self._latest_frame: Optional[np.ndarray] = None
         self._latest_timestamp_ms: float = 0.0
         self._has_new_frame = False
@@ -64,34 +65,30 @@ class OpenCVCamera(BaseCamera):
         if isinstance(src, str) and src.isdigit():
             src = int(src)
 
-        # On Windows, try DirectShow (cv2.CAP_DSHOW) first, and fallback if closed or delivering 0.0 black frames
-        if isinstance(src, int) and sys.platform.startswith("win"):
-            self._cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)
-            if self._cap and self._cap.isOpened():
-                ret, test_f = self._cap.read()
-                if not ret or test_f is None or float(np.mean(test_f)) == 0.0:
-                    self._cap.release()
+        with self._cap_lock:
+            # On Windows, try DirectShow (cv2.CAP_DSHOW) first for webcam indices
+            if isinstance(src, int) and sys.platform.startswith("win"):
+                self._cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)
+                if not self._cap or not self._cap.isOpened():
                     self._cap = cv2.VideoCapture(src, cv2.CAP_ANY)
             else:
+                self._cap = cv2.VideoCapture(src)
+
+            if not self._cap or not self._cap.isOpened():
+                # Fallback to default if initial open failed
                 self._cap = cv2.VideoCapture(src, cv2.CAP_ANY)
-        else:
-            self._cap = cv2.VideoCapture(src)
 
-        if not self._cap or not self._cap.isOpened():
-            # Fallback to default if initial open failed
-            self._cap = cv2.VideoCapture(src, cv2.CAP_ANY)
+            if not self._cap or not self._cap.isOpened():
+                logger.error(f"Failed to open video source: {self.source}")
+                self._is_closed = True
+                return
 
-        if not self._cap or not self._cap.isOpened():
-            logger.error(f"Failed to open video source: {self.source}")
-            self._is_closed = True
-            return
-
-        if self.width is not None and isinstance(src, int):
-            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-        if self.height is not None and isinstance(src, int):
-            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-        if self.fps is not None and isinstance(src, int):
-            self._cap.set(cv2.CAP_PROP_FPS, self.fps)
+            if self.width is not None and isinstance(src, int):
+                self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+            if self.height is not None and isinstance(src, int):
+                self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+            if self.fps is not None and isinstance(src, int):
+                self._cap.set(cv2.CAP_PROP_FPS, self.fps)
 
         self._start_time = time.time()
         logger.info(f"Successfully opened video source: {self.source}")
@@ -109,27 +106,45 @@ class OpenCVCamera(BaseCamera):
 
     def _capture_loop(self) -> None:
         """Background thread continuously pulling frames to prevent driver buffer buildup."""
-        while self._running:
-            if self._cap is None or not self._cap.isOpened():
+        while self._running and not self._is_closed:
+            with self._cap_lock:
+                if not self._running or self._is_closed:
+                    break
+                if self._cap is None or not self._cap.isOpened():
+                    cap_is_open = False
+                else:
+                    cap_is_open = True
+                    try:
+                        success, frame = self._cap.read()
+                    except Exception as e:
+                        logger.debug(f"Exception in _capture_loop read for {self.source}: {e}")
+                        success, frame = False, None
+
+            if not cap_is_open:
                 time.sleep(0.1)
                 if self._running and not self._is_closed:
                     self._reopen_stream()
                 continue
 
-            success, frame = self._cap.read()
+            if not self._running or self._is_closed:
+                break
+
             if not success or frame is None:
                 self._consecutive_failures += 1
 
                 # If this is a video file, loop back to the beginning on EOF
                 if isinstance(self.source, str) and not self.source.startswith(("rtsp://", "http://", "https://")):
-                    self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    with self._cap_lock:
+                        if self._cap is not None:
+                            self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     self._consecutive_failures = 0
                     time.sleep(0.01)
                     continue
 
                 if self._consecutive_failures >= 30:
-                    logger.warning(f"Camera '{self.source}' stream read failure count={self._consecutive_failures}. Reconnecting...")
-                    self._reopen_stream()
+                    if self._running and not self._is_closed:
+                        logger.warning(f"Camera '{self.source}' stream read failure count={self._consecutive_failures}. Reconnecting...")
+                        self._reopen_stream()
                     time.sleep(0.2)
                     continue
 
@@ -138,7 +153,14 @@ class OpenCVCamera(BaseCamera):
 
             self._consecutive_failures = 0
             self._frame_count += 1
-            pos_msec = self._cap.get(cv2.CAP_PROP_POS_MSEC) if not isinstance(self.source, int) else 0.0
+            pos_msec = 0.0
+            if not isinstance(self.source, int) and cv2 is not None:
+                with self._cap_lock:
+                    if self._cap is not None:
+                        try:
+                            pos_msec = self._cap.get(cv2.CAP_PROP_POS_MSEC)
+                        except Exception:
+                            pos_msec = 0.0
             now_ms = float(pos_msec) if pos_msec > 0.0 else (time.time() - (self._start_time or time.time())) * 1000.0
 
             with self._lock:
@@ -148,38 +170,40 @@ class OpenCVCamera(BaseCamera):
 
     def _reopen_stream(self) -> None:
         """Attempts to reopen the VideoCapture device on failure."""
-        if cv2 is None or not self._running:
+        if cv2 is None or not self._running or self._is_closed:
             return
-        try:
-            if self._cap is not None:
-                self._cap.release()
-            src = self.source
-            if isinstance(src, str) and src.isdigit():
-                src = int(src)
-
-            if isinstance(src, int) and sys.platform.startswith("win"):
-                self._cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)
-                if self._cap and self._cap.isOpened():
-                    ret, test_f = self._cap.read()
-                    if not ret or test_f is None or float(np.mean(test_f)) == 0.0:
+        with self._cap_lock:
+            if not self._running or self._is_closed:
+                return
+            try:
+                if self._cap is not None:
+                    try:
                         self._cap.release()
+                    except Exception:
+                        pass
+                    self._cap = None
+                src = self.source
+                if isinstance(src, str) and src.isdigit():
+                    src = int(src)
+
+                if isinstance(src, int) and sys.platform.startswith("win"):
+                    self._cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)
+                    if not self._cap or not self._cap.isOpened():
                         self._cap = cv2.VideoCapture(src, cv2.CAP_ANY)
                 else:
-                    self._cap = cv2.VideoCapture(src, cv2.CAP_ANY)
-            else:
-                self._cap = cv2.VideoCapture(src)
+                    self._cap = cv2.VideoCapture(src)
 
-            if self._cap and self._cap.isOpened():
-                if self.width is not None and isinstance(src, int):
-                    self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-                if self.height is not None and isinstance(src, int):
-                    self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-                if self.fps is not None and isinstance(src, int):
-                    self._cap.set(cv2.CAP_PROP_FPS, self.fps)
-                self._consecutive_failures = 0
-                logger.info(f"Successfully reconnected to camera: {self.source}")
-        except Exception as e:
-            logger.debug(f"Reconnection attempt to '{self.source}' failed: {e}")
+                if self._cap and self._cap.isOpened():
+                    if self.width is not None and isinstance(src, int):
+                        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+                    if self.height is not None and isinstance(src, int):
+                        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+                    if self.fps is not None and isinstance(src, int):
+                        self._cap.set(cv2.CAP_PROP_FPS, self.fps)
+                    self._consecutive_failures = 0
+                    logger.info(f"Successfully reconnected to camera: {self.source}")
+            except Exception as e:
+                logger.debug(f"Reconnection attempt to '{self.source}' failed: {e}")
 
     def is_opened(self) -> bool:
         return not self._is_closed and (self._running or (self._cap is not None and self._cap.isOpened()))
@@ -195,35 +219,41 @@ class OpenCVCamera(BaseCamera):
                     return True, self._latest_frame.copy(), self._latest_timestamp_ms
                 return False, None, 0.0
 
-        if self._cap is None:
-            return False, None, 0.0
-
-        success, frame = self._cap.read()
-        if not success or frame is None:
-            if isinstance(self.source, str) and not self.source.startswith(("rtsp://", "http://", "https://")):
-                self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                success, frame = self._cap.read()
-
-            if not success or frame is None:
+        with self._cap_lock:
+            if self._cap is None:
                 return False, None, 0.0
 
-        self._frame_count += 1
-        pos_msec = self._cap.get(cv2.CAP_PROP_POS_MSEC) if (cv2 is not None and not isinstance(self.source, int)) else 0.0
-        now_ms = float(pos_msec) if pos_msec > 0.0 else (time.time() - (self._start_time or time.time())) * 1000.0
+            success, frame = self._cap.read()
+            if not success or frame is None:
+                if isinstance(self.source, str) and not self.source.startswith(("rtsp://", "http://", "https://")):
+                    self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    success, frame = self._cap.read()
 
-        return True, frame, now_ms
+                if not success or frame is None:
+                    return False, None, 0.0
+
+            self._frame_count += 1
+            pos_msec = self._cap.get(cv2.CAP_PROP_POS_MSEC) if (cv2 is not None and not isinstance(self.source, int)) else 0.0
+            now_ms = float(pos_msec) if pos_msec > 0.0 else (time.time() - (self._start_time or time.time())) * 1000.0
+
+            return True, frame, now_ms
 
     def release(self) -> None:
         self._running = False
         self._is_closed = True
-        if self._thread is not None:
-            self._thread.join(timeout=0.5)
-            self._thread = None
+        thread = self._thread
+        self._thread = None
+        if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=0.3)
 
-        if self._cap is not None:
-            self._cap.release()
-            self._cap = None
-            logger.info(f"Released video source: {self.source}")
+        with self._cap_lock:
+            if self._cap is not None:
+                try:
+                    self._cap.release()
+                except Exception as e:
+                    logger.debug(f"Error releasing cap for {self.source}: {e}")
+                self._cap = None
+                logger.info(f"Released video source: {self.source}")
 
 
 

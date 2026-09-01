@@ -59,6 +59,7 @@ class CameraManager {
   }
 
   async discover() {
+    if (this.app && this.app._isShuttingDown) return;
     const btn1 = document.getElementById('btn-discover');
     const btn2 = document.getElementById('btn-discover-toolbar');
     if (btn1) { btn1.disabled = true; btn1.textContent = 'Scanning...'; }
@@ -67,6 +68,7 @@ class CameraManager {
     this.listEl.innerHTML = '<div class="empty-state"><span class="spinner"></span> Scanning video capture devices...</div>';
     try {
       const data = await API.discoverCameras();
+      if (this.app && this.app._isShuttingDown) return;
       this.discoveredCameras = data.cameras || [];
       this.renderList();
       this.app.showToast(`Detected ${this.discoveredCameras.length} camera source(s)`, 'info');
@@ -74,11 +76,12 @@ class CameraManager {
         this.app.loadLiveMatrix();
       }
     } catch (err) {
+      if (this.app && this.app._isShuttingDown) return;
       this.listEl.innerHTML = `<div class="empty-state">Discovery failed: ${err.message}</div>`;
       this.app.showToast('Discovery failed', 'error');
     } finally {
-      if (btn1) { btn1.disabled = false; btn1.textContent = 'Auto-Detect'; }
-      if (btn2) { btn2.disabled = false; }
+      if (btn1 && (!this.app || !this.app._isShuttingDown)) { btn1.disabled = false; btn1.textContent = 'Auto-Detect'; }
+      if (btn2 && (!this.app || !this.app._isShuttingDown)) { btn2.disabled = false; }
     }
   }
 

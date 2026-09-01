@@ -230,7 +230,7 @@ class TargetGallery:
         # 2. Ground-truth manual anchor check (Anti-Contamination Guard)
         if self._manual_matrix is not None and len(self._manual_matrix) > 0:
             raw_m_dots = self._manual_matrix @ embedding.vector
-            m_sims = np.exp(-np.maximum(0.0, 1.0 - raw_m_dots) / 0.009025)
+            m_sims = np.clip(raw_m_dots, 0.0, 1.0)  # raw cosine for anchor check
             max_manual_sim = float(np.max(m_sims))
             min_anchor = max(0.55, self.match_threshold - 0.05)
             if max_manual_sim < min_anchor:
@@ -263,7 +263,7 @@ class TargetGallery:
         # 5. Diversity check against existing entries
         if self._matrix is not None and len(self._matrix) > 0:
             raw_dots = self._matrix @ embedding.vector
-            sims = np.exp(-np.maximum(0.0, 1.0 - raw_dots) / 0.009025)
+            sims = np.clip(raw_dots, 0.0, 1.0)
             max_sim_to_gallery = float(np.max(sims))
             if max_sim_to_gallery >= self.diversity_threshold:
                 logger.debug(
@@ -327,8 +327,11 @@ class TargetGallery:
     ) -> List[Tuple[float, float, float, Optional[GalleryEntry]]]:
         """
         Detailed batch matching returning (effective_score, manual_score, auto_score, best_entry).
-        Applies Gaussian RBF kernel scaling (sigma=0.095, sigma_sq=0.009025) on L2-normalized embeddings:
-            sim = exp(- (1.0 - C @ G.T) / sigma_sq)
+
+        Uses raw cosine similarity (dot product on L2-normalized embeddings) clamped to [0, 1].
+        Every gallery image is compared individually — the MAX similarity across all gallery
+        entries of each type (manual / auto) is taken as the score for that type.
+
         Anchors composite similarity strongly to the human-confirmed manual seed:
             effective_score = 0.70 * manual_score + 0.30 * auto_score
         """
@@ -343,23 +346,26 @@ class TargetGallery:
         has_manual = self._manual_matrix is not None and len(self._manual_entries) > 0
         has_auto = self._auto_matrix is not None and len(self._auto_entries) > 0
 
-        # Gaussian RBF kernel scale parameter: sigma = 0.095 => sigma^2 = 0.009025
-        sigma_sq = 0.009025
+        # Similarity floor for linear rescaling: OSNet cosine dots sit in ~0.85-1.0
+        # range even across different people. Rescale [floor, 1.0] -> [0.0, 1.0] so
+        # that target (raw ~0.97) scores ~0.90 while non-target (raw ~0.90) scores ~0.67.
+        sim_floor = 0.70
+        sim_range = 1.0 - sim_floor
 
-        # 1. Compute manual similarities
+        # 1. Compute manual similarities — linearly rescaled cosine dot
         if has_manual:
             raw_m_dots = c_matrix @ self._manual_matrix.T  # (K, M)
-            cal_m_sim = np.exp(-np.maximum(0.0, 1.0 - raw_m_dots) / sigma_sq).astype(np.float32)
+            cal_m_sim = np.clip((raw_m_dots - sim_floor) / sim_range, 0.0, 1.0).astype(np.float32)
             m_best_indices = np.argmax(cal_m_sim, axis=1)
             m_max_scores = np.max(cal_m_sim, axis=1)
         else:
             m_best_indices = np.zeros(len(candidate_embeddings), dtype=int)
             m_max_scores = np.zeros(len(candidate_embeddings), dtype=np.float32)
 
-        # 2. Compute auto similarities
+        # 2. Compute auto similarities — linearly rescaled cosine dot
         if has_auto:
             raw_a_dots = c_matrix @ self._auto_matrix.T  # (K, A)
-            cal_a_sim = np.exp(-np.maximum(0.0, 1.0 - raw_a_dots) / sigma_sq).astype(np.float32)
+            cal_a_sim = np.clip((raw_a_dots - sim_floor) / sim_range, 0.0, 1.0).astype(np.float32)
             a_best_indices = np.argmax(cal_a_sim, axis=1)
             a_max_scores = np.max(cal_a_sim, axis=1)
         else:

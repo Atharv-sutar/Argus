@@ -77,11 +77,26 @@ class CameraNodeConfig:
 
     @classmethod
     def from_dict(cls, data: dict) -> CameraNodeConfig:
+        raw_st = str(data.get("source_type", "webcam")).lower().strip()
+        if raw_st in ("local", "usb", "cam", "webcam"):
+            st = SourceType.WEBCAM
+        elif raw_st in ("rtsp", "http", "https", "stream"):
+            st = SourceType.RTSP
+        elif raw_st in ("video", "video_file", "file"):
+            st = SourceType.VIDEO_FILE
+        elif raw_st in ("synthetic", "synth"):
+            st = SourceType.SYNTHETIC
+        else:
+            try:
+                st = SourceType(raw_st)
+            except ValueError:
+                st = SourceType.WEBCAM
+
         return cls(
             camera_id=data["camera_id"],
             name=data["name"],
             source=data["source"],
-            source_type=SourceType(data.get("source_type", "webcam")),
+            source_type=st,
             enabled=data.get("enabled", True),
             position_x=data.get("position_x", 0.0),
             position_y=data.get("position_y", 0.0),

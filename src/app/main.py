@@ -12,6 +12,10 @@ import webbrowser
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+# Suppress noisy OpenCV MediaFoundation C++ logger warnings on Windows
+os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
+os.environ.setdefault("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "0")
+
 import numpy as np
 
 try:
@@ -20,16 +24,14 @@ except ImportError:
     cv2 = None
 
 from src.core.config import AppConfig
+from src.core.logging_config import setup_logging
 from src.core.multi_camera_types import CameraNodeConfig, SourceType
 from src.core.types import Target, TargetState, TrackResult
 from src.multi_camera.camera_graph import CameraGraph
-from src.multi_camera.ui_server import run_ui_server
+from src.multi_camera.ui_server import is_shutdown_requested, run_ui_server
 from src.pipeline.multi_camera_pipeline import MultiCameraPipeline
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-)
+setup_logging(log_file="logs/topology_matrix.log")
 logger = logging.getLogger("argus.app")
 
 
@@ -449,9 +451,9 @@ def run_multi_camera_app(
     logger.info(f"Starting Argus Multi-Camera Surveillance. State: MONITORING")
 
     try:
-        while pipeline.is_running:
+        while pipeline.is_running and not is_shutdown_requested():
             if not show_window:
-                if not pipeline.is_running:
+                if not pipeline.is_running or is_shutdown_requested():
                     break
                 pipeline.step()
                 time.sleep(0.01)
@@ -613,14 +615,16 @@ def run_multi_camera_app(
         logger.info("Multi-camera pipeline interrupted.")
     finally:
         pipeline.stop()
+        if show_window and cv2 is not None:
+            try:
+                cv2.destroyAllWindows()
+            except Exception:
+                pass
         if server is not None:
             try:
-                server.shutdown()
                 server.server_close()
             except Exception:
                 pass
-        if show_window:
-            cv2.destroyAllWindows()
 
 
 

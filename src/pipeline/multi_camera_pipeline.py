@@ -223,17 +223,6 @@ class MultiCameraPipeline:
             fps=self.config.camera.fps,
         )
 
-    def update_graph(self, new_graph: CameraGraph) -> None:
-        """Dynamically updates the camera graph topology and syncs active workers."""
-        logger.info(f"[MULTI-CAM] Updating pipeline camera topology graph ({len(new_graph.nodes)} cameras)...")
-        with self._pipeline_lock:
-            self.graph = new_graph
-            self.search_manager.graph = new_graph
-            self._sync_nodes_with_graph()
-            if not self._active_camera_id or self._active_camera_id not in self._nodes:
-                enabled_ids = [cid for cid in self.graph.all_camera_ids() if cid in self._nodes and self._nodes[cid].config.enabled]
-                self._active_camera_id = enabled_ids[0] if enabled_ids else None
-
     def _sync_nodes_with_graph(self) -> None:
         """Instantiate/sync CameraNode and CameraWorker objects for all nodes in the graph."""
         graph_ids = set(self.graph.all_camera_ids())
@@ -241,13 +230,13 @@ class MultiCameraPipeline:
         # Remove deleted nodes and cleanup caches
         for cid in list(self._nodes.keys()):
             if cid not in graph_ids:
-                if cid in self._workers:
+                worker = self._workers.pop(cid, None)
+                if worker is not None:
                     try:
-                        self._workers[cid].stop()
-                    except Exception:
-                        pass
-                    del self._workers[cid]
-                del self._nodes[cid]
+                        worker.stop()
+                    except Exception as e:
+                        logger.debug(f"Error stopping worker '{cid}': {e}")
+                self._nodes.pop(cid, None)
                 self._annotators.pop(cid, None)
                 with self._frame_lock:
                     self._latest_jpegs.pop(cid, None)
@@ -466,37 +455,6 @@ class MultiCameraPipeline:
         self.search_manager.reset()
         self._transit_history.clear()
         logger.info("[MULTI-CAM] Target cleared and gallery purged.")
-
-    def update_graph(self, new_graph: CameraGraph) -> None:
-        """
-        Dynamically updates the running pipeline with a modified CameraGraph topology.
-        Safely creates/updates camera nodes, refreshes search manager, and releases removed workers.
-        """
-        with self._frame_lock:
-            self.graph = new_graph
-            self.search_manager = SearchManager(self.graph, self.search_config)
-            
-            # Sync nodes with new graph
-            self._sync_nodes_with_graph()
-
-            # Clean up workers for cameras removed from the graph
-            current_cams = set(self.graph.all_camera_ids())
-            for cid in list(self._workers.keys()):
-                if cid not in current_cams:
-                    try:
-                        self._workers[cid].stop()
-                    except Exception:
-                        pass
-                    del self._workers[cid]
-                    self._annotators.pop(cid, None)
-                    self._latest_jpegs.pop(cid, None)
-
-            # If active camera was removed or none set, pick first available
-            if self._active_camera_id not in current_cams or not self._active_camera_id:
-                enabled_cams = [cid for cid in self.graph.all_camera_ids() if cid in self._nodes and self._nodes[cid].config.enabled]
-                self._active_camera_id = enabled_cams[0] if enabled_cams else None
-
-        logger.info(f"[MULTI-CAM] Topology updated: {len(self._nodes)} cameras, {self.graph.edge_count()} edges.")
 
     def step(self) -> Dict[str, Tuple[Optional[np.ndarray], Optional[TrackResult], Optional[Target]]]:
         """
@@ -848,10 +806,13 @@ class MultiCameraPipeline:
                                     f"manual anchor check failed (sim_manual={best_other_man_sim:.3f})"
                                 )
 
-                        if manual_anchor_pass and (
-                            current_sim < (match_thresh - 0.20) or self._switch_consensus[other_tid] >= 3
-                        ):
-                            should_switch = True
+                        if manual_anchor_pass:
+                            # Immediate switch when margin is decisive or current track is very weak
+                            if margin >= 0.15 or current_sim < (match_thresh - 0.20):
+                                should_switch = True
+                            # Moderate consensus: 2 frames for clear margin
+                            elif self._switch_consensus[other_tid] >= 2:
+                                should_switch = True
                     else:
                         self._switch_consensus.clear()
                 else:
@@ -1235,7 +1196,7 @@ class MultiCameraPipeline:
             if is_active:
                 status_str = "ACTIVE"
             elif is_searching:
-                status_str = f"SEARCHING (R={self.search_manager.search_state})"
+                status_str = f"SEARCHING (R={self.search_manager.current_radius})"
             elif node.is_online:
                 status_str = "STANDBY"
             else:
@@ -1271,74 +1232,77 @@ class MultiCameraPipeline:
 
     def update_graph(self, new_graph: CameraGraph) -> None:
         """
-        Dynamically updates the camera topology graph at runtime (Issue 2).
+        Dynamically updates the camera topology graph at runtime.
         Synchronizes camera nodes, spawns workers for newly added cameras,
-        and cleanly releases workers for removed cameras.
+        and cleanly releases workers for removed cameras in a thread-safe manner.
         """
-        logger.info(f"[MULTI-CAM] Dynamically updating camera topology graph ({len(new_graph.all_camera_ids())} cameras)...")
-        self.graph = new_graph
-        self.search_manager._graph = new_graph
+        with self._pipeline_lock:
+            logger.info(f"[MULTI-CAM] Dynamically updating camera topology graph ({len(new_graph.all_camera_ids())} cameras)...")
+            self.graph = new_graph
+            self.search_manager._graph = new_graph
+            self.search_manager.reset()
 
-        all_new_ids = set(new_graph.all_camera_ids())
+            all_new_ids = set(new_graph.all_camera_ids())
 
-        # 1. Stop and remove workers & nodes for cameras no longer in graph
-        for old_id in list(self._workers.keys()):
-            if old_id not in all_new_ids:
-                logger.info(f"[MULTI-CAM] Releasing removed camera worker '{old_id}'")
-                try:
-                    self._workers[old_id].stop()
-                except Exception as e:
-                    logger.debug(f"Error stopping worker '{old_id}': {e}")
-                del self._workers[old_id]
-
-        for old_id in list(self._nodes.keys()):
-            if old_id not in all_new_ids:
-                del self._nodes[old_id]
-                self._annotators.pop(old_id, None)
-                with self._frame_lock:
-                    self._latest_jpegs.pop(old_id, None)
-
-        # 2. Sync nodes and update configs for existing or newly added cameras
-        for cid in all_new_ids:
-            node_cfg = new_graph.get_node(cid)
-            if not node_cfg:
-                continue
-
-            if cid in self._nodes:
-                old_cfg = self._nodes[cid].config
-                # Check if camera source changed; if so, recreate worker
-                if str(old_cfg.source) != str(node_cfg.source) or old_cfg.source_type != node_cfg.source_type:
-                    logger.info(f"[MULTI-CAM] Camera '{cid}' source changed ({old_cfg.source} -> {node_cfg.source}), restarting worker...")
-                    if cid in self._workers:
+            # 1. Stop and remove workers & nodes for cameras no longer in graph
+            for old_id in list(self._workers.keys()):
+                if old_id not in all_new_ids:
+                    logger.info(f"[MULTI-CAM] Releasing removed camera worker '{old_id}'")
+                    worker = self._workers.pop(old_id, None)
+                    if worker is not None:
                         try:
-                            self._workers[cid].stop()
-                        except Exception:
-                            pass
-                        del self._workers[cid]
+                            worker.stop()
+                        except Exception as e:
+                            logger.debug(f"Error stopping worker '{old_id}': {e}")
+
+            for old_id in list(self._nodes.keys()):
+                if old_id not in all_new_ids:
+                    self._nodes.pop(old_id, None)
+                    self._annotators.pop(old_id, None)
                     with self._frame_lock:
-                        self._latest_jpegs.pop(cid, None)
-                self._nodes[cid].config = node_cfg
-            else:
-                self._nodes[cid] = CameraNode(node_cfg)
-                self._annotators[cid] = FrameAnnotator(
-                    draw_fps=self.config.visualization.draw_fps,
-                    draw_boxes=self.config.visualization.draw_boxes,
-                    draw_ids=self.config.visualization.draw_ids,
-                    box_thickness=self.config.visualization.box_thickness,
-                    font_scale=self.config.visualization.font_scale,
-                )
+                        self._latest_jpegs.pop(old_id, None)
 
-            if node_cfg.enabled and cid not in self._workers:
-                self._get_or_create_worker(cid)
+            # 2. Sync nodes and update configs for existing or newly added cameras
+            for cid in all_new_ids:
+                node_cfg = new_graph.get_node(cid)
+                if not node_cfg:
+                    continue
 
-        # 3. Update active camera if previous active camera was deleted
-        if self._active_camera_id not in all_new_ids:
-            enabled_ids = [cid for cid in all_new_ids if self._nodes.get(cid) and self._nodes[cid].config.enabled]
-            self._active_camera_id = sorted(enabled_ids)[0] if enabled_ids else (sorted(list(all_new_ids))[0] if all_new_ids else None)
-            if self._active_camera_id:
-                logger.info(f"[MULTI-CAM] Active camera reassigned to '{self._active_camera_id}'")
-            else:
-                logger.info("[MULTI-CAM] No active camera remaining in graph.")
+                if cid in self._nodes:
+                    old_cfg = self._nodes[cid].config
+                    # Check if camera source changed; if so, recreate worker
+                    if str(old_cfg.source) != str(node_cfg.source) or old_cfg.source_type != node_cfg.source_type:
+                        logger.info(f"[MULTI-CAM] Camera '{cid}' source changed ({old_cfg.source} -> {node_cfg.source}), restarting worker...")
+                        worker = self._workers.pop(cid, None)
+                        if worker is not None:
+                            try:
+                                worker.stop()
+                            except Exception:
+                                pass
+                        with self._frame_lock:
+                            self._latest_jpegs.pop(cid, None)
+                    self._nodes[cid].config = node_cfg
+                else:
+                    self._nodes[cid] = CameraNode(node_cfg)
+                    self._annotators[cid] = FrameAnnotator(
+                        draw_fps=self.config.visualization.draw_fps,
+                        draw_boxes=self.config.visualization.draw_boxes,
+                        draw_ids=self.config.visualization.draw_ids,
+                        box_thickness=self.config.visualization.box_thickness,
+                        font_scale=self.config.visualization.font_scale,
+                    )
+
+                if node_cfg.enabled and cid not in self._workers:
+                    self._get_or_create_worker(cid)
+
+            # 3. Update active camera if previous active camera was deleted
+            if self._active_camera_id not in all_new_ids:
+                enabled_ids = [cid for cid in all_new_ids if self._nodes.get(cid) and self._nodes[cid].config.enabled]
+                self._active_camera_id = sorted(enabled_ids)[0] if enabled_ids else (sorted(list(all_new_ids))[0] if all_new_ids else None)
+                if self._active_camera_id:
+                    logger.info(f"[MULTI-CAM] Active camera reassigned to '{self._active_camera_id}'")
+                else:
+                    logger.info("[MULTI-CAM] No active camera remaining in graph.")
 
     def release_all_cameras(self) -> None:
         """Safely stops and releases all active camera capture handles."""
@@ -1383,8 +1347,9 @@ class MultiCameraPipeline:
     def stop(self) -> None:
         """Stop all camera workers and release resources."""
         self._is_running = False
+        self._is_paused = False
         with self._pipeline_lock:
-            for worker in self._workers.values():
+            for worker in list(self._workers.values()):
                 try:
                     worker.stop()
                 except Exception:
