@@ -102,23 +102,50 @@ class SurveillanceApp {
     // Refresh / Restart Feeds Button
     const refreshCamerasFn = async () => {
       const btnRefresh = document.getElementById('btn-refresh-cameras');
-      if (btnRefresh) btnRefresh.disabled = true;
-      this.showToast('Restarting camera hardware capture streams...', 'info');
+      if (btnRefresh) {
+        btnRefresh.disabled = true;
+        btnRefresh.innerHTML = `
+          <svg class="spin" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+          </svg>
+          <span>Restarting...</span>
+        `;
+      }
+      this.showToast('Shutting down and restarting all camera feeds...', 'info');
+
+      // 1. Drop active MJPEG connections so sockets close on client side
+      document.querySelectorAll('.camera-feed-img').forEach((img) => {
+        img.onerror = null;
+        img.src = '';
+      });
+
       try {
         await API.restartCameras();
-        await new Promise((r) => setTimeout(r, 400));
+        await new Promise((r) => setTimeout(r, 300));
         await this.loadLiveMatrix();
+
+        // 2. Force re-attach streams with new cache-busting timestamp
         document.querySelectorAll('.camera-feed-img').forEach((img) => {
-          if (img.src) {
-            const base = img.src.split('?')[0];
-            img.src = `${base}?t=${Date.now()}`;
+          const camId = img.id.replace('img-', '');
+          if (camId) {
+            img.src = `${API.getCameraStreamUrl(camId)}?t=${Date.now()}`;
           }
         });
+
         this.showToast('All camera streams restarted successfully', 'success');
       } catch (err) {
         this.showToast(`Failed to restart cameras: ${err.message}`, 'error');
+        await this.loadLiveMatrix();
       } finally {
-        if (btnRefresh) btnRefresh.disabled = false;
+        if (btnRefresh) {
+          btnRefresh.disabled = false;
+          btnRefresh.innerHTML = `
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+            </svg>
+            <span>Restart Feeds</span>
+          `;
+        }
       }
     };
     this.refreshCamerasFn = refreshCamerasFn;

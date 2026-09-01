@@ -1319,16 +1319,21 @@ class MultiCameraPipeline:
                 node.last_frame = None
 
     def restart_cameras(self) -> None:
-        """Safely releases all active camera handles and re-initializes enabled camera workers."""
-        logger.info("[MULTI-CAM] Restarting all camera workers...")
-        self.release_all_cameras()
-        time.sleep(0.15)
-        with self._frame_lock:
-            self._sync_nodes_with_graph()
-            for cid, node in self._nodes.items():
-                if node.config.enabled:
-                    self._get_or_create_worker(cid)
-        logger.info(f"[MULTI-CAM] Re-initialized {len(self._workers)} camera workers.")
+        """Safely shuts down all camera handles, waits for hardware release, and re-initializes enabled camera workers."""
+        logger.info("[MULTI-CAM] Executing full camera shutdown and restart sequence...")
+        self._is_paused = True
+        try:
+            with self._pipeline_lock:
+                self.release_all_cameras()
+                time.sleep(0.25)  # allow OS/DirectShow to fully release hardware locks
+                with self._frame_lock:
+                    self._sync_nodes_with_graph()
+                    for cid, node in self._nodes.items():
+                        if node.config.enabled:
+                            self._get_or_create_worker(cid)
+            logger.info(f"[MULTI-CAM] All cameras restarted. Re-initialized {len(self._workers)} camera workers.")
+        finally:
+            self._is_paused = False
 
     def pause_processing(self) -> None:
         """Safely pauses pipeline step loop and releases all camera handles for hardware probing."""

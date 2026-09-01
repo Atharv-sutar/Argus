@@ -121,19 +121,24 @@ def probe_local_webcams(
             logger.warning(f"[TOPOLOGY/PROBE] Error pausing pipeline for probe: {e}")
 
     if cv2 is not None and not _SHUTDOWN_EVENT.is_set():
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            for idx in range(max_indices):
-                if _SHUTDOWN_EVENT.is_set():
-                    break
-                future = executor.submit(_probe_single_device, idx)
-                try:
-                    res = future.result(timeout=timeout_per_index)
-                    if res is not None:
-                        cameras.append(res)
-                except concurrent.futures.TimeoutError:
-                    logger.warning(f"[TOPOLOGY/PROBE] Webcam index {idx} probe timed out after {timeout_per_index}s (skipped)")
-                except Exception as e:
-                    logger.debug(f"[TOPOLOGY/PROBE] Error probing index {idx}: {e}")
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                for idx in range(max_indices):
+                    if _SHUTDOWN_EVENT.is_set():
+                        break
+                    try:
+                        future = executor.submit(_probe_single_device, idx)
+                        res = future.result(timeout=timeout_per_index)
+                        if res is not None:
+                            cameras.append(res)
+                    except concurrent.futures.TimeoutError:
+                        logger.warning(f"[TOPOLOGY/PROBE] Webcam index {idx} probe timed out after {timeout_per_index}s (skipped)")
+                    except (RuntimeError, concurrent.futures.CancelledError):
+                        break
+                    except Exception as e:
+                        logger.debug(f"[TOPOLOGY/PROBE] Error probing index {idx}: {e}")
+        except (RuntimeError, concurrent.futures.CancelledError):
+            pass
 
         # Sort discovered cameras by source index
         cameras.sort(key=lambda c: str(c["source"]))
@@ -460,6 +465,13 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
         elif path == "/api/cameras/restart":
             logger.info(f"[LIVE MATRIX] [POST /api/cameras/restart] Hardware camera restart requested from {self.address_string()}")
             if self.runtime_pipeline is not None:
+                # Reload graph file if present so newly saved or enabled cameras are picked up
+                if self.graph_file.is_file():
+                    try:
+                        fresh_graph = CameraGraph.load(self.graph_file)
+                        self.runtime_pipeline.update_graph(fresh_graph)
+                    except Exception as e:
+                        logger.warning(f"[LIVE MATRIX] Could not reload graph before restart: {e}")
                 self.runtime_pipeline.restart_cameras()
                 cards = self.runtime_pipeline.get_all_camera_cards()
                 logger.info(f"[LIVE MATRIX] All cameras restarted. Active workers: {len(self.runtime_pipeline._workers)}, cards: {len(cards)}")

@@ -453,6 +453,10 @@ body.theme-dark {
   animation: spin 0.8s linear infinite;
 }
 
+.spin {
+  animation: spin 0.8s linear infinite;
+}
+
 /* Camera Feed Tile */
 .camera-tile {
   background: var(--bg-card);
