@@ -51,6 +51,8 @@ def test_safe_quit_endpoint_stops_pipeline():
         # Verify pipeline workers are cleaned up
         assert len(pipe._workers) == 0
     finally:
+        from src.multi_camera.ui_server import _SHUTDOWN_EVENT
+        _SHUTDOWN_EVENT.clear()
         try:
             server.shutdown()
         except Exception:

@@ -25,7 +25,7 @@ class Inspector {
         this.currentNode.name = document.getElementById('prop-cam-name').value.trim();
         this.currentNode.source_type = document.getElementById('prop-cam-type').value;
         const src = document.getElementById('prop-cam-source').value.trim();
-        this.currentNode.source = isNaN(src) ? src : parseInt(src, 10);
+        this.currentNode.source = (src !== '' && !isNaN(src) && String(parseInt(src, 10)) === src) ? parseInt(src, 10) : src;
         this.currentNode.enabled = document.getElementById('prop-cam-enabled').checked;
 
         this.app.graphCanvas.draw();

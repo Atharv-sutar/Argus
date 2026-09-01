@@ -92,14 +92,20 @@ class CameraNodeConfig:
             except ValueError:
                 st = SourceType.WEBCAM
 
+        raw_source = data.get("source", 0)
+        if isinstance(raw_source, str) and raw_source.strip().isdigit():
+            src_val: Union[int, str] = int(raw_source.strip())
+        else:
+            src_val = raw_source
+
         return cls(
             camera_id=data["camera_id"],
-            name=data["name"],
-            source=data["source"],
+            name=data.get("name", data["camera_id"]),
+            source=src_val,
             source_type=st,
             enabled=data.get("enabled", True),
-            position_x=data.get("position_x", 0.0),
-            position_y=data.get("position_y", 0.0),
+            position_x=float(data.get("position_x", 0.0) or 0.0),
+            position_y=float(data.get("position_y", 0.0) or 0.0),
             floor=data.get("floor"),
             zone=data.get("zone"),
             description=data.get("description"),

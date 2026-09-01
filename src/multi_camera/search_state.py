@@ -36,6 +36,7 @@ class SearchStateManager:
         self._search_start_time: float = 0.0
         self._last_expansion_time: float = 0.0
         self._active_cameras: Set[str] = set()
+        self._pending_cameras: Dict[str, float] = {}
         self._searched_cameras: Set[str] = set()
         self._candidate_camera: Optional[str] = None
         self._candidate_confirmations: int = 0
@@ -64,6 +65,7 @@ class SearchStateManager:
         self._search_start_time = time.time()
         self._last_expansion_time = self._search_start_time
         self._active_cameras.clear()
+        self._pending_cameras.clear()
         self._searched_cameras.clear()
         self._candidate_camera = None
         self._candidate_confirmations = 0
@@ -90,8 +92,32 @@ class SearchStateManager:
             return False
         if self._search_radius >= self._config.max_radius:
             return False
+        
         elapsed = time.time() - self._last_expansion_time
-        return elapsed >= self._config.per_radius_timeout_s
+        timeout_s = self._config.per_radius_timeout_s
+        
+        # Heuristic: if we still have pending cameras for the current radius,
+        # we should give them a chance to activate and be searched, unless we've
+        # waited for an excessively long time (e.g. 2x the normal timeout).
+        if self._pending_cameras:
+            if elapsed < timeout_s * 2.0:
+                return False
+                
+        return elapsed >= timeout_s
+
+    def add_pending_camera(self, camera_id: str, activation_delay_s: float) -> None:
+        """Register a camera to be activated after a physical travel delay."""
+        activation_time = self._search_start_time + activation_delay_s
+        self._pending_cameras[camera_id] = activation_time
+
+    def pop_ready_pending_cameras(self, current_time: float) -> List[str]:
+        """Return and remove pending cameras that are now ready to be activated."""
+        ready = []
+        for cam_id, activation_time in list(self._pending_cameras.items()):
+            if current_time >= activation_time:
+                ready.append(cam_id)
+                del self._pending_cameras[cam_id]
+        return ready
 
     def is_timed_out(self) -> bool:
         """Check if the total recovery timeout has been exceeded."""

@@ -27,6 +27,12 @@ class ControllableMockDetector(BaseDetector):
     def detect(self, frame, timestamp_ms=0.0):
         return DetectionResult(detections=self.detections, frame_id=0, timestamp_ms=timestamp_ms)
 
+    def detect_batch(self, frames, frame_ids=None, timestamps_ms=None):
+        frame_ids = frame_ids or [0]*len(frames)
+        timestamps_ms = timestamps_ms or [0.0]*len(frames)
+        return [DetectionResult(detections=self.detections, frame_id=fid, timestamp_ms=ts) 
+                for fid, ts in zip(frame_ids, timestamps_ms)]
+
 
 def test_lock_switches_when_bystander_hijacks_track_and_real_target_is_present():
     """Verify Issue 1: If track 1 is hijacked by a bystander, and real target is track 2, lock switches to track 2."""
@@ -62,12 +68,12 @@ def test_lock_switches_when_bystander_hijacks_track_and_real_target_is_present()
         reid_extractor=mock_reid,
         camera_factory=lambda node_cfg: SyntheticCamera(width=640, height=480, fps=30),
         tracker_factory=lambda: ByteTracker(track_thresh=0.4, match_thresh=0.5),
+        shared_detector=det,
     )
 
     # 1. Lock Target on Track 1 (wide box: width=100 -> returns target_vec)
     det.set_persons([(50.0, 50.0, 150.0, 200.0, 0.95)])
     worker = pipe._get_or_create_worker("cam_A")
-    worker.detector = det
 
     pipe.step()
     pipe.select_target_on_camera("cam_A", 100.0, 100.0)
@@ -76,7 +82,7 @@ def test_lock_switches_when_bystander_hijacks_track_and_real_target_is_present()
     assert pipe.target_manager.target.state == TargetState.TRACKING
     locked_id = pipe.target_manager.target.track_id
     assert locked_id is not None
-    assert pipe.gallery.size >= 1
+    assert pipe.identity.size >= 1
 
     # 2. Frame now has TWO people:
     # Person 1 (locked track ID) is now a bystander (narrow box: width=50 -> returns bystander_vec with sim=0.0)

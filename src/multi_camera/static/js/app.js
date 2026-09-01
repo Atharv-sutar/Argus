@@ -481,16 +481,35 @@ class SurveillanceApp {
      ========================================================================== */
 
   startPolling() {
-    this.refreshStatus();
-    this.refreshGallery();
-
-    this.statusPollTimer = setInterval(() => this.refreshStatus(), 700);
-    this.galleryPollTimer = setInterval(() => this.refreshGallery(), 750);
+    console.log('[SSE] Initializing Server-Sent Events for unified telemetry...');
+    if (this.telemetrySource) {
+      this.telemetrySource.close();
+    }
+    
+    this.telemetrySource = new EventSource('/api/stream/events');
+    
+    this.telemetrySource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        this.refreshStatus(data);
+        if (data.gallery) {
+          this.refreshGallery(data.gallery);
+        }
+      } catch (err) {
+        console.error('[SSE] Parse error:', err);
+      }
+    };
+    
+    this.telemetrySource.onerror = (err) => {
+      console.warn('[SSE] Connection lost, retrying automatically...', err);
+    };
   }
 
-  async refreshStatus() {
+  async refreshStatus(st = null) {
     try {
-      const st = await API.getStatus();
+      if (!st) {
+        st = await API.getStatus();
+      }
       if (!st) return;
 
       const pendingGraceMs = 2000;
@@ -597,9 +616,11 @@ class SurveillanceApp {
      RIGHT VERTICAL TARGET GALLERY COLUMN RENDERING (REQUIREMENT #2)
      ========================================================================== */
 
-  async refreshGallery() {
+  async refreshGallery(g = null) {
     try {
-      const g = await API.getGallery();
+      if (!g) {
+        g = await API.getGallery();
+      }
       if (!g) return;
 
       this.galleryCountBadge.textContent = `${g.size} / ${g.max_size}`;

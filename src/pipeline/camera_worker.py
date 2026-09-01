@@ -23,13 +23,11 @@ class CameraWorker:
     def __init__(
         self,
         camera: BaseCamera,
-        detector: BaseDetector,
         tracker: BaseTracker,
         annotator: Optional[FrameAnnotator] = None,
         camera_id: str = "camera_0",
     ) -> None:
         self.camera = camera
-        self.detector = detector
         self.tracker = tracker
         self.annotator = annotator or FrameAnnotator()
         self.camera_id = camera_id
@@ -52,10 +50,10 @@ class CameraWorker:
         return self.camera.read()
 
     def process_frame(
-        self, frame: np.ndarray, timestamp_ms: float
-    ) -> Tuple[DetectionResult, TrackResult]:
+        self, frame: np.ndarray, timestamp_ms: float, det_result: DetectionResult
+    ) -> TrackResult:
         """
-        Executes YOLO detection and ByteTrack motion tracking on a single frame.
+        Executes ByteTrack motion tracking on a single frame using pre-computed detections.
         """
         # Calculate instantaneous FPS
         now = time.time()
@@ -66,15 +64,12 @@ class CameraWorker:
                 self._fps = 0.9 * self._fps + 0.1 * inst_fps if self._fps > 0 else inst_fps
         self._last_frame_time = now
 
-        # 1. Detection
-        det_result = self.detector.detect(frame, timestamp_ms=timestamp_ms)
-
-        # 2. Tracking
+        # 1. Tracking
         track_result = self.tracker.update(det_result, frame)
 
         self._last_frame = frame
         self._last_track_result = track_result
-        return det_result, track_result
+        return track_result
 
     def annotate(
         self,

@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import numpy as np
 
 from src.core.types import BoundingBox, Embedding, GalleryEntry, Target, TargetState, Track, TrackResult, VerifiedIdentityDecision
-from src.reid.gallery import TargetGallery
+from src.identity.manager import IdentityManager
 
 logger = logging.getLogger(__name__)
 
@@ -20,12 +20,12 @@ class TargetManager:
 
     def __init__(
         self,
-        gallery: Optional[TargetGallery] = None,
+        identity_manager: Optional[IdentityManager] = None,
         lost_timeout_ms: float = 2000.0,
         reassociation_iou_thresh: float = 0.3,
         min_margin: float = 0.05,
     ) -> None:
-        self.gallery = gallery or TargetGallery()
+        self.identity_manager = identity_manager
         self.lost_timeout_ms = lost_timeout_ms
         self.reassociation_iou_thresh = reassociation_iou_thresh
         self.min_margin = min_margin
@@ -74,18 +74,17 @@ class TargetManager:
         )
 
         # Seed gallery from crop if frame is available
-        if frame is not None and box is not None:
+        if frame is not None and box is not None and self.identity_manager:
             crop = self._extract_crop(frame, box)
             if crop is not None and crop.size > 0:
-                self.gallery.seed(
+                self.identity_manager.register_new_target(
                     crop=crop,
-                    camera_id=camera_id,
+                    identity_id="target_0",
+                    label=f"target_{track_id}",
                     timestamp_ms=timestamp_ms,
-                    frame_id=frame_id,
-                    target_label=f"target_{track_id}",
                 )
 
-        logger.info(f"[TARGET] Logical target selected: Tracker={track_id} on '{camera_id}' | Gallery seeded.")
+        logger.info(f"[TARGET] Logical target selected: Tracker={track_id} on '{camera_id}' | Identity seeded.")
         return True
 
     def update(
@@ -160,18 +159,20 @@ class TargetManager:
         frame_id: int = 0,
     ) -> bool:
         """
-        Operator-triggered manual capture: adds crop + embedding to the target gallery.
+        Operator-triggered manual capture: adds crop to the trusted target gallery.
         Protected entry that bypasses similarity checks and cannot be evicted by auto additions.
         """
         if self._target.state == TargetState.UNSELECTED:
             logger.warning("[TARGET] Cannot add manual sample: no target selected")
             return False
-        return self.gallery.add_manual(
+            
+        if self.identity_manager is None:
+            return False
+            
+        return self.identity_manager.add_reference_sample(
             crop=crop,
-            embedding=embedding,
-            camera_id=camera_id,
+            identity_id="target_0",
             timestamp_ms=timestamp_ms,
-            frame_id=frame_id,
         )
 
     def mark_tracking(self, track: Track, frame_id: int, timestamp_ms: float) -> Target:
@@ -207,12 +208,15 @@ class TargetManager:
     def clear(self) -> None:
         """Deselect the current target and purge its appearance gallery."""
         self._target = Target(state=TargetState.UNSELECTED)
-        self.gallery.clear()
+        if self.identity_manager:
+            self.identity_manager.clear()
         logger.info("[TARGET] Target cleared and gallery purged.")
 
     def rollback_auto_entries(self, for_track_id: Optional[int] = None) -> int:
         """Purges auto-enrolled entries associated with for_track_id while keeping manual entries."""
-        return self.gallery.rollback_auto_entries(for_track_id=for_track_id)
+        if self.identity_manager:
+            return self.identity_manager.rollback_auto_entries(for_track_id=for_track_id)
+        return 0
 
 
     def reassociate_target(

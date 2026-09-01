@@ -86,6 +86,7 @@ class IdentityManager:
         self.w_color = w_color
         self.w_deep = w_deep
         self.w_lower = w_lower
+        self.auto_add_threshold = 0.85 # shim
         self.evidence_engine = evidence_engine or EvidenceEngine(
             window_size=4,
             min_similarity_threshold=similarity_threshold,
@@ -97,11 +98,136 @@ class IdentityManager:
 
     def get_identity(self, identity_id: str) -> Optional[Identity]:
         return self._identities.get(identity_id)
+        
+    @property
+    def size(self) -> int:
+        return self.manual_count + self.auto_count
+
+    @property
+    def is_empty(self) -> bool:
+        """Shim for TargetGallery.is_empty"""
+        ident = self.get_identity("target_0")
+        if not ident: return True
+        return len(ident.trusted_gallery) == 0 and len(ident.provisional_gallery) == 0
+
+    @property
+    def reid_extractor(self) -> Any:
+        return self.reid
+
+    @property
+    def manual_count(self) -> int:
+        """Shim for TargetGallery.manual_count (assumes target_0)"""
+        ident = self.get_identity("target_0")
+        return len(ident.trusted_gallery) if ident else 0
+
+    @property
+    def auto_count(self) -> int:
+        """Shim for TargetGallery.auto_count (assumes target_0)"""
+        ident = self.get_identity("target_0")
+        return len(ident.provisional_gallery) if ident else 0
+
+    def match(self, candidate_embedding: Embedding) -> Tuple[float, Optional[Any]]:
+        """Shim for TargetGallery.match"""
+        res = self.match_batch([candidate_embedding])
+        return res[0]
+        
+    def clear(self, identity_id: str = "target_0") -> None:
+        """Shim for TargetGallery.clear"""
+        if identity_id in self._identities:
+            del self._identities[identity_id]
+        self.vector_store.remove_identity(identity_id)
+        
+    def rollback_auto_entries(self, for_track_id: int) -> int:
+        """
+        Shim for TargetGallery.rollback_auto_entries. 
+        Clears the provisional gallery entirely.
+        """
+        ident = self.get_identity("target_0")
+        if ident:
+            count = len(ident.provisional_gallery)
+            ident.provisional_gallery.clear()
+            return count
+        return 0
+
+    @property
+    def _manual_matrix(self) -> Optional[np.ndarray]:
+        ident = self.get_identity("target_0")
+        if not ident or not ident.trusted_gallery: return None
+        return np.stack([e.vector for e in ident.trusted_gallery])
+
+    @property
+    def _manual_entries(self) -> List[Any]:
+        ident = self.get_identity("target_0")
+        return ident.trusted_gallery if ident else []
+
+    def match_batch(self, candidate_embeddings: List[Embedding]) -> List[Tuple[float, Optional[Any]]]:
+        """Shim for TargetGallery.match_batch"""
+        details = self.match_batch_details(candidate_embeddings)
+        return [(float(d[0]), d[3]) for d in details]
+
+    def match_batch_details(
+        self, embs: List[Embedding]
+    ) -> List[Tuple[float, float, float, Optional[Any]]]:
+        """Shim for TargetGallery.match_batch_details"""
+        results = []
+        ident = self.get_identity("target_0")
+        if not ident:
+            return [(0.0, 0.0, 0.0, -1)] * len(embs)
+            
+        man_mat = self._manual_matrix
+        auto_mat = None
+        if ident.provisional_gallery:
+            auto_mat = np.stack([e.vector for e in ident.provisional_gallery])
+            
+        for emb in embs:
+            man_sim = 0.0
+            auto_sim = 0.0
+            if man_mat is not None:
+                man_sim = float(np.max(np.dot(man_mat, emb.vector)))
+            if auto_mat is not None:
+                auto_sim = float(np.max(np.dot(auto_mat, emb.vector)))
+                
+            eff_sim = max(man_sim, auto_sim)
+            results.append((eff_sim, man_sim, auto_sim, -1))
+        return results
+        
+    def add_auto(
+        self,
+        crop: np.ndarray,
+        embedding: Embedding,
+        candidate_similarity: float,
+        camera_id: str = "camera_0",
+        timestamp_ms: float = 0.0,
+        frame_id: int = 0,
+        track_id: Optional[int] = None,
+    ) -> bool:
+        """Shim for TargetGallery.add_auto"""
+        if candidate_similarity < self.auto_add_threshold:
+            return False
+            
+        ident = self.get_identity("target_0")
+        if not ident: return False
+        
+        # Check against manual matrix if available
+        man_mat = self._manual_matrix
+        if man_mat is not None and len(man_mat) > 0:
+            m_sims = np.clip(np.dot(man_mat, embedding.vector), 0.0, 1.0)
+            max_manual_sim = float(np.max(m_sims))
+            min_anchor = max(0.55, 0.75 - 0.05) # dummy match_threshold 0.75
+            if max_manual_sim < min_anchor:
+                return False
+                
+        # Only add if it passes
+        ident.provisional_gallery.append(embedding)
+        return True
 
     def _extract_all_representations(
-        self, crop: np.ndarray
+        self, crop: np.ndarray, embedding: Optional[Embedding] = None
     ) -> Tuple[Embedding, Embedding, Embedding, Embedding, Embedding]:
         """Extracts fused and decomposed feature embeddings."""
+        if embedding is not None:
+            return embedding, embedding, embedding, embedding, embedding
+            
         if hasattr(self.reid, "extract_decomposed"):
             decomposed = self.reid.extract_decomposed(crop)
             if len(decomposed) == 5:
@@ -115,6 +241,7 @@ class IdentityManager:
         identity_id: str,
         label: Optional[str] = None,
         timestamp_ms: float = 0.0,
+        embedding: Optional[Embedding] = None,
     ) -> Optional[Embedding]:
         """
         Registers a fresh target identity, initializes trusted reference galleries,
@@ -128,7 +255,7 @@ class IdentityManager:
         if self.evidence_engine:
             self.evidence_engine.clear()
 
-        fused, deep, global_v, upper, lower = self._extract_all_representations(crop)
+        fused, deep, global_v, upper, lower = self._extract_all_representations(crop, embedding)
 
         # Create initial view cluster and TargetIdentityAnchor
         initial_cluster = ViewCluster(
@@ -605,3 +732,34 @@ class IdentityManager:
     def clear(self) -> None:
         self._identities.clear()
         self.vector_store.clear()
+
+    def save_to_db(self, db_path: str) -> None:
+        """Persists all tracked identities and embeddings to an SQLite database."""
+        # Note: IdentityManager expects vector_store to be SQLiteVectorStore if persisting
+        if not hasattr(self.vector_store, "save_identity_metadata"):
+            logger.warning("save_to_db called but vector_store is not SQLiteVectorStore.")
+            return
+
+        for identity_id, ident in self._identities.items():
+            from src.identity.serialization import serialize_identity
+            data = serialize_identity(ident)
+            self.vector_store.save_identity_metadata(identity_id, data)
+        logger.info(f"[IDENTITY] Persisted {len(self._identities)} identities to {db_path}")
+
+    def load_from_db(self, db_path: str) -> None:
+        """Loads identities and embeddings from an SQLite database."""
+        if not hasattr(self.vector_store, "load_all_identity_metadata"):
+            logger.warning("load_from_db called but vector_store is not SQLiteVectorStore.")
+            return
+
+        self._identities.clear()
+        try:
+            metadata_dict = self.vector_store.load_all_identity_metadata()
+            from src.identity.serialization import deserialize_identity
+            for identity_id, data in metadata_dict.items():
+                ident = deserialize_identity(data)
+                self._identities[identity_id] = ident
+            logger.info(f"[IDENTITY] Loaded {len(self._identities)} identities from {db_path}")
+        except Exception as e:
+            logger.error(f"[IDENTITY] Failed to load from database: {e}")
+

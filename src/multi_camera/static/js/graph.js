@@ -74,13 +74,16 @@ class GraphCanvas {
     const btnSave = document.getElementById('btn-save');
     if (btnSave) {
       btnSave.addEventListener('click', async () => {
+        btnSave.disabled = true;
         try {
           const res = await API.saveGraph(this.toJSON());
           this.app.showToast('Camera topology graph saved successfully!', 'success');
           // Reload live matrix
-          this.app.loadLiveMatrix();
+          await this.app.loadLiveMatrix();
         } catch (err) {
           this.app.showToast(`Save failed: ${err.message}`, 'error');
+        } finally {
+          btnSave.disabled = false;
         }
       });
     }
@@ -88,6 +91,7 @@ class GraphCanvas {
     const btnValidate = document.getElementById('btn-validate');
     if (btnValidate) {
       btnValidate.addEventListener('click', async () => {
+        btnValidate.disabled = true;
         try {
           const res = await API.validateGraph(this.toJSON());
           if (res.valid) {
@@ -97,6 +101,8 @@ class GraphCanvas {
           }
         } catch (err) {
           this.app.showToast(`Validation error: ${err.message}`, 'error');
+        } finally {
+          btnValidate.disabled = false;
         }
       });
     }

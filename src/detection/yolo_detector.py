@@ -121,3 +121,86 @@ class YOLODetector(BaseDetector):
         except Exception as e:
             logger.error(f"Error during detection on frame {frame_id}: {e}")
             return DetectionResult(detections=[], frame_id=frame_id, timestamp_ms=timestamp_ms)
+
+    def detect_batch(
+        self,
+        frames: List[np.ndarray],
+        frame_ids: Optional[List[int]] = None,
+        timestamps_ms: Optional[List[float]] = None,
+    ) -> List[DetectionResult]:
+        """
+        Executes YOLO object detection on a batch of frames in a single GPU pass.
+        Returns a list of DetectionResults corresponding to the input frames.
+        """
+        if not frames:
+            return []
+
+        if frame_ids is None:
+            frame_ids = [0] * len(frames)
+        if timestamps_ms is None:
+            timestamps_ms = [0.0] * len(frames)
+
+        if self._model is None:
+            return [DetectionResult(detections=[], frame_id=fid, timestamp_ms=ts) for fid, ts in zip(frame_ids, timestamps_ms)]
+
+        try:
+            # ultralytics YOLO handles a list of numpy arrays natively for batched inference
+            results = self._model.predict(
+                source=frames,
+                conf=self.confidence_threshold,
+                iou=self.iou_threshold,
+                classes=self.target_classes,
+                imgsz=self.image_size,
+                device=self.device,
+                verbose=False,
+            )
+
+            det_results: List[DetectionResult] = []
+            
+            for frame, fid, ts, res in zip(frames, frame_ids, timestamps_ms, results):
+                detections: List[Detection] = []
+                boxes_obj = res.boxes
+                if boxes_obj is not None and len(boxes_obj) > 0:
+                    xyxy = boxes_obj.xyxy.cpu().numpy()
+                    confs = boxes_obj.conf.cpu().numpy()
+                    cls_ids = boxes_obj.cls.cpu().numpy().astype(int)
+
+                    h, w = frame.shape[:2]
+                    for box_coords, conf, cid in zip(xyxy, confs, cls_ids):
+                        x1, y1, x2, y2 = map(float, box_coords)
+                        x1 = max(0.0, min(float(w), x1))
+                        y1 = max(0.0, min(float(h), y1))
+                        x2 = max(0.0, min(float(w), x2))
+                        y2 = max(0.0, min(float(h), y2))
+                        if x2 <= x1 or y2 <= y1:
+                            continue
+
+                        bbox = BoundingBox(
+                            x1=x1,
+                            y1=y1,
+                            x2=x2,
+                            y2=y2,
+                            confidence=float(conf),
+                        )
+                        detections.append(
+                            Detection(
+                                box=bbox,
+                                class_id=int(cid),
+                                class_name="person" if int(cid) == 0 else f"class_{cid}",
+                                confidence=float(conf),
+                            )
+                        )
+
+                det_results.append(
+                    DetectionResult(
+                        detections=detections,
+                        frame_id=fid,
+                        timestamp_ms=ts
+                    )
+                )
+
+            return det_results
+
+        except Exception as e:
+            logger.error(f"Error during batched detection: {e}")
+            return [DetectionResult(detections=[], frame_id=fid, timestamp_ms=ts) for fid, ts in zip(frame_ids, timestamps_ms)]

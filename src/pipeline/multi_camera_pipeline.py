@@ -8,6 +8,7 @@ import time
 from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
 import cv2
 import numpy as np
+import concurrent.futures
 
 from src.camera.capture import OpenCVCamera, SyntheticCamera
 from src.core.config import AppConfig, SearchConfig
@@ -25,6 +26,7 @@ from src.multi_camera.camera_graph import CameraGraph
 from src.multi_camera.camera_node import CameraNode
 from src.multi_camera.search_manager import SearchManager
 from src.pipeline.camera_worker import CameraWorker
+from src.identity.manager import IdentityManager
 from src.reid.extractor import PyTorchReIDExtractor
 from src.reid.gallery import TargetGallery
 from src.reid.quality import ReIDCropQuality
@@ -77,26 +79,30 @@ class MultiCameraPipeline:
                 device=config.inference.device,
             )
 
-        # 2. Target Gallery & Target Manager
+        # 2. Identity Manager & Target Manager
+        if identity_manager is not None:
+            self.identity_manager = identity_manager
+        else:
+            if getattr(config, "storage", None) and config.storage.enabled:
+                from src.identity.sqlite_store import SQLiteVectorStore
+                vector_store = SQLiteVectorStore(db_path=config.storage.db_path)
+            else:
+                vector_store = None
+                
+            self.identity_manager = IdentityManager(
+                reid_extractor=self.reid_extractor,
+                vector_store=vector_store
+            )
+            
+            # Load identities from database on startup
+            if vector_store is not None:
+                self.identity_manager.load_from_db(config.storage.db_path)
+
         if target_manager is not None:
             self.target_manager = target_manager
         else:
-            quality_eval = ReIDCropQuality(
-                min_width=config.reid.min_crop_width,
-                min_height=config.reid.min_crop_height,
-                min_sharpness=config.reid.min_sharpness,
-            )
-            gallery = TargetGallery(
-                reid_extractor=self.reid_extractor,
-                quality_evaluator=quality_eval,
-                max_size=config.reid.max_gallery_size,
-                match_threshold=config.reid.match_threshold,
-                auto_add_threshold=config.reid.auto_add_threshold,
-                auto_add_min_consecutive=config.reid.auto_add_min_consecutive,
-                diversity_threshold=config.reid.diversity_threshold,
-            )
             self.target_manager = TargetManager(
-                gallery=gallery,
+                identity_manager=self.identity_manager,
                 min_margin=config.reid.min_margin,
             )
 
@@ -130,6 +136,8 @@ class MultiCameraPipeline:
         self._switch_consensus: Dict[int, int] = {}
         self._current_track_misses: int = 0
 
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=12, thread_name_prefix="CamWorker")
+
         # 7. Reacquisition threshold (strictly higher than match_threshold)
         self._reacquisition_threshold: float = getattr(
             config.reid, 'reacquisition_threshold',
@@ -156,9 +164,9 @@ class MultiCameraPipeline:
         return self._is_running
 
     @property
-    def gallery(self) -> TargetGallery:
-        """The single target appearance gallery."""
-        return self.target_manager.gallery
+    def identity(self) -> IdentityManager:
+        """The identity manager managing targets."""
+        return self.target_manager.identity_manager
 
     @property
     def last_candidate_scores(self) -> Dict[int, float]:
@@ -207,6 +215,8 @@ class MultiCameraPipeline:
             match_thresh=self.config.tracking.match_thresh,
             track_buffer=self.config.tracking.track_buffer,
             min_box_area=self.config.tracking.min_box_area,
+            reid_extractor=self.reid_extractor,
+            reid_weight=0.5,
         )
 
     def _default_camera_factory(self, node_cfg: CameraNodeConfig) -> BaseCamera:
@@ -278,21 +288,28 @@ class MultiCameraPipeline:
         if node is None or not node.config.enabled:
             return None
 
-        camera = self._camera_factory(node.config)
-        detector = self._detector_factory()
-        tracker = self._tracker_factory()
-        annotator = self._annotators.get(camera_id) or FrameAnnotator()
+        try:
+            camera = self._camera_factory(node.config)
+            tracker = self._tracker_factory()
+            annotator = self._annotators.get(camera_id) or FrameAnnotator()
 
-        worker = CameraWorker(
-            camera=camera,
-            detector=detector,
-            tracker=tracker,
-            annotator=annotator,
-            camera_id=camera_id,
-        )
-        self._workers[camera_id] = worker
-        node.mark_online()
-        return worker
+            worker = CameraWorker(
+                camera=camera,
+                tracker=tracker,
+                annotator=annotator,
+                camera_id=camera_id,
+            )
+            self._workers[camera_id] = worker
+            if camera.is_opened():
+                node.mark_online()
+            else:
+                node.mark_offline()
+            logger.info(f"[MULTI-CAM] Initialized camera worker for '{camera_id}' (source={node.config.source}, opened={camera.is_opened()})")
+            return worker
+        except Exception as e:
+            logger.warning(f"[MULTI-CAM] Failed to initialize worker for camera '{camera_id}': {e}")
+            node.mark_offline()
+            return None
 
     def _get_or_create_pipeline(self, camera_id: str) -> Optional[CameraWorker]:
         """Backward-compatible alias for _get_or_create_worker."""
@@ -329,7 +346,11 @@ class MultiCameraPipeline:
                 frame_to_process = worker._last_frame
 
         if frame_to_process is not None:
-            worker.process_frame(frame_to_process, time.time() * 1000.0)
+            if hasattr(worker, "detector"):
+                det_res = worker.detector.detect(frame_to_process, timestamp_ms=time.time() * 1000.0)
+            else:
+                det_res = self._default_detector_factory().detect(frame_to_process, timestamp_ms=time.time() * 1000.0)
+            worker.process_frame(frame_to_process, time.time() * 1000.0, det_res)
 
         if worker._last_track_result is None or worker._last_frame is None:
             return None
@@ -373,7 +394,8 @@ class MultiCameraPipeline:
         if worker._last_track_result is None and worker.camera.is_opened():
             success, frame, ts_ms = worker.read_frame()
             if success and frame is not None:
-                worker.process_frame(frame, ts_ms)
+                det_res = self._default_detector_factory().detect(frame, timestamp_ms=ts_ms)
+                worker.process_frame(frame, ts_ms, det_res)
 
         if worker._last_track_result is None or worker._last_frame is None:
             return False
@@ -458,8 +480,7 @@ class MultiCameraPipeline:
 
     def step(self) -> Dict[str, Tuple[Optional[np.ndarray], Optional[TrackResult], Optional[Target]]]:
         """
-        Executes a single processing step across the multi-camera network.
-        Processes active camera first, and only processes search-radius cameras if target is LOST.
+        Executes a single processing step across the multi-camera network concurrently.
         """
         if not self._is_running or self._is_paused:
             return {}
@@ -467,53 +488,171 @@ class MultiCameraPipeline:
         self._frame_count += 1
         now = time.time()
         results: Dict[str, Tuple[Optional[np.ndarray], Optional[TrackResult], Optional[Target]]] = {}
-        now = time.time()
 
         # 1. Default active camera if none selected or if removed
         if not self._active_camera_id or self._active_camera_id not in self._nodes:
             enabled_ids = [cid for cid in self.graph.all_camera_ids() if cid in self._nodes and self._nodes[cid].config.enabled]
             self._active_camera_id = enabled_ids[0] if enabled_ids else None
 
-        # 2. Process Active Camera
+        # 2. Gather Phase 1 Tasks: I/O and AI Inference
+        tasks = []
         active_cam_id = self._active_camera_id
         active_worker = self._get_or_create_worker(active_cam_id) if active_cam_id else None
-        active_track_res: Optional[TrackResult] = None
-        active_frame: Optional[np.ndarray] = None
 
-        if active_cam_id is not None and active_worker and active_worker.camera.is_opened():
-            success, frame, ts_ms = active_worker.read_frame()
-            if success and frame is not None:
+        if active_cam_id and active_worker and active_worker.camera.is_opened():
+            tasks.append((active_cam_id, active_worker, "active"))
+
+        target_is_lost = (self.target_manager.is_active() and self.target_manager.target.state in (TargetState.LOST, TargetState.UNCERTAIN))
+        search_cams_to_process = set()
+
+        if self.search_manager.is_searching:
+            search_cams_to_process.update(self.search_manager.get_progress().active_cameras)
+
+        for search_cam_id in search_cams_to_process:
+            if search_cam_id == active_cam_id:
+                continue
+            s_worker = self._get_or_create_worker(search_cam_id)
+            if s_worker and s_worker.camera.is_opened():
+                tasks.append((search_cam_id, s_worker, "search"))
+
+        active_and_search = {t[0] for t in tasks}
+
+        for cid, node in self._nodes.items():
+            if cid not in active_and_search and node.config.enabled:
+                worker = self._get_or_create_worker(cid)
+                if worker and worker.camera.is_opened():
+                    tasks.append((cid, worker, "standby"))
+
+        def _task_acquire(cid: str, worker: CameraWorker, role: str):
+            success, frame, ts_ms = worker.read_frame()
+            if not success or frame is None:
+                return cid, role, None, ts_ms
+            return cid, role, frame, ts_ms
+
+        # Execute Phase 1: Parallel Acquisition
+        acquired_results = {}
+        acq_futures = {self._executor.submit(_task_acquire, cid, w, role): cid for cid, w, role in tasks}
+        for future in concurrent.futures.as_completed(acq_futures):
+            cid = acq_futures[future]
+            try:
+                acquired_results[cid] = future.result()
+            except Exception as e:
+                logger.error(f"[MULTI-CAM] Camera worker error on {cid}: {e}")
+                role = next((r for c, _, r in tasks if c == cid), "error")
+                acquired_results[cid] = (cid, role, None, 0.0)
+
+        # Execute Phase 2: Batched YOLO Inference (or Mock Detection for Tests)
+        yolo_frames = []
+        yolo_meta = []
+        det_map = {}
+        
+        for cid, (r_cid, role, frame, ts_ms) in acquired_results.items():
+            if frame is not None and role in ("active", "search"):
+                worker = self._get_or_create_worker(cid)
+                if worker and hasattr(worker, "detector"):
+                    # Testing backdoor: if a mock detector is attached to the worker, use it directly
+                    det_map[cid] = worker.detector.detect(frame, self._frame_count, ts_ms)
+                else:
+                    yolo_frames.append(frame)
+                    yolo_meta.append((cid, ts_ms))
+        
+        if yolo_frames:
+            batch_det_results = self._default_detector_factory().detect_batch(
+                frames=yolo_frames,
+                frame_ids=[self._frame_count] * len(yolo_frames),
+                timestamps_ms=[ts for _, ts in yolo_meta]
+            )
+            for meta, det_res in zip(yolo_meta, batch_det_results):
+                det_map[meta[0]] = det_res
+
+        # Execute Phase 3: Parallel Tracking
+        def _task_track(cid: str, worker: CameraWorker, frame: np.ndarray, ts_ms: float, det_res: DetectionResult):
+            track_res = worker.process_frame(frame, ts_ms, det_res)
+            return cid, frame, ts_ms, track_res
+        
+        track_futures = {}
+        for cid, (r_cid, role, frame, ts_ms) in acquired_results.items():
+            if role in ("active", "search") and frame is not None:
+                worker = self._get_or_create_worker(cid)
+                det_res = det_map.get(cid)
+                if worker and det_res:
+                    track_futures[self._executor.submit(_task_track, cid, worker, frame, ts_ms, det_res)] = cid
+        
+        phase1_results = {}
+        for future in concurrent.futures.as_completed(track_futures):
+            cid = track_futures[future]
+            try:
+                _, frame, ts_ms, track_res = future.result()
+                role = acquired_results[cid][1]
+                phase1_results[cid] = (cid, role, frame, ts_ms, track_res)
+            except Exception as e:
+                logger.error(f"[MULTI-CAM] Tracking error on {cid}: {e}")
+                role = acquired_results[cid][1]
+                phase1_results[cid] = (cid, role, None, 0.0, None)
+
+        # Add standby cameras to phase1_results to match old format
+        for cid, (r_cid, role, frame, ts_ms) in acquired_results.items():
+            if role == "standby" or frame is None:
+                phase1_results[cid] = (cid, role, frame, ts_ms, None)
+
+        # Execute Phase 4: Batched ReID Extraction
+        target = self.target_manager.target
+        should_reid = (self._frame_count % self.reid_interval == 0) or (target.state == TargetState.LOST)
+        
+        precomputed_reid_candidates: Dict[str, List[Tuple[Track, np.ndarray, Embedding]]] = {}
+        
+        if should_reid and not self.identity.is_empty:
+            crops_to_extract = []
+            crop_meta = [] # (cid, Track, crop)
+            
+            for cid, (r_cid, role, frame, ts_ms, track_res) in phase1_results.items():
+                if frame is not None and track_res is not None and role in ("active", "search"):
+                    worker = self._get_or_create_worker(cid)
+                    if worker:
+                        for track in track_res.tracks:
+                            c_crop = worker.extract_crop(frame, track.box)
+                            if c_crop is not None and c_crop.size > 0 and c_crop.shape[0] >= 12 and c_crop.shape[1] >= 12:
+                                crops_to_extract.append(c_crop)
+                                crop_meta.append((cid, track, c_crop))
+            
+            if crops_to_extract:
+                try:
+                    batch_embs = self.reid_extractor.extract_batch(crops_to_extract)
+                    for (cid, track, crop), emb in zip(crop_meta, batch_embs):
+                        if cid not in precomputed_reid_candidates:
+                            precomputed_reid_candidates[cid] = []
+                        precomputed_reid_candidates[cid].append((track, crop, emb))
+                except Exception as e:
+                    logger.error(f"[MULTI-CAM] Batched ReID extraction error: {e}")
+
+        active_track_res = None
+        active_frame = None
+
+        # 3. Process Active Camera Main-Thread Logic
+        if active_cam_id and active_cam_id in phase1_results:
+            _, role, frame, ts_ms, track_res = phase1_results[active_cam_id]
+            if frame is not None and role == "active":
                 active_frame = frame
-                det_res, active_track_res = active_worker.process_frame(frame, ts_ms)
-                if active_cam_id in self._nodes:
-                    self._nodes[active_cam_id].fps = active_worker.fps
-
-                # Target Appearance Evaluation on Active Camera
-                self._evaluate_active_camera_target(active_worker, frame, active_track_res, ts_ms)
-
-                ann_frame = active_worker.annotate(
-                    frame,
-                    active_track_res,
-                    self.target_manager.target,
-                    candidate_similarities=self._last_candidate_scores,
+                active_track_res = track_res
+                self._nodes[active_cam_id].fps = active_worker.fps
+                
+                precomp_cands = precomputed_reid_candidates.get(active_cam_id)
+                self._evaluate_active_camera_target(
+                    worker=active_worker, 
+                    frame=frame, 
+                    track_res=active_track_res, 
+                    timestamp_ms=ts_ms,
+                    precomputed_candidates=precomp_cands
                 )
-                results[active_cam_id] = (ann_frame, active_track_res, self.target_manager.target)
             else:
-                if active_cam_id in self._nodes:
-                    self._nodes[active_cam_id].mark_offline()
-        elif active_cam_id is not None and active_cam_id in self._nodes:
+                self._nodes[active_cam_id].mark_offline()
+        elif active_cam_id and active_cam_id in self._nodes:
             self._nodes[active_cam_id].mark_offline()
 
-        # 3. Check Target State on Active Camera
+        # 4. Check Target State
         target = self.target_manager.target
-        target_is_active = (
-            self.target_manager.is_active()
-            and target.state in (TargetState.TRACKING, TargetState.OCCLUDED, TargetState.LOCKED)
-        )
-        target_is_lost = (
-            self.target_manager.is_active()
-            and target.state in (TargetState.LOST, TargetState.UNCERTAIN)
-        )
+        target_is_active = (self.target_manager.is_active() and target.state in (TargetState.TRACKING, TargetState.OCCLUDED, TargetState.LOCKED))
+        target_is_lost = (self.target_manager.is_active() and target.state in (TargetState.LOST, TargetState.UNCERTAIN))
 
         if target_is_active:
             if self.search_manager.is_searching:
@@ -522,11 +661,9 @@ class MultiCameraPipeline:
             self._target_lost_timestamp = 0.0
             if self._active_camera_id in self._nodes:
                 self._nodes[self._active_camera_id].mark_active_target()
-
         elif target_is_lost and self._active_camera_id:
             has_adjacent_cams = len(self.graph.get_neighbors(self._active_camera_id, 1)) > 0
             if not has_adjacent_cams:
-                # Single camera or isolated node: hold LOST state without futile search
                 if self.search_manager.is_searching:
                     self.search_manager.reset()
                     self._deactivate_search_cameras()
@@ -534,10 +671,7 @@ class MultiCameraPipeline:
                 self._target_lost_timestamp = now
                 search_cams = self.search_manager.on_target_lost(self._active_camera_id)
                 if search_cams:
-                    logger.info(
-                        f"[MULTI-CAM] Target LOST on camera '{self._active_camera_id}'. "
-                        f"Initiating graph search on {len(search_cams)} adjacent cameras."
-                    )
+                    logger.info(f"[MULTI-CAM] Target LOST on camera '{self._active_camera_id}'. Initiating graph search on {len(search_cams)} adjacent cameras.")
                     self._activate_search_cameras([cid for cid, _ in search_cams])
             else:
                 elapsed_s = now - self._target_lost_timestamp
@@ -548,95 +682,89 @@ class MultiCameraPipeline:
                     logger.warning("[MULTI-CAM] Multi-camera search timed out without recovery.")
                     self._deactivate_search_cameras()
 
-        # 4. Process Search Cameras
-        candidate_recovered_cam: Optional[str] = None
-        candidate_recovered_track: Optional[Track] = None
-        candidate_recovered_crop: Optional[np.ndarray] = None
-        candidate_recovered_emb: Optional[Embedding] = None
+        # 5. Process Search Cameras Main-Thread Logic
+        candidate_recovered_cam = None
+        candidate_recovered_track = None
+        candidate_recovered_crop = None
+        candidate_recovered_emb = None
 
-        if self.search_manager.is_searching:
-            progress = self.search_manager.get_progress()
-            for search_cam_id in progress.active_cameras:
-                if search_cam_id == self._active_camera_id:
+        for cid, (r_cid, role, frame, ts_ms, track_res) in phase1_results.items():
+            if role == "search" and frame is not None and track_res is not None:
+                s_worker = self._get_or_create_worker(cid)
+                if not s_worker:
                     continue
-                s_worker = self._get_or_create_worker(search_cam_id)
-                if not s_worker or not s_worker.camera.is_opened():
-                    continue
-
-                s_success, s_frame, s_ts_ms = s_worker.read_frame()
-                if not s_success or s_frame is None:
-                    continue
-
-                s_det, s_track = s_worker.process_frame(s_frame, s_ts_ms)
-                self._nodes[search_cam_id].fps = s_worker.fps
-
-                # Match candidate detections against target gallery
-                if self.target_manager.is_active() and not self.gallery.is_empty and s_track.count > 0:
+                self._nodes[cid].fps = s_worker.fps
+                if self.target_manager.is_active() and not self.identity.is_empty and track_res.count > 0:
+                    precomp_cands = precomputed_reid_candidates.get(cid)
                     rec_track, rec_crop, rec_emb, rec_sim = self._match_candidates_against_gallery(
-                        s_worker, s_frame, s_track
+                        worker=s_worker, 
+                        frame=frame, 
+                        track_res=track_res,
+                        precomputed_candidates=precomp_cands
                     )
-                    # Cross-camera recovery uses reacquisition_threshold (higher than match_threshold)
                     if rec_track is not None and rec_sim >= self._reacquisition_threshold:
-                        confirmed = self.search_manager.on_candidate_found(search_cam_id, rec_sim)
+                        confirmed = self.search_manager.on_candidate_found(cid, rec_sim)
                         if confirmed:
-                            logger.info(
-                                f"[MULTI-CAM RECOVERY] Target CONFIRMED on '{search_cam_id}' "
-                                f"(Track={rec_track.track_id}, sim={rec_sim:.3f}, "
-                                f"reacq_thresh={self._reacquisition_threshold:.3f})"
-                            )
-                            candidate_recovered_cam = search_cam_id
+                            logger.info(f"[MULTI-CAM RECOVERY] Target CONFIRMED on '{cid}' (Track={rec_track.track_id}, sim={rec_sim:.3f}, reacq_thresh={self._reacquisition_threshold:.3f})")
+                            candidate_recovered_cam = cid
                             candidate_recovered_track = rec_track
                             candidate_recovered_crop = rec_crop
                             candidate_recovered_emb = rec_emb
                             break
                         else:
-                            logger.debug(
-                                f"[MULTI-CAM RECOVERY] Candidate sighting on '{search_cam_id}' "
-                                f"(Track={rec_track.track_id}, sim={rec_sim:.3f}), confirming..."
-                            )
+                            logger.debug(f"[MULTI-CAM RECOVERY] Candidate sighting on '{cid}' (Track={rec_track.track_id}, sim={rec_sim:.3f}), confirming...")
                     else:
-                        self.search_manager.on_candidate_lost(search_cam_id)
+                        self.search_manager.on_candidate_lost(cid)
 
-                s_ann = s_worker.annotate(s_frame, s_track, None)
-                results[search_cam_id] = (s_ann, s_track, None)
-
-        # 5. Cross-Camera Handoff
+        # 6. Cross-Camera Handoff
         if candidate_recovered_cam and candidate_recovered_track:
-            self._perform_handoff(
-                candidate_recovered_cam,
-                candidate_recovered_track,
-                candidate_recovered_crop,
-                candidate_recovered_emb,
-            )
+            self._perform_handoff(candidate_recovered_cam, candidate_recovered_track, candidate_recovered_crop, candidate_recovered_emb)
 
-        # 6. Read standby camera frames for operator surveillance UI (No AI overhead)
-        active_and_search = {self._active_camera_id} if self._active_camera_id else set()
-        if self.search_manager.is_searching:
-            active_and_search.update(self.search_manager.get_progress().active_cameras)
+        # 7. Gather Phase 2 Tasks: Annotation and JPEG Compression
+        def _task_annotate_and_encode(cid: str, role: str, worker: CameraWorker, frame: np.ndarray, track_res: Optional[TrackResult], target: Optional[Target], candidate_scores: Dict[int, float]):
+            ann_frame = frame
+            if role == "active":
+                ann_frame = worker.annotate(frame, track_res, target, candidate_similarities=candidate_scores)
+            elif role == "search":
+                ann_frame = worker.annotate(frame, track_res, None)
+            elif role == "standby":
+                pass # Standby doesn't need annotation
+            
+            jpeg_buf = None
+            try:
+                ret, buf = cv2.imencode(".jpg", ann_frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                if ret:
+                    jpeg_buf = buf.tobytes()
+            except Exception:
+                pass
+            return cid, ann_frame, track_res, target if role == "active" else None, jpeg_buf
 
-        for cid, node in self._nodes.items():
-            if cid not in active_and_search and node.config.enabled:
-                s_worker = self._get_or_create_worker(cid)
-                if s_worker and s_worker.camera.is_opened():
-                    s_ok, s_f, _ = s_worker.read_frame()
-                    if s_ok and s_f is not None:
-                        node.last_frame = s_f
-                        if not node.is_online:
-                            node.mark_online()
-                        if cid not in results:
-                            results[cid] = (s_f, None, None)
+        phase2_futures = []
+        for cid, (r_cid, role, frame, ts_ms, track_res) in phase1_results.items():
+            if frame is not None:
+                worker = self._get_or_create_worker(cid)
+                if worker:
+                    if role == "standby":
+                        self._nodes[cid].last_frame = frame
+                        if not self._nodes[cid].is_online:
+                            self._nodes[cid].mark_online()
+                    
+                    target_arg = self.target_manager.target if role == "active" else None
+                    scores_arg = self._last_candidate_scores if role == "active" else None
+                    phase2_futures.append(self._executor.submit(_task_annotate_and_encode, cid, role, worker, frame, track_res, target_arg, scores_arg))
 
-        # Cache latest annotated/raw frames and pre-encode JPEGs for rock-solid, flicker-free web streaming
-        for cid, (f, _, _) in results.items():
-            if f is not None and cid in self._nodes:
-                self._nodes[cid].last_frame = f
-                try:
-                    ret, buf = cv2.imencode(".jpg", f, [cv2.IMWRITE_JPEG_QUALITY, 75])
-                    if ret:
-                        with self._frame_lock:
-                            self._latest_jpegs[cid] = buf.tobytes()
-                except Exception:
-                    pass
+        # 8. Finalize Results
+        for future in concurrent.futures.as_completed(phase2_futures):
+            try:
+                cid, ann_frame, track_res, tgt, jpeg_buf = future.result()
+                if cid in self._nodes:
+                    self._nodes[cid].last_frame = ann_frame
+                results[cid] = (ann_frame, track_res, tgt)
+                if jpeg_buf:
+                    with self._frame_lock:
+                        self._latest_jpegs[cid] = jpeg_buf
+            except Exception as e:
+                logger.error(f"[MULTI-CAM] Annotation/Encoding error: {e}")
 
         return results
 
@@ -657,6 +785,7 @@ class MultiCameraPipeline:
         frame: np.ndarray,
         track_res: TrackResult,
         timestamp_ms: float,
+        precomputed_candidates: Optional[List[Tuple[Track, np.ndarray, Embedding]]] = None,
     ) -> None:
         """
         Manages target tracking continuity, crowd occlusion awareness, anti-scooping protection,
@@ -685,7 +814,7 @@ class MultiCameraPipeline:
         is_occluded = self._is_occluded(current_track, track_res.tracks, iou_threshold=0.25) if current_track is not None else False
 
         # Case A: On frames where ReID is NOT evaluated
-        if not should_reid or self.gallery.is_empty:
+        if not should_reid or self.identity.is_empty:
             if current_track is not None:
                 if is_occluded:
                     self.target_manager.mark_tracking(current_track, track_res.frame_id, timestamp_ms)
@@ -698,24 +827,40 @@ class MultiCameraPipeline:
 
         # Case B: On frames where ReID IS evaluated (or target is LOST / OCCLUDED)
         candidates_to_extract: List[Tuple[Track, np.ndarray]] = []
-        crops_list: List[np.ndarray] = []
+        embs: List[Embedding] = []
 
-        for track in track_res.tracks:
-            c_crop = worker.extract_crop(frame, track.box)
-            if c_crop is not None and c_crop.size > 0 and c_crop.shape[0] >= 12 and c_crop.shape[1] >= 12:
-                candidates_to_extract.append((track, c_crop))
-                crops_list.append(c_crop)
+        if precomputed_candidates is not None:
+            for track, crop, emb in precomputed_candidates:
+                candidates_to_extract.append((track, crop))
+                embs.append(emb)
+        else:
+            crops_list: List[np.ndarray] = []
+            for track in track_res.tracks:
+                c_crop = worker.extract_crop(frame, track.box)
+                if c_crop is not None and c_crop.size > 0 and c_crop.shape[0] >= 12 and c_crop.shape[1] >= 12:
+                    candidates_to_extract.append((track, c_crop))
+                    crops_list.append(c_crop)
 
-        if not crops_list:
+            if not crops_list:
+                if target.state in (TargetState.TRACKING, TargetState.LOCKED, TargetState.OCCLUDED):
+                    self.target_manager.mark_lost(timestamp_ms)
+                return
+
+            try:
+                embs = self.reid_extractor.extract_batch(crops_list)
+            except Exception as e:
+                logger.debug(f"[REID] Candidate batch extraction error: {e}")
+                return
+
+        if not candidates_to_extract:
             if target.state in (TargetState.TRACKING, TargetState.LOCKED, TargetState.OCCLUDED):
                 self.target_manager.mark_lost(timestamp_ms)
             return
 
         try:
-            embs = self.reid_extractor.extract_batch(crops_list)
-            match_details = self.gallery.match_batch_details(embs)
+            match_details = self.identity.match_batch_details(embs)
         except Exception as e:
-            logger.debug(f"[REID] Candidate batch extraction error: {e}")
+            logger.debug(f"[REID] Gallery match error: {e}")
             return
 
         self._last_candidate_scores.clear()
@@ -755,7 +900,7 @@ class MultiCameraPipeline:
         cur_id_str = f"Track #{target.track_id} (sim={current_sim:.3f}, man={current_man_sim:.3f})" if (current_track and target.track_id) else "None (LOST)"
         logger.info(
             f"[REID] ActiveCam='{self._active_camera_id}' | Locked={cur_id_str} | "
-            f"Candidates=[{', '.join(cand_telemetry)}] | Gallery=(man={self.gallery.manual_count}, auto={self.gallery.auto_count})"
+            f"Candidates=[{', '.join(cand_telemetry)}] | Gallery=(man={self.identity.manual_count}, auto={self.identity.auto_count})"
         )
 
         # Scenario 1: Target was actively tracking, locked, or occluded
@@ -777,7 +922,7 @@ class MultiCameraPipeline:
 
                     # Auto-enrollment (strictly when clear and quality passes)
                     if current_crop is not None and current_emb is not None and current_sim >= auto_thresh:
-                        self.gallery.add_auto(
+                        self.identity.add_auto(
                             crop=current_crop,
                             embedding=current_emb,
                             candidate_similarity=current_sim,
@@ -798,7 +943,7 @@ class MultiCameraPipeline:
 
                         # Anti-scoop: verify switch candidate against manual gallery entries
                         manual_anchor_pass = True
-                        if self.gallery._manual_matrix is not None and len(self.gallery._manual_entries) > 0:
+                        if self.identity._manual_matrix is not None and len(self.identity._manual_entries) > 0:
                             manual_anchor_pass = best_other_man_sim >= max(0.55, match_thresh - 0.05)
                             if not manual_anchor_pass:
                                 logger.info(
@@ -825,8 +970,8 @@ class MultiCameraPipeline:
                         f"(sim={best_other_sim:.3f}, man={best_other_man_sim:.3f})"
                     )
                     # Purge auto-enrolled entries from the deposed track AND any stale entries for the new track
-                    self.gallery.rollback_auto_entries(for_track_id=current_track.track_id)
-                    self.gallery.rollback_auto_entries(for_track_id=best_other_track.track_id)
+                    self.identity.rollback_auto_entries(for_track_id=current_track.track_id)
+                    self.identity.rollback_auto_entries(for_track_id=best_other_track.track_id)
                     self._switch_consensus.clear()
                     self._current_track_misses = 0
 
@@ -837,7 +982,7 @@ class MultiCameraPipeline:
                         reid_verified=True,
                     )
                     if best_other_crop is not None and best_other_emb is not None and best_other_sim >= auto_thresh:
-                        self.gallery.add_auto(
+                        self.identity.add_auto(
                             crop=best_other_crop,
                             embedding=best_other_emb,
                             candidate_similarity=best_other_sim,
@@ -904,7 +1049,7 @@ class MultiCameraPipeline:
                         )
 
                 # Manual anchor verification for reacquisition
-                if is_match and self.gallery._manual_matrix is not None and len(self.gallery._manual_entries) > 0:
+                if is_match and self.identity._manual_matrix is not None and len(self.identity._manual_entries) > 0:
                     manual_anchor_thresh = max(0.55, self._reacquisition_threshold - 0.15)
                     if man_sim_f < manual_anchor_thresh:
                         logger.info(
@@ -973,7 +1118,7 @@ class MultiCameraPipeline:
                             reid_verified=True,
                         )
                         if confirmed_crop is not None and confirmed_emb is not None and confirmed_sim >= auto_thresh:
-                            self.gallery.add_auto(
+                            self.identity.add_auto(
                                 crop=confirmed_crop,
                                 embedding=confirmed_emb,
                                 candidate_similarity=confirmed_sim,
@@ -990,23 +1135,27 @@ class MultiCameraPipeline:
         worker: CameraWorker,
         frame: np.ndarray,
         track_res: TrackResult,
+        precomputed_candidates: Optional[List[Tuple[Track, np.ndarray, Embedding]]] = None,
     ) -> Tuple[Optional[Track], Optional[np.ndarray], Optional[Embedding], float]:
         """
         Extracts crops and embeddings for all candidate tracks in a frame
         and matches them against the target gallery via batch matrix multiply.
         """
         valid_candidates: List[Tuple[Track, np.ndarray, Embedding]] = []
-        for track in track_res.tracks:
-            crop = worker.extract_crop(frame, track.box)
-            if crop is not None and crop.size > 0:
-                emb = self.reid_extractor.extract(crop)
-                valid_candidates.append((track, crop, emb))
+        if precomputed_candidates is not None:
+            valid_candidates = precomputed_candidates
+        else:
+            for track in track_res.tracks:
+                crop = worker.extract_crop(frame, track.box)
+                if crop is not None and crop.size > 0:
+                    emb = self.reid_extractor.extract(crop)
+                    valid_candidates.append((track, crop, emb))
 
         if not valid_candidates:
             return None, None, None, 0.0
 
         embs = [c[2] for c in valid_candidates]
-        match_results = self.gallery.match_batch(embs)
+        match_results = self.identity.match_batch(embs)
 
         # Find best candidate with margin check
         scores = [res[0] for res in match_results]
@@ -1067,8 +1216,8 @@ class MultiCameraPipeline:
         # Auto-enroll cross-camera viewpoint (use actual measured similarity, NOT hardcoded)
         if crop is not None and embedding is not None:
             # Compute actual similarity against gallery for honest enrollment
-            actual_sim, _ = self.gallery.match(embedding)
-            self.gallery.add_auto(
+            actual_sim, _ = self.identity.match(embedding)
+            self.identity.add_auto(
                 crop=crop,
                 embedding=embedding,
                 candidate_similarity=actual_sim,
@@ -1100,7 +1249,8 @@ class MultiCameraPipeline:
             success, frame, ts_ms = worker.read_frame()
             if success and frame is not None:
                 self._nodes[camera_id].last_frame = frame
-                det_res, track_res = worker.process_frame(frame, ts_ms)
+                det_res = self._default_detector_factory().detect(frame, timestamp_ms=ts_ms)
+                track_res = worker.process_frame(frame, ts_ms, det_res)
                 self._nodes[camera_id].fps = worker.fps
                 ann_frame = worker.annotate(frame, track_res, self.target_manager.target)
                 return ann_frame, track_res, self.target_manager.target
@@ -1236,73 +1386,77 @@ class MultiCameraPipeline:
         Synchronizes camera nodes, spawns workers for newly added cameras,
         and cleanly releases workers for removed cameras in a thread-safe manner.
         """
-        with self._pipeline_lock:
-            logger.info(f"[MULTI-CAM] Dynamically updating camera topology graph ({len(new_graph.all_camera_ids())} cameras)...")
-            self.graph = new_graph
-            self.search_manager._graph = new_graph
-            self.search_manager.reset()
+        self._is_paused = True
+        try:
+            with self._pipeline_lock:
+                logger.info(f"[MULTI-CAM] Dynamically updating camera topology graph ({len(new_graph.all_camera_ids())} cameras)...")
+                self.graph = new_graph
+                self.search_manager._graph = new_graph
+                self.search_manager.reset()
 
-            all_new_ids = set(new_graph.all_camera_ids())
+                all_new_ids = set(new_graph.all_camera_ids())
 
-            # 1. Stop and remove workers & nodes for cameras no longer in graph
-            for old_id in list(self._workers.keys()):
-                if old_id not in all_new_ids:
-                    logger.info(f"[MULTI-CAM] Releasing removed camera worker '{old_id}'")
-                    worker = self._workers.pop(old_id, None)
-                    if worker is not None:
-                        try:
-                            worker.stop()
-                        except Exception as e:
-                            logger.debug(f"Error stopping worker '{old_id}': {e}")
-
-            for old_id in list(self._nodes.keys()):
-                if old_id not in all_new_ids:
-                    self._nodes.pop(old_id, None)
-                    self._annotators.pop(old_id, None)
-                    with self._frame_lock:
-                        self._latest_jpegs.pop(old_id, None)
-
-            # 2. Sync nodes and update configs for existing or newly added cameras
-            for cid in all_new_ids:
-                node_cfg = new_graph.get_node(cid)
-                if not node_cfg:
-                    continue
-
-                if cid in self._nodes:
-                    old_cfg = self._nodes[cid].config
-                    # Check if camera source changed; if so, recreate worker
-                    if str(old_cfg.source) != str(node_cfg.source) or old_cfg.source_type != node_cfg.source_type:
-                        logger.info(f"[MULTI-CAM] Camera '{cid}' source changed ({old_cfg.source} -> {node_cfg.source}), restarting worker...")
-                        worker = self._workers.pop(cid, None)
+                # 1. Stop and remove workers & nodes for cameras no longer in graph
+                for old_id in list(self._workers.keys()):
+                    if old_id not in all_new_ids:
+                        logger.info(f"[MULTI-CAM] Releasing removed camera worker '{old_id}'")
+                        worker = self._workers.pop(old_id, None)
                         if worker is not None:
                             try:
                                 worker.stop()
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.debug(f"Error stopping worker '{old_id}': {e}")
+
+                for old_id in list(self._nodes.keys()):
+                    if old_id not in all_new_ids:
+                        self._nodes.pop(old_id, None)
+                        self._annotators.pop(old_id, None)
                         with self._frame_lock:
-                            self._latest_jpegs.pop(cid, None)
-                    self._nodes[cid].config = node_cfg
-                else:
-                    self._nodes[cid] = CameraNode(node_cfg)
-                    self._annotators[cid] = FrameAnnotator(
-                        draw_fps=self.config.visualization.draw_fps,
-                        draw_boxes=self.config.visualization.draw_boxes,
-                        draw_ids=self.config.visualization.draw_ids,
-                        box_thickness=self.config.visualization.box_thickness,
-                        font_scale=self.config.visualization.font_scale,
-                    )
+                            self._latest_jpegs.pop(old_id, None)
 
-                if node_cfg.enabled and cid not in self._workers:
-                    self._get_or_create_worker(cid)
+                # 2. Sync nodes and update configs for existing or newly added cameras
+                for cid in all_new_ids:
+                    node_cfg = new_graph.get_node(cid)
+                    if not node_cfg:
+                        continue
 
-            # 3. Update active camera if previous active camera was deleted
-            if self._active_camera_id not in all_new_ids:
+                    if cid in self._nodes:
+                        old_cfg = self._nodes[cid].config
+                        # Check if camera source changed; if so, recreate worker
+                        if str(old_cfg.source) != str(node_cfg.source) or old_cfg.source_type != node_cfg.source_type:
+                            logger.info(f"[MULTI-CAM] Camera '{cid}' source changed ({old_cfg.source} -> {node_cfg.source}), restarting worker...")
+                            worker = self._workers.pop(cid, None)
+                            if worker is not None:
+                                try:
+                                    worker.stop()
+                                except Exception:
+                                    pass
+                            with self._frame_lock:
+                                self._latest_jpegs.pop(cid, None)
+                        self._nodes[cid].config = node_cfg
+                    else:
+                        self._nodes[cid] = CameraNode(node_cfg)
+                        self._annotators[cid] = FrameAnnotator(
+                            draw_fps=self.config.visualization.draw_fps,
+                            draw_boxes=self.config.visualization.draw_boxes,
+                            draw_ids=self.config.visualization.draw_ids,
+                            box_thickness=self.config.visualization.box_thickness,
+                            font_scale=self.config.visualization.font_scale,
+                        )
+
+                    if node_cfg.enabled and cid not in self._workers:
+                        self._get_or_create_worker(cid)
+
+                # 3. Update active camera if previous active camera was deleted or disabled
                 enabled_ids = [cid for cid in all_new_ids if self._nodes.get(cid) and self._nodes[cid].config.enabled]
-                self._active_camera_id = sorted(enabled_ids)[0] if enabled_ids else (sorted(list(all_new_ids))[0] if all_new_ids else None)
-                if self._active_camera_id:
-                    logger.info(f"[MULTI-CAM] Active camera reassigned to '{self._active_camera_id}'")
-                else:
-                    logger.info("[MULTI-CAM] No active camera remaining in graph.")
+                if self._active_camera_id not in enabled_ids:
+                    self._active_camera_id = sorted(enabled_ids)[0] if enabled_ids else (sorted(list(all_new_ids))[0] if all_new_ids else None)
+                    if self._active_camera_id:
+                        logger.info(f"[MULTI-CAM] Active camera reassigned to '{self._active_camera_id}'")
+                    else:
+                        logger.info("[MULTI-CAM] No active camera remaining in graph.")
+        finally:
+            self._is_paused = False
 
     def release_all_cameras(self) -> None:
         """Safely stops and releases all active camera capture handles."""
@@ -1360,5 +1514,15 @@ class MultiCameraPipeline:
                 except Exception:
                     pass
             self._workers.clear()
+            
+            try:
+                self._executor.shutdown(wait=False)
+            except Exception:
+                pass
+                
+            # Persist target gallery on graceful shutdown
+            if getattr(self.config, "storage", None) and self.config.storage.enabled:
+                self.identity.save_to_db(self.config.storage.db_path)
+                
         logger.info("[MULTI-CAM] Pipeline stopped.")
 

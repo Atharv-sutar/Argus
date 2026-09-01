@@ -98,6 +98,7 @@ def test_multi_camera_selection_and_cross_camera_handoff():
     pipe = MultiCameraPipeline(
         graph=graph,
         config=config,
+        reid_extractor=mock_reid,
         identity_manager=identity_mgr,
         camera_factory=camera_factory,
         tracker_factory=tracker_factory,

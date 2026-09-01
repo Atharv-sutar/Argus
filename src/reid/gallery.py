@@ -328,12 +328,8 @@ class TargetGallery:
         """
         Detailed batch matching returning (effective_score, manual_score, auto_score, best_entry).
 
-        Uses raw cosine similarity (dot product on L2-normalized embeddings) clamped to [0, 1].
-        Every gallery image is compared individually — the MAX similarity across all gallery
-        entries of each type (manual / auto) is taken as the score for that type.
-
-        Anchors composite similarity strongly to the human-confirmed manual seed:
-            effective_score = 0.70 * manual_score + 0.30 * auto_score
+        Uses robust Top-50% mean aggregation with Sigmoid soft-scaling to prevent
+        a single contaminated gallery image from yielding false positive locks.
         """
         if not candidate_embeddings:
             return []
@@ -346,28 +342,38 @@ class TargetGallery:
         has_manual = self._manual_matrix is not None and len(self._manual_entries) > 0
         has_auto = self._auto_matrix is not None and len(self._auto_entries) > 0
 
-        # Similarity floor for linear rescaling: OSNet cosine dots sit in ~0.85-1.0
-        # range even across different people. Rescale [floor, 1.0] -> [0.0, 1.0] so
-        # that target (raw ~0.97) scores ~0.90 while non-target (raw ~0.90) scores ~0.67.
-        sim_floor = 0.70
-        sim_range = 1.0 - sim_floor
+        # Sigmoid soft-scaling parameters for OSNet (cosine similarity mapping)
+        # Maps raw cosine similarities into a robust 0.0 - 1.0 confidence score.
+        sig_alpha = 15.0
+        sig_beta = 0.82
 
-        # 1. Compute manual similarities — linearly rescaled cosine dot
+        def _compute_robust_score(raw_dots: np.ndarray, entries: List[GalleryEntry]) -> Tuple[np.ndarray, np.ndarray]:
+            # raw_dots shape: (K, M)
+            # Find best match for visualization thumbnail
+            best_indices = np.argmax(raw_dots, axis=1)
+            
+            # Use Top-50% robust mean aggregation to prevent single-image contamination
+            # and ensure ALL relevant images individually contribute to the score.
+            k_top = max(1, len(entries) // 2)
+            topk_raw = np.sort(raw_dots, axis=1)[:, -k_top:]
+            raw_mean = np.mean(topk_raw, axis=1)
+            
+            # Apply soft-scaling Sigmoid
+            cal_scores = 1.0 / (1.0 + np.exp(-sig_alpha * (raw_mean - sig_beta)))
+            return cal_scores, best_indices
+
+        # 1. Compute manual similarities
         if has_manual:
             raw_m_dots = c_matrix @ self._manual_matrix.T  # (K, M)
-            cal_m_sim = np.clip((raw_m_dots - sim_floor) / sim_range, 0.0, 1.0).astype(np.float32)
-            m_best_indices = np.argmax(cal_m_sim, axis=1)
-            m_max_scores = np.max(cal_m_sim, axis=1)
+            m_max_scores, m_best_indices = _compute_robust_score(raw_m_dots, self._manual_entries)
         else:
             m_best_indices = np.zeros(len(candidate_embeddings), dtype=int)
             m_max_scores = np.zeros(len(candidate_embeddings), dtype=np.float32)
 
-        # 2. Compute auto similarities — linearly rescaled cosine dot
+        # 2. Compute auto similarities
         if has_auto:
             raw_a_dots = c_matrix @ self._auto_matrix.T  # (K, A)
-            cal_a_sim = np.clip((raw_a_dots - sim_floor) / sim_range, 0.0, 1.0).astype(np.float32)
-            a_best_indices = np.argmax(cal_a_sim, axis=1)
-            a_max_scores = np.max(cal_a_sim, axis=1)
+            a_max_scores, a_best_indices = _compute_robust_score(raw_a_dots, self._auto_entries)
         else:
             a_best_indices = np.zeros(len(candidate_embeddings), dtype=int)
             a_max_scores = np.zeros(len(candidate_embeddings), dtype=np.float32)
@@ -379,7 +385,6 @@ class TargetGallery:
             a_score = float(a_max_scores[i]) if has_auto else 0.0
 
             if has_manual and has_auto:
-                # Anti-drift anchoring: 70% manual ground-truth, 30% temporal adaptive
                 effective_score = 0.70 * m_score + 0.30 * a_score
                 best_entry = self._manual_entries[int(m_best_indices[i])] if m_score >= a_score else self._auto_entries[int(a_best_indices[i])]
             elif has_manual:

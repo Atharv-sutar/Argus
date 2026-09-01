@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import heapq
 from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
@@ -236,6 +237,46 @@ class CameraGraph:
                     queue.append((neighbor_id, dist + 1))
 
         return -1
+
+    def shortest_path_min_time(self, source_id: str, target_id: str) -> float:
+        """
+        Compute the minimum physical transit time between two cameras using Dijkstra's algorithm.
+        Returns -1.0 if no path exists.
+        """
+        if source_id not in self._nodes or target_id not in self._nodes:
+            return -1.0
+        if source_id == target_id:
+            return 0.0
+
+        # Dijkstra priority queue: (cumulative_time, node_id)
+        pq: List[Tuple[float, str]] = [(0.0, source_id)]
+        min_times: Dict[str, float] = {source_id: 0.0}
+
+        while pq:
+            current_time, node_id = heapq.heappop(pq)
+
+            if current_time > min_times.get(node_id, float('inf')):
+                continue
+
+            if node_id == target_id:
+                return current_time
+
+            for neighbor_id in self._adj.get(node_id, set()):
+                edge = self.get_edge(node_id, neighbor_id)
+                if not edge or not edge.enabled:
+                    continue
+                neighbor_node = self._nodes.get(neighbor_id)
+                if not neighbor_node or not neighbor_node.enabled:
+                    continue
+
+                transit_s = edge.expected_min_transition_s or 0.0
+                new_time = current_time + transit_s
+
+                if new_time < min_times.get(neighbor_id, float('inf')):
+                    min_times[neighbor_id] = new_time
+                    heapq.heappush(pq, (new_time, neighbor_id))
+
+        return -1.0
 
     # --- Validation ---
 

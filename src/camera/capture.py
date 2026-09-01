@@ -66,29 +66,37 @@ class OpenCVCamera(BaseCamera):
             src = int(src)
 
         with self._cap_lock:
-            # On Windows, try DirectShow (cv2.CAP_DSHOW) first for webcam indices
-            if isinstance(src, int) and sys.platform.startswith("win"):
-                self._cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)
+            try:
+                # On Windows, try DirectShow (cv2.CAP_DSHOW) first for webcam indices
+                if isinstance(src, int) and sys.platform.startswith("win"):
+                    self._cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)
+                    if not self._cap or not self._cap.isOpened():
+                        self._cap = cv2.VideoCapture(src, cv2.CAP_ANY)
+                else:
+                    self._cap = cv2.VideoCapture(src)
+
                 if not self._cap or not self._cap.isOpened():
+                    # Fallback to default if initial open failed
                     self._cap = cv2.VideoCapture(src, cv2.CAP_ANY)
-            else:
-                self._cap = cv2.VideoCapture(src)
 
-            if not self._cap or not self._cap.isOpened():
-                # Fallback to default if initial open failed
-                self._cap = cv2.VideoCapture(src, cv2.CAP_ANY)
+                if not self._cap or not self._cap.isOpened():
+                    logger.error(f"Failed to open video source: {self.source}")
+                    self._is_closed = True
+                    return
 
-            if not self._cap or not self._cap.isOpened():
-                logger.error(f"Failed to open video source: {self.source}")
+                try:
+                    if self.width is not None and isinstance(src, int):
+                        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+                    if self.height is not None and isinstance(src, int):
+                        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+                    if self.fps is not None and isinstance(src, int):
+                        self._cap.set(cv2.CAP_PROP_FPS, self.fps)
+                except Exception as e:
+                    logger.debug(f"Could not set camera properties for {self.source}: {e}")
+            except Exception as e:
+                logger.error(f"Exception opening video source {self.source}: {e}")
                 self._is_closed = True
                 return
-
-            if self.width is not None and isinstance(src, int):
-                self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-            if self.height is not None and isinstance(src, int):
-                self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-            if self.fps is not None and isinstance(src, int):
-                self._cap.set(cv2.CAP_PROP_FPS, self.fps)
 
         self._start_time = time.time()
         logger.info(f"Successfully opened video source: {self.source}")
@@ -194,12 +202,15 @@ class OpenCVCamera(BaseCamera):
                     self._cap = cv2.VideoCapture(src)
 
                 if self._cap and self._cap.isOpened():
-                    if self.width is not None and isinstance(src, int):
-                        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-                    if self.height is not None and isinstance(src, int):
-                        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-                    if self.fps is not None and isinstance(src, int):
-                        self._cap.set(cv2.CAP_PROP_FPS, self.fps)
+                    try:
+                        if self.width is not None and isinstance(src, int):
+                            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+                        if self.height is not None and isinstance(src, int):
+                            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+                        if self.fps is not None and isinstance(src, int):
+                            self._cap.set(cv2.CAP_PROP_FPS, self.fps)
+                    except Exception as e:
+                        logger.debug(f"Could not set camera properties on reconnect for {self.source}: {e}")
                     self._consecutive_failures = 0
                     logger.info(f"Successfully reconnected to camera: {self.source}")
             except Exception as e:

@@ -64,15 +64,21 @@ class SearchManager:
         # Score and rank neighbors
         ranked = self._rank_cameras(camera_id, neighbors, elapsed_s=0.0)
 
-        # Register them as active
-        for cam_id, _ in ranked:
-            self._state.add_active_camera(cam_id)
+        # Register them as active or pending based on physical travel time
+        now_active: List[Tuple[str, float]] = []
+        for cam_id, score in ranked:
+            min_time = self._graph.shortest_path_min_time(camera_id, cam_id)
+            if min_time > 0.0:
+                self._state.add_pending_camera(cam_id, min_time)
+            else:
+                self._state.add_active_camera(cam_id)
+                now_active.append((cam_id, score))
 
         logger.info(
             f"Search initiated from '{camera_id}': "
-            f"activating {len(ranked)} cameras at radius {self._config.initial_radius}"
+            f"activating {len(now_active)} cameras immediately, {len(ranked) - len(now_active)} pending at radius {self._config.initial_radius}"
         )
-        return ranked
+        return now_active
 
     def tick(self, elapsed_since_loss_s: float) -> Optional[List[Tuple[str, float]]]:
         """
@@ -88,12 +94,28 @@ class SearchManager:
         """
         if not self._state.is_searching:
             return None
+            
+        newly_activated: List[Tuple[str, float]] = []
+        
+        # 1. Promote any pending cameras whose travel time delay has elapsed
+        current_time = self._state._search_start_time + elapsed_since_loss_s
+        ready_pending = self._state.pop_ready_pending_cameras(current_time)
+        if ready_pending:
+            origin = self._state.origin_camera
+            if origin:
+                ranked_ready = self._rank_cameras(origin, ready_pending, elapsed_since_loss_s)
+                for cam_id, score in ranked_ready:
+                    self._state.add_active_camera(cam_id)
+                    newly_activated.append((cam_id, score))
+                logger.info(
+                    f"Activated {len(ranked_ready)} pending cameras (travel time elapsed)."
+                )
 
         # Check total timeout
         if self._state.is_timed_out():
             self._state.mark_timeout()
             logger.info("Search timeout reached — stopping search")
-            return []
+            return newly_activated if newly_activated else []
 
         # Check per-radius timeout for expansion
         if self._state.should_expand():
@@ -102,32 +124,36 @@ class SearchManager:
 
             if new_radius > self._config.max_radius:
                 self._state.mark_timeout()
-                return []
+                return newly_activated if newly_activated else []
 
             origin = self._state.origin_camera
             if origin is None:
-                return None
+                return newly_activated if newly_activated else None
 
             # Get cameras at the new radius level that haven't been searched yet
             by_radius = self._graph.get_neighbors_by_radius(origin, new_radius)
             new_cameras: List[str] = []
             for r in range(old_radius + 1, new_radius + 1):
                 for cam_id in by_radius.get(r, []):
-                    if cam_id not in self._state._searched_cameras and cam_id not in self._state._active_cameras:
+                    if cam_id not in self._state._searched_cameras and cam_id not in self._state._active_cameras and cam_id not in self._state._pending_cameras:
                         new_cameras.append(cam_id)
 
             ranked = self._rank_cameras(origin, new_cameras, elapsed_since_loss_s)
 
-            for cam_id, _ in ranked:
-                self._state.add_active_camera(cam_id)
+            for cam_id, score in ranked:
+                min_time = self._graph.shortest_path_min_time(origin, cam_id)
+                if min_time > elapsed_since_loss_s:
+                    self._state.add_pending_camera(cam_id, min_time)
+                else:
+                    self._state.add_active_camera(cam_id)
+                    newly_activated.append((cam_id, score))
 
             logger.info(
                 f"Search expanded to radius {new_radius}: "
-                f"activating {len(ranked)} new cameras"
+                f"activating {len(newly_activated)} new cameras immediately, {len(ranked) - len(newly_activated)} pending"
             )
-            return ranked
 
-        return None
+        return newly_activated if newly_activated else None
 
     def on_candidate_found(
         self, camera_id: str, similarity: float

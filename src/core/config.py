@@ -101,6 +101,11 @@ class SearchConfig:
     handoff_confirm_delay_s: float = 2.0
 
 
+@dataclass
+class StorageConfig:
+    """Configuration for persistent storage of targets and embeddings."""
+    db_path: str = "data/identities.db"
+    enabled: bool = True
 
 @dataclass
 class MultiCameraConfig:
@@ -120,6 +125,7 @@ class AppConfig:
     reid: ReIDConfig = field(default_factory=ReIDConfig)
     visualization: VisualizationConfig = field(default_factory=VisualizationConfig)
     multi_camera: MultiCameraConfig = field(default_factory=MultiCameraConfig)
+    storage: StorageConfig = field(default_factory=StorageConfig)
 
     @classmethod
     def from_yaml(cls, path: Union[str, Path]) -> AppConfig:
@@ -148,6 +154,9 @@ class AppConfig:
         search_config = SearchConfig(**search_data) if search_data else SearchConfig()
         mc_config = MultiCameraConfig(**mc_data, search=search_config) if mc_data else MultiCameraConfig()
 
+        storage_data = data.get("storage", {})
+        storage_config = StorageConfig(**storage_data) if storage_data else StorageConfig()
+
         return cls(
             camera=CameraConfig(**camera_data),
             inference=InferenceConfig(**inference_data),
@@ -156,5 +165,6 @@ class AppConfig:
             reid=ReIDConfig(**reid_data),
             visualization=VisualizationConfig(**vis_data),
             multi_camera=mc_config,
+            storage=storage_config,
         )
 

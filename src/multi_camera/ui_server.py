@@ -26,6 +26,7 @@ except ImportError:
 from src.core.multi_camera_types import (
     CameraEdgeConfig,
     CameraNodeConfig,
+    CameraStatus,
     EdgeDirection,
     EdgeType,
     SourceType,
@@ -289,7 +290,16 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                                 )
                                 self.wfile.write(header + frame_bytes + b"\r\n")
                                 self.wfile.flush()
-                            time.sleep(0.033)  # ~30 FPS throttle
+                            
+                            sleep_time = 0.033
+                            if self.runtime_pipeline is not None:
+                                status = self.runtime_pipeline.get_camera_status(cam_id)
+                                if status == CameraStatus.SEARCHING:
+                                    sleep_time = 0.1
+                                elif status in (CameraStatus.STANDBY, CameraStatus.OFFLINE):
+                                    sleep_time = 1.0
+                            time.sleep(sleep_time)
+
                     except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError, OSError):
                         pass
                     except Exception as e:
@@ -402,6 +412,54 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                         "auto_count": 0,
                         "thumbnails": [],
                     })
+                return
+
+            elif path == "/api/stream/events":
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "keep-alive")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                
+                try:
+                    while not _SHUTDOWN_EVENT.is_set() and (self.runtime_pipeline is None or getattr(self.runtime_pipeline, "is_running", True)):
+                        if self.runtime_pipeline is not None:
+                            progress = self.runtime_pipeline.get_search_progress()
+                            statuses = {
+                                cid: self.runtime_pipeline.get_camera_status(cid).value
+                                for cid in self.runtime_pipeline.graph.all_camera_ids()
+                                if self.runtime_pipeline.get_camera_status(cid)
+                            }
+                            gallery = self.runtime_pipeline.gallery
+                            thumbnails = gallery.get_thumbnails(max_count=25)
+                            
+                            event_data = {
+                                "active_camera": self.runtime_pipeline.active_camera_id,
+                                "target_state": getattr(self.runtime_pipeline, "target_state", "UNSELECTED"),
+                                "target_track_id": self.runtime_pipeline.target_manager.target.track_id if self.runtime_pipeline.target_manager.target else None,
+                                "transit_history": getattr(self.runtime_pipeline, "transit_history", []),
+                                "search_progress": progress.to_dict(),
+                                "camera_statuses": statuses,
+                                "candidate_scores": getattr(self.runtime_pipeline, "last_candidate_scores", {}),
+                                "gallery": {
+                                    "size": gallery.size,
+                                    "max_size": gallery.max_size,
+                                    "manual_count": gallery.manual_count,
+                                    "auto_count": gallery.auto_count,
+                                    "thumbnails": thumbnails,
+                                }
+                            }
+                            
+                            payload = json.dumps(event_data)
+                            self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
+                            self.wfile.flush()
+                        
+                        time.sleep(0.1)  # 10Hz telemetry updates
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError, OSError):
+                    pass
+                except Exception as e:
+                    logger.debug(f"[SSE] Client disconnected: {e}")
                 return
 
             elif path == "/api/preview":
