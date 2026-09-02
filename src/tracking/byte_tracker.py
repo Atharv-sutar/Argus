@@ -192,7 +192,7 @@ class ByteTracker(BaseTracker):
                         for j, d_emb in enumerate(det_embeddings):
                             if d_emb is not None:
                                 # Cosine similarity (1.0 is identical)
-                                sim = np.dot(t_emb, d_emb)
+                                sim = t_emb.cosine_similarity(d_emb)
                                 # Map similarity to [0, 1] loosely
                                 reid_score = max(0.0, sim)
                                 # Fuse: since we greedy match descending order, higher is better

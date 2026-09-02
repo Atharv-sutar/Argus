@@ -293,11 +293,14 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                             
                             sleep_time = 0.033
                             if self.runtime_pipeline is not None:
+                                is_active = (cam_id == self.runtime_pipeline.active_camera_id)
                                 status = self.runtime_pipeline.get_camera_status(cam_id)
-                                if status == CameraStatus.SEARCHING:
-                                    sleep_time = 0.1
-                                elif status in (CameraStatus.STANDBY, CameraStatus.OFFLINE):
-                                    sleep_time = 1.0
+                                if is_active:
+                                    sleep_time = 0.033
+                                elif status == CameraStatus.SEARCHING:
+                                    sleep_time = 0.10
+                                else:
+                                    sleep_time = 0.50
                             time.sleep(sleep_time)
 
                     except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError, OSError):

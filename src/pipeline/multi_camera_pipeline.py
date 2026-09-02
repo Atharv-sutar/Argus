@@ -169,6 +169,12 @@ class MultiCameraPipeline:
         return self.target_manager.identity_manager
 
     @property
+    def gallery(self) -> IdentityManager:
+        """Backward-compatible alias: returns the IdentityManager which exposes
+        size, max_size, manual_count, auto_count, get_thumbnails, remove_entry."""
+        return self.target_manager.identity_manager
+
+    @property
     def last_candidate_scores(self) -> Dict[int, float]:
         """Real-time dictionary of track_id -> similarity score against the target gallery."""
         return dict(self._last_candidate_scores)

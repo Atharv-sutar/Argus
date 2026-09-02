@@ -95,6 +95,7 @@ class IdentityManager:
             min_margin_threshold=min_margin,
         )
         self._identities: Dict[str, Identity] = {}
+        self._entry_crops: Dict[str, str] = {}
 
     def get_identity(self, identity_id: str) -> Optional[Identity]:
         return self._identities.get(identity_id)
@@ -126,6 +127,103 @@ class IdentityManager:
         ident = self.get_identity("target_0")
         return len(ident.provisional_gallery) if ident else 0
 
+    @property
+    def max_size(self) -> int:
+        """Shim for TargetGallery.max_size."""
+        return self.max_gallery_size
+
+    def _encode_crop_thumbnail(self, crop: Optional[np.ndarray]) -> str:
+        """Helper to resize and encode person crop to base64 JPEG string."""
+        if crop is None or not isinstance(crop, np.ndarray) or crop.size == 0:
+            return ""
+        try:
+            import cv2
+            import base64
+            h, w = crop.shape[:2]
+            if h <= 0 or w <= 0:
+                return ""
+            th_h = 80
+            th_w = max(20, int(w * (th_h / float(h))))
+            thumb = cv2.resize(crop, (th_w, th_h), interpolation=cv2.INTER_AREA)
+            _, buf = cv2.imencode(".jpg", thumb, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            return base64.b64encode(buf.tobytes()).decode("utf-8")
+        except Exception:
+            return ""
+
+    def get_thumbnails(self, max_count: int = 15) -> List[Dict[str, Any]]:
+        """
+        Returns JSON-serializable thumbnail previews for the web UI.
+        Delegates to GalleryEntry crops stored in the Identity's galleries.
+        """
+        thumbnails: List[Dict[str, Any]] = []
+        ident = self.get_identity("target_0")
+        if not ident:
+            return thumbnails
+
+        entries = []
+        for i, emb in enumerate(ident.trusted_gallery):
+            crop_b64 = self._entry_crops.get(f"{ident.identity_id}_trusted_{i}", "")
+            entries.append({
+                "entry_id": f"trusted_{i}",
+                "is_manual": True,
+                "camera_id": emb.camera_id,
+                "timestamp_ms": emb.timestamp_ms,
+                "confidence": 1.0,
+                "quality_score": emb.quality_score,
+                "image_b64": crop_b64,
+            })
+        for i, emb in enumerate(ident.provisional_gallery):
+            crop_b64 = self._entry_crops.get(f"{ident.identity_id}_provisional_{i}", "")
+            entries.append({
+                "entry_id": f"provisional_{i}",
+                "is_manual": False,
+                "camera_id": emb.camera_id,
+                "timestamp_ms": emb.timestamp_ms,
+                "confidence": emb.quality_score,
+                "quality_score": emb.quality_score,
+                "image_b64": crop_b64,
+            })
+
+        for entry in entries[-max_count:]:
+            thumbnails.append(entry)
+        return thumbnails
+
+    def remove_entry(self, entry_id: str) -> bool:
+        """
+        Shim for TargetGallery.remove_entry.
+        Removes from trusted or provisional gallery by synthetic entry_id.
+        """
+        ident = self.get_identity("target_0")
+        if not ident:
+            return False
+
+        removed = False
+        if entry_id.startswith("trusted_"):
+            try:
+                idx = int(entry_id.split("_", 1)[1])
+                if 0 <= idx < len(ident.trusted_gallery):
+                    ident.trusted_gallery.pop(idx)
+                    removed = True
+            except (ValueError, IndexError):
+                pass
+        elif entry_id.startswith("provisional_"):
+            try:
+                idx = int(entry_id.split("_", 1)[1])
+                if 0 <= idx < len(ident.provisional_gallery):
+                    ident.provisional_gallery.pop(idx)
+                    removed = True
+            except (ValueError, IndexError):
+                pass
+
+        if removed:
+            # Rebuild vector store for this identity
+            self.vector_store.remove_identity("target_0")
+            for emb in ident.trusted_gallery:
+                self.vector_store.add(emb, "target_0")
+            for emb in ident.provisional_gallery:
+                self.vector_store.add(emb, "target_0")
+        return removed
+
     def match(self, candidate_embedding: Embedding) -> Tuple[float, Optional[Any]]:
         """Shim for TargetGallery.match"""
         res = self.match_batch([candidate_embedding])
@@ -136,6 +234,7 @@ class IdentityManager:
         if identity_id in self._identities:
             del self._identities[identity_id]
         self.vector_store.remove_identity(identity_id)
+        self._entry_crops.clear()
         
     def rollback_auto_entries(self, for_track_id: int) -> int:
         """
@@ -146,6 +245,10 @@ class IdentityManager:
         if ident:
             count = len(ident.provisional_gallery)
             ident.provisional_gallery.clear()
+            # Clear provisional crops
+            keys_to_del = [k for k in self._entry_crops if "_provisional_" in k]
+            for k in keys_to_del:
+                self._entry_crops.pop(k, None)
             return count
         return 0
 
@@ -218,7 +321,15 @@ class IdentityManager:
                 return False
                 
         # Only add if it passes
+        idx = len(ident.provisional_gallery)
         ident.provisional_gallery.append(embedding)
+        if crop is not None and crop.size > 0:
+            self._entry_crops[f"{ident.identity_id}_provisional_{idx}"] = self._encode_crop_thumbnail(crop)
+
+        # Enforce max provisional capacity
+        while len(ident.provisional_gallery) > self.max_gallery_size:
+            ident.provisional_gallery.pop(0)
+
         return True
 
     def _extract_all_representations(
@@ -287,6 +398,11 @@ class IdentityManager:
         ident.update_prototype()
         self._identities[identity_id] = ident
         self.vector_store.add(fused, identity_id)
+
+        # Store initial crop thumbnail
+        if crop is not None and crop.size > 0:
+            self._entry_crops[f"{identity_id}_trusted_0"] = self._encode_crop_thumbnail(crop)
+
         logger.info(
             f"[IDENTITY] Registered new target identity '{identity_id}' ({ident.label}) with immutable TargetIdentityAnchor"
         )
@@ -311,12 +427,18 @@ class IdentityManager:
         ident.last_seen_timestamp_ms = timestamp_ms
 
         if len(ident.embeddings) < self.max_gallery_size:
+            idx = len(ident.provisional_gallery)
             ident.provisional_gallery.append(emb)
+            if crop is not None and crop.size > 0:
+                self._entry_crops[f"{identity_id}_provisional_{idx}"] = self._encode_crop_thumbnail(crop)
             self.vector_store.add(emb, identity_id)
         else:
             if ident.provisional_gallery:
                 ident.provisional_gallery.pop(0)
+            idx = len(ident.provisional_gallery)
             ident.provisional_gallery.append(emb)
+            if crop is not None and crop.size > 0:
+                self._entry_crops[f"{identity_id}_provisional_{idx}"] = self._encode_crop_thumbnail(crop)
             self.vector_store.remove_identity(identity_id)
             for r_emb in ident.trusted_gallery:
                 self.vector_store.add(r_emb, identity_id)
@@ -359,10 +481,14 @@ class IdentityManager:
                     )
                     return False
 
+        idx = len(ident.trusted_gallery)
         ident.trusted_gallery.append(fused)
         ident.trusted_upper_gallery.append(upper)
         ident.trusted_lower_gallery.append(lower)
         ident.update_prototype()
+
+        if crop is not None and crop.size > 0:
+            self._entry_crops[f"{identity_id}_trusted_{idx}"] = self._encode_crop_thumbnail(crop)
 
         # Update or add new view cluster in TargetIdentityAnchor
         if ident.anchor is not None:

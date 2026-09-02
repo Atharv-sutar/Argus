@@ -3,40 +3,17 @@
   "cameras": [
     {
       "camera_id": "cam_0",
-      "name": "Camera 0 (Webcam)",
+      "name": "Webcam 0",
       "source": 0,
       "source_type": "webcam",
       "enabled": true,
-      "position_x": 90.7142857142857,
-      "position_y": 106.42857142857143,
-      "floor": null,
-      "zone": null,
-      "description": null
-    },
-    {
-      "camera_id": "cam_1",
-      "name": "Webcam 1",
-      "source": 1,
-      "source_type": "webcam",
-      "enabled": true,
-      "position_x": 246.17550933479274,
-      "position_y": 85.7051232985972,
+      "position_x": 303.1253705214145,
+      "position_y": 183.78266535588344,
       "floor": null,
       "zone": null,
       "description": null
     }
   ],
-  "edges": [
-    {
-      "source_camera_id": "cam_0",
-      "target_camera_id": "cam_1",
-      "edge_type": "adjacent",
-      "direction": "bidirectional",
-      "enabled": true,
-      "expected_min_transition_s": null,
-      "expected_typical_transition_s": null,
-      "expected_max_transition_s": null
-    }
-  ],
+  "edges": [],
   "background_map": null
 }
