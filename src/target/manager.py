@@ -130,23 +130,33 @@ class TargetManager:
         track_result: TrackResult,
         frame: Optional[np.ndarray] = None,
         camera_id: str = "camera_0",
+        proximity_tolerance: float = 40.0,
     ) -> Optional[int]:
         """
         Select a target by clicking on pixel coordinates (x, y).
+        Includes proximity tolerance so clicking near bounding boxes succeeds.
         """
         candidates = []
         for track in track_result.tracks:
             b = track.box
+            # Strict containment
             if b.x1 <= x <= b.x2 and b.y1 <= y <= b.y2:
-                candidates.append(track)
+                candidates.append((0.0, track))
+            # Proximity check
+            elif (b.x1 - proximity_tolerance) <= x <= (b.x2 + proximity_tolerance) and \
+                 (b.y1 - proximity_tolerance) <= y <= (b.y2 + proximity_tolerance):
+                cx = (b.x1 + b.x2) / 2.0
+                cy = (b.y1 + b.y2) / 2.0
+                dist = ((x - cx)**2 + (y - cy)**2)**0.5
+                candidates.append((dist, track))
 
         if not candidates:
-            logger.info(f"No track found at point ({x:.1f}, {y:.1f})")
+            logger.info(f"No track found near point ({x:.1f}, {y:.1f}) across {len(track_result.tracks)} active tracks")
             return None
 
-        # Pick candidate with smallest area (tightest box) if multiple intersect
-        candidates.sort(key=lambda t: t.box.area)
-        selected = candidates[0]
+        # Sort by distance first (exact containment has distance 0.0), then by area
+        candidates.sort(key=lambda item: (item[0], item[1].box.area))
+        selected = candidates[0][1]
         self.select_by_track_id(selected.track_id, track_result, frame=frame, camera_id=camera_id)
         return selected.track_id
 

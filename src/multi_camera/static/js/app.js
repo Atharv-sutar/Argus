@@ -66,12 +66,17 @@ class SurveillanceApp {
     });
 
     // Target Action Buttons (Header + Card)
-    const addSampleFn = async () => {
+    const addSampleFn = async (e) => {
+      if (e && typeof e.stopPropagation === 'function') {
+        e.preventDefault();
+        e.stopPropagation();
+      }
       try {
         const res = await API.addSample(this.activeCameraId);
         if (res.success) {
           this.showToast(`Target appearance angle captured! (${res.size} in gallery)`, 'success');
-          this.refreshGallery();
+          await this.refreshGallery();
+          await this.refreshStatus();
         } else {
           this.showToast('No active target locked to capture angle', 'error');
         }
@@ -81,12 +86,16 @@ class SurveillanceApp {
     };
     this.addSampleFn = addSampleFn;
 
-    const clearTargetFn = async () => {
+    const clearTargetFn = async (e) => {
+      if (e && typeof e.stopPropagation === 'function') {
+        e.preventDefault();
+        e.stopPropagation();
+      }
       try {
         await API.clearTarget();
         this.showToast('Focus target cleared and gallery purged', 'info');
-        this.refreshStatus();
-        this.refreshGallery();
+        await this.refreshStatus();
+        await this.refreshGallery();
       } catch (err) {
         this.showToast(`Failed to clear target: ${err.message}`, 'error');
       }
@@ -535,7 +544,9 @@ class SurveillanceApp {
       const searchSt = st.search_progress ? st.search_progress.state.toUpperCase() : 'IDLE';
       this.hdrSearchRadius.textContent = `R = ${rad} (${searchSt})`;
 
-      this.hdrGalleryStats.textContent = `${st.gallery_size || 0} / ${st.gallery_max || 25}`;
+      const gSize = st.gallery ? st.gallery.size : (st.gallery_size || 0);
+      const gMax = st.gallery ? st.gallery.max_size : (st.gallery_max || 25);
+      this.hdrGalleryStats.textContent = `${gSize} / ${gMax}`;
 
       // Update Target Summary Card
       this.cardTargetId.textContent = st.target_track_id ? `Tracker #${st.target_track_id}` : (st.target_state !== 'UNSELECTED' ? 'TARGET_0' : 'UNSELECTED');
@@ -545,11 +556,14 @@ class SurveillanceApp {
 
       const scores = st.candidate_scores || {};
       const scoreKeys = Object.keys(scores);
+      const gMan = st.gallery ? st.gallery.manual_count : (st.gallery_manual || 0);
+      const gAuto = st.gallery ? st.gallery.auto_count : (st.gallery_auto || 0);
+
       if (scoreKeys.length > 0) {
         const scoreStr = scoreKeys.map(k => `#${k}: ${(scores[k]).toFixed(2)}`).join(' | ');
-        this.cardTargetSamples.innerHTML = `<span style="color:#00f2fe;font-weight:600;">Sim: ${scoreStr}</span> (${st.gallery_manual || 0}m/${st.gallery_auto || 0}a)`;
+        this.cardTargetSamples.innerHTML = `<span style="color:#00f2fe;font-weight:600;">Sim: ${scoreStr}</span> (${gMan}m/${gAuto}a)`;
       } else {
-        this.cardTargetSamples.textContent = `${st.gallery_manual || 0} manual / ${st.gallery_auto || 0} auto`;
+        this.cardTargetSamples.textContent = `${gMan} manual / ${gAuto} auto`;
       }
 
       // Update Bottom Radius Stepper

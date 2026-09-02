@@ -640,7 +640,8 @@ class MultiCameraPipeline:
             if frame is not None and role == "active":
                 active_frame = frame
                 active_track_res = track_res
-                self._nodes[active_cam_id].fps = active_worker.fps
+                if active_cam_id in self._nodes:
+                    self._nodes[active_cam_id].fps = active_worker.fps
                 
                 precomp_cands = precomputed_reid_candidates.get(active_cam_id)
                 self._evaluate_active_camera_target(
@@ -650,7 +651,7 @@ class MultiCameraPipeline:
                     timestamp_ms=ts_ms,
                     precomputed_candidates=precomp_cands
                 )
-            else:
+            elif active_cam_id in self._nodes:
                 self._nodes[active_cam_id].mark_offline()
         elif active_cam_id and active_cam_id in self._nodes:
             self._nodes[active_cam_id].mark_offline()
@@ -699,7 +700,8 @@ class MultiCameraPipeline:
                 s_worker = self._get_or_create_worker(cid)
                 if not s_worker:
                     continue
-                self._nodes[cid].fps = s_worker.fps
+                if cid in self._nodes:
+                    self._nodes[cid].fps = s_worker.fps
                 if self.target_manager.is_active() and not self.identity.is_empty and track_res.count > 0:
                     precomp_cands = precomputed_reid_candidates.get(cid)
                     rec_track, rec_crop, rec_emb, rec_sim = self._match_candidates_against_gallery(
@@ -750,7 +752,7 @@ class MultiCameraPipeline:
             if frame is not None:
                 worker = self._get_or_create_worker(cid)
                 if worker:
-                    if role == "standby":
+                    if role == "standby" and cid in self._nodes:
                         self._nodes[cid].last_frame = frame
                         if not self._nodes[cid].is_online:
                             self._nodes[cid].mark_online()

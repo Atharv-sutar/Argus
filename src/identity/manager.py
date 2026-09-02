@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import logging
+import time
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
@@ -203,6 +204,11 @@ class IdentityManager:
                 idx = int(entry_id.split("_", 1)[1])
                 if 0 <= idx < len(ident.trusted_gallery):
                     ident.trusted_gallery.pop(idx)
+                    if 0 <= idx < len(ident.trusted_upper_gallery):
+                        ident.trusted_upper_gallery.pop(idx)
+                    if 0 <= idx < len(ident.trusted_lower_gallery):
+                        ident.trusted_lower_gallery.pop(idx)
+                    self._entry_crops.pop(f"{ident.identity_id}_{entry_id}", None)
                     removed = True
             except (ValueError, IndexError):
                 pass
@@ -211,6 +217,7 @@ class IdentityManager:
                 idx = int(entry_id.split("_", 1)[1])
                 if 0 <= idx < len(ident.provisional_gallery):
                     ident.provisional_gallery.pop(idx)
+                    self._entry_crops.pop(f"{ident.identity_id}_{entry_id}", None)
                     removed = True
             except (ValueError, IndexError):
                 pass
@@ -235,6 +242,8 @@ class IdentityManager:
             del self._identities[identity_id]
         self.vector_store.remove_identity(identity_id)
         self._entry_crops.clear()
+        if hasattr(self, "evidence_engine") and self.evidence_engine is not None:
+            self.evidence_engine.clear()
         
     def rollback_auto_entries(self, for_track_id: int) -> int:
         """
@@ -304,12 +313,17 @@ class IdentityManager:
         frame_id: int = 0,
         track_id: Optional[int] = None,
     ) -> bool:
-        """Shim for TargetGallery.add_auto"""
+        """Shim for TargetGallery.add_auto with rate limiting and diversity."""
         if candidate_similarity < self.auto_add_threshold:
             return False
             
         ident = self.get_identity("target_0")
         if not ident: return False
+
+        # Rate limit: at most 1 auto-entry every 1.5 seconds
+        last_ts = getattr(self, "_last_auto_add_ts", 0.0)
+        if timestamp_ms > 0 and (timestamp_ms - last_ts) < 1500.0:
+            return False
         
         # Check against manual matrix if available
         man_mat = self._manual_matrix
@@ -319,10 +333,16 @@ class IdentityManager:
             min_anchor = max(0.55, 0.75 - 0.05) # dummy match_threshold 0.75
             if max_manual_sim < min_anchor:
                 return False
+
+        # Diversity check against recent provisional entries
+        for prev_emb in ident.provisional_gallery[-5:]:
+            if prev_emb.dim == embedding.dim and prev_emb.cosine_similarity(embedding) > 0.94:
+                return False
                 
         # Only add if it passes
         idx = len(ident.provisional_gallery)
         ident.provisional_gallery.append(embedding)
+        self._last_auto_add_ts = timestamp_ms if timestamp_ms > 0 else time.time() * 1000.0
         if crop is not None and crop.size > 0:
             self._entry_crops[f"{ident.identity_id}_provisional_{idx}"] = self._encode_crop_thumbnail(crop)
 
@@ -452,34 +472,37 @@ class IdentityManager:
         crop: np.ndarray,
         identity_id: str,
         timestamp_ms: float = 0.0,
+        force: bool = True,
     ) -> bool:
         """
-        Adds a new diverse, high-quality observation to the immutable trusted galleries
+        Adds a new observation to the immutable trusted galleries
         and updates discrete ViewClusters within the TargetIdentityAnchor.
+        When force=True (manual operator capture), accepts the sample unconditionally.
         """
         ident = self._identities.get(identity_id)
         if ident is None or crop is None or crop.size == 0:
             return False
 
-        if len(ident.trusted_gallery) >= self.max_reference_samples:
-            return False
-
-        is_valid, q_score, reason = self.quality.evaluate(crop)
-        if not is_valid:
-            logger.debug(f"[IDENTITY] Reference sample rejected for '{identity_id}': {reason}")
-            return False
-
         fused, deep, global_v, upper, lower = self._extract_all_representations(crop)
 
-        # Diversity check against existing trusted samples
-        for existing_ref in ident.trusted_gallery:
-            if existing_ref.dim == fused.dim:
-                sim = existing_ref.cosine_similarity(fused)
-                if sim > self.redundancy_threshold:
-                    logger.debug(
-                        f"[IDENTITY] Reference sample rejected for '{identity_id}': redundant (sim={sim:.3f} > {self.redundancy_threshold:.2f})"
-                    )
-                    return False
+        # If trusted gallery is full, remove oldest to make room
+        while len(ident.trusted_gallery) >= self.max_reference_samples:
+            ident.trusted_gallery.pop(0)
+            if ident.trusted_upper_gallery:
+                ident.trusted_upper_gallery.pop(0)
+            if ident.trusted_lower_gallery:
+                ident.trusted_lower_gallery.pop(0)
+
+        if not force:
+            # Diversity check against existing trusted samples
+            for existing_ref in ident.trusted_gallery:
+                if existing_ref.dim == fused.dim:
+                    sim = existing_ref.cosine_similarity(fused)
+                    if sim > self.redundancy_threshold:
+                        logger.debug(
+                            f"[IDENTITY] Reference sample rejected for '{identity_id}': redundant (sim={sim:.3f} > {self.redundancy_threshold:.2f})"
+                        )
+                        return False
 
         idx = len(ident.trusted_gallery)
         ident.trusted_gallery.append(fused)
@@ -489,6 +512,9 @@ class IdentityManager:
 
         if crop is not None and crop.size > 0:
             self._entry_crops[f"{identity_id}_trusted_{idx}"] = self._encode_crop_thumbnail(crop)
+
+        self.vector_store.add(fused, identity_id)
+        return True
 
         # Update or add new view cluster in TargetIdentityAnchor
         if ident.anchor is not None:
