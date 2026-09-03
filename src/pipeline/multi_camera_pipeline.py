@@ -1044,15 +1044,16 @@ class MultiCameraPipeline:
                 eff_sim_f = float(eff_sim)
                 is_match = eff_sim_f >= self._reacquisition_threshold
 
-                # Lone-bystander anti-scoop: when only 1 person in frame, require higher threshold
+                # Lone-bystander anti-scoop: Fix P-13
+                # Do not arbitrarily penalize a lone person with +0.05. Use standard reacquisition threshold.
                 lone_person = len(candidates_to_extract) == 1
                 if lone_person:
-                    lone_thresh = self._reacquisition_threshold + 0.05
+                    lone_thresh = self._reacquisition_threshold
                     is_match = eff_sim_f >= lone_thresh
                     if not is_match:
                         logger.info(
-                            f"[ANTI-SCOOP] LONE_PERSON_ANTILOCK: Track #{cand_track.track_id} "
-                            f"sim={eff_sim_f:.3f} < lone_thresh={lone_thresh:.3f} | "
+                            f"[ANTI-SCOOP] Track #{cand_track.track_id} "
+                            f"sim={eff_sim_f:.3f} < threshold={lone_thresh:.3f} | "
                             f"Refusing to lock onto single person in frame while target is LOST"
                         )
 

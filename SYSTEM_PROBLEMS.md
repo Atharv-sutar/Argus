@@ -235,20 +235,20 @@ The findings are organized by subsystem and include root causes, operational sym
 
 | ID | Problem Description | Affected Component | Severity | Performance Impact | Operational Risk |
 |---|---|---|---|---|---|
-| **P-01** | Single-threaded sequential camera processing during search | `multi_camera_pipeline.py` | **CRITICAL** | Drops FPS from 30 to 5-6 FPS | Causes frame lag and missed detections |
-| **P-02** | Fixed linear ReID similarity scaling ($0.70$ floor) | `gallery.py` | **HIGH** | Low compute overhead | False target loss in shadows; false switch on similar clothes |
+| **P-01** | Single-threaded sequential camera processing during search | `multi_camera_pipeline.py` | **FIXED** | Drops FPS from 30 to 5-6 FPS | Causes frame lag and missed detections |
+| **P-02** | Fixed linear ReID similarity scaling ($0.70$ floor) | `gallery.py` | **FIXED** | Low compute overhead | False target loss in shadows; false switch on similar clothes |
 | **P-03** | Lack of batched cross-camera inference for YOLO & ReID | `yolo_detector.py`, `pipeline` | **FIXED** | N/A | Resolved via batched inference pipeline |
 | **P-04** | Multipart MJPEG stream bandwidth & thread explosion | `ui_server.py`, `app.js` | **FIXED** | N/A | Resolved via SSE & Dynamic MJPEG |
 | **P-05** | Unused travel time modeling in multi-camera search | `search_manager.py` | **FIXED** | N/A | Added delayed pending queue via Dijkstra |
 | **P-06** | Pure 2D IoU tracking in ByteTrack without ReID fusion | `byte_tracker.py` | **FIXED** | Low | Track ID swap on crossing paths/occlusions |
 | **P-07** | Orphaned identity subsystem (`src/identity/`) | `identity/` vs `reid/gallery.py` | **FIXED** | Code duplication | Maintenance confusion; dead code divergence |
 | **P-08** | Ephemeral in-memory target storage without persistence | `IdentityManager`, `pipeline` | **FIXED** | Low | Targets must be re-registered on every restart |
-| **P-09** | Kalman filter divergence on variable frame rate ($\Delta t$) | `byte_tracker.py` | **MEDIUM** | Low | Track fragmentation during high system load |
-| **P-10** | Synchronous JPEG encoding on pipeline main thread | `multi_camera_pipeline.py` | **MEDIUM** | 10-25ms per step | Reduces pipeline throughput |
-| **P-11** | RTSP internal buffer accumulation / latency drift | `capture.py` | **MEDIUM** | Latency accumulation | Video feed lags seconds behind live physical events |
-| **P-12** | Unauthenticated administrative REST endpoints | `ui_server.py` | **HIGH** | None | Security vulnerability; unauthorized remote shutdown |
-| **P-13** | Lone-person anti-scoop false rejections ($+0.05$ threshold) | `multi_camera_pipeline.py` | **MEDIUM** | Low | Target locked out in empty rooms under poor lighting |
-| **P-14** | Canvas coordinate offset during video letterboxing | `app.js`, `graph.js` | **LOW** | Low | Target click selection misses intended bounding box |
+| **P-09** | Kalman filter divergence on variable frame rate ($\Delta t$) | `byte_tracker.py` | **FIXED** | Low | Track fragmentation during high system load |
+| **P-10** | Synchronous JPEG encoding on pipeline main thread | `multi_camera_pipeline.py` | **FIXED** | 10-25ms per step | Reduces pipeline throughput |
+| **P-11** | RTSP internal buffer accumulation / latency drift | `capture.py` | **FIXED** | Latency accumulation | Video feed lags seconds behind live physical events |
+| **P-12** | Unauthenticated administrative REST endpoints | `ui_server.py` | **FIXED** | None | Security vulnerability; unauthorized remote shutdown |
+| **P-13** | Lone-person anti-scoop false rejections ($+0.05$ threshold) | `multi_camera_pipeline.py` | **FIXED** | Low | Target locked out in empty rooms under poor lighting |
+| **P-14** | Canvas coordinate offset during video letterboxing | `app.js`, `graph.js` | **FIXED** | Low | Target click selection misses intended bounding box |
 
 ---
 

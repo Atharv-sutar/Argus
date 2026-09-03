@@ -393,11 +393,35 @@ class SurveillanceApp {
         if (!imgH || imgH === 0) {
           imgH = (cam.height && cam.height > 0) ? cam.height : 480;
         }
-        const scaleX = imgW / rect.width;
-        const scaleY = imgH / rect.height;
+        // Fix P-14: Account for object-fit: contain letterboxing offset
+        const imgRatio = imgW / imgH;
+        const rectRatio = rect.width / rect.height;
+        let renderW = rect.width;
+        let renderH = rect.height;
+        let offsetX = 0;
+        let offsetY = 0;
 
-        const targetX = clickX * scaleX;
-        const targetY = clickY * scaleY;
+        if (imgRatio > rectRatio) {
+          renderH = rect.width / imgRatio;
+          offsetY = (rect.height - renderH) / 2;
+        } else {
+          renderW = rect.height * imgRatio;
+          offsetX = (rect.width - renderW) / 2;
+        }
+
+        const clickOnImgX = clickX - offsetX;
+        const clickOnImgY = clickY - offsetY;
+
+        // Ignore clicks on black bars
+        if (clickOnImgX < 0 || clickOnImgX > renderW || clickOnImgY < 0 || clickOnImgY > renderH) {
+          return;
+        }
+
+        const scaleX = imgW / renderW;
+        const scaleY = imgH / renderH;
+
+        const targetX = clickOnImgX * scaleX;
+        const targetY = clickOnImgY * scaleY;
 
         try {
           const res = await API.selectTarget(cam.camera_id, targetX, targetY);

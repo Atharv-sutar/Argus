@@ -85,6 +85,8 @@ class OpenCVCamera(BaseCamera):
                     return
 
                 try:
+                    # Fix P-11: Set buffer size to 1 to prevent RTSP latency drift
+                    self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                     if self.width is not None and isinstance(src, int):
                         self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
                     if self.height is not None and isinstance(src, int):
@@ -203,6 +205,8 @@ class OpenCVCamera(BaseCamera):
 
                 if self._cap and self._cap.isOpened():
                     try:
+                        # Fix P-11: Set buffer size to 1 to prevent RTSP latency drift
+                        self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                         if self.width is not None and isinstance(src, int):
                             self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
                         if self.height is not None and isinstance(src, int):

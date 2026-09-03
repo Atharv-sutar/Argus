@@ -168,6 +168,17 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
         # Route standard HTTP access logs to debug file log
         logger.debug(f"[HTTP ACCESS] {self.address_string()} - {format % args}")
 
+    def _is_authorized(self) -> bool:
+        """Fix P-12: Enforce authorization for administrative endpoints."""
+        if self.client_address[0] in ("127.0.0.1", "::1", "localhost"):
+            return True
+        expected_token = os.environ.get("ARGUS_ADMIN_TOKEN")
+        if expected_token:
+            auth_header = self.headers.get("Authorization")
+            if auth_header == f"Bearer {expected_token}":
+                return True
+        return False
+
     def _send_json(self, data: Any, status: int = HTTPStatus.OK) -> None:
         body = json.dumps(data).encode("utf-8")
         self.send_response(status)
@@ -500,6 +511,11 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             return
 
     def do_POST(self) -> None:
+        if not self._is_authorized():
+            logger.warning(f"[SECURITY] Unauthorized POST request to {self.path} from {self.address_string()}")
+            self.send_error(HTTPStatus.FORBIDDEN, "Unauthorized administrative access")
+            return
+
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
 
