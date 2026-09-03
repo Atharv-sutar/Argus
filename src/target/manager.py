@@ -215,6 +215,46 @@ class TargetManager:
         self._target.state = TargetState.LOST
         return self._target
 
+    def mark_searching(self, timestamp_ms: float) -> Target:
+        """Transitions target state to SEARCHING when actively looking for target."""
+        if self._target.last_seen_timestamp_ms > 0:
+            elapsed = max(0.0, timestamp_ms - self._target.last_seen_timestamp_ms)
+        else:
+            elapsed = self._target.lost_duration_ms + 33.3
+        self._target.lost_duration_ms = elapsed
+        self._target.state = TargetState.SEARCHING
+        return self._target
+
+    def mark_candidate(self, track: Track, frame_id: int, timestamp_ms: float) -> Target:
+        """Transitions target state to CANDIDATE when a potential match is found but unverified."""
+        self._target.track_id = track.track_id
+        self._target.last_known_box = track.box
+        self._target.last_seen_frame = frame_id
+        self._target.last_seen_timestamp_ms = timestamp_ms
+        self._target.lost_duration_ms = 0.0
+        self._target.state = TargetState.CANDIDATE
+        return self._target
+
+    def mark_rejected(self, timestamp_ms: float) -> Target:
+        """Transitions target state to REJECTED when verification fails."""
+        if self._target.last_seen_timestamp_ms > 0:
+            elapsed = max(0.0, timestamp_ms - self._target.last_seen_timestamp_ms)
+        else:
+            elapsed = self._target.lost_duration_ms + 33.3
+        self._target.lost_duration_ms = elapsed
+        self._target.state = TargetState.REJECTED
+        return self._target
+
+    def mark_confirmed(self, track: Track, frame_id: int, timestamp_ms: float) -> Target:
+        """Transitions target state to CONFIRMED when verified via ReID."""
+        self._target.track_id = track.track_id
+        self._target.last_known_box = track.box
+        self._target.last_seen_frame = frame_id
+        self._target.last_seen_timestamp_ms = timestamp_ms
+        self._target.lost_duration_ms = 0.0
+        self._target.state = TargetState.CONFIRMED
+        return self._target
+
     def clear(self) -> None:
         """Deselect the current target and purge its appearance gallery."""
         self._target = Target(state=TargetState.UNSELECTED)

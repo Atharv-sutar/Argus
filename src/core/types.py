@@ -137,6 +137,10 @@ class TargetState(str, Enum):
     UNCERTAIN = "UNCERTAIN"
     LOST = "LOST"
     RECOVERING = "RECOVERING"
+    SEARCHING = "SEARCHING"
+    CANDIDATE = "CANDIDATE"
+    REJECTED = "REJECTED"
+    CONFIRMED = "CONFIRMED"
 
 
 @dataclass

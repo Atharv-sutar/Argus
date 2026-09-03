@@ -54,7 +54,13 @@ class ReIDConfig:
     extract_interval_frames: int = 5
     min_crop_width: int = 32
     min_crop_height: int = 64
-    min_sharpness: float = 20.0
+    
+    # PROVISIONAL / INITIAL thresholds pending calibration against real camera footage
+    # (resolution, lighting, and noise vary significantly per camera)
+    min_sharpness: float = 60.0 # Laplacian variance threshold for blur filtering
+    tracklet_cleave_threshold: float = 0.3 # Cosine shift threshold to split poisoned tracklets
+    uncertain_band_min: float = 0.73
+    uncertain_band_max: float = 0.78
 
     # Backward-compatible property aliases
     @property
@@ -98,6 +104,10 @@ class SearchConfig:
     max_radius: int = 3
     total_recovery_timeout_s: float = 30.0
     confirmation_frames: int = 3
+    
+    # PROVISIONAL / INITIAL threshold pending Phase 5 calibration
+    # Do not hardcode any logic that assumes this is strictly 50%
+    candidate_filter_rate: float = 0.5
     handoff_confirm_delay_s: float = 2.0
 
 

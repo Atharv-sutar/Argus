@@ -615,11 +615,39 @@ class MultiCameraPipeline:
                 if frame is not None and track_res is not None and role in ("active", "search"):
                     worker = self._get_or_create_worker(cid)
                     if worker:
+                        # Pre-calculate spatial constraints for search cameras
+                        is_camera_spatially_valid = True
+                        if role == "search" and target.state in (TargetState.LOST, TargetState.UNCERTAIN) and self._active_camera_id:
+                            min_trans_s = self.graph.shortest_path_min_time(self._active_camera_id, cid)
+                            if min_trans_s > 0.0:
+                                elapsed_s = (ts_ms - target.last_seen_timestamp_ms) / 1000.0
+                                if elapsed_s < min_trans_s:
+                                    is_camera_spatially_valid = False
+                                    logger.debug(
+                                        f"[SPATIAL REJECT] Camera '{cid}' is spatially impossible. "
+                                        f"Elapsed: {elapsed_s:.1f}s < Min Transit: {min_trans_s:.1f}s. Skipping ReID."
+                                    )
+
+                        if not is_camera_spatially_valid:
+                            # Treat all candidates on this impossible camera as lost
+                            self.search_manager.on_candidate_lost(cid)
+                            continue
+
                         for track in track_res.tracks:
                             c_crop = worker.extract_crop(frame, track.box)
                             if c_crop is not None and c_crop.size > 0 and c_crop.shape[0] >= 12 and c_crop.shape[1] >= 12:
-                                crops_to_extract.append(c_crop)
-                                crop_meta.append((cid, track, c_crop))
+                                import cv2
+                                # Simple Tracklet Quality Gate (Blur Filter)
+                                gray_crop = cv2.cvtColor(c_crop, cv2.COLOR_BGR2GRAY)
+                                blur_score = cv2.Laplacian(gray_crop, cv2.CV_64F).var()
+                                
+                                # Only extract ReID if crop is reasonably sharp (variance > threshold)
+                                # For small crops, 50-100 is a reasonable threshold
+                                if blur_score > self.config.reid.min_sharpness or track.track_id == getattr(target, 'track_id', -1):
+                                    crops_to_extract.append(c_crop)
+                                    crop_meta.append((cid, track, c_crop))
+                                else:
+                                    logger.debug(f"[TRACKLET REID] Crop for track #{track.track_id} rejected due to blur (score={blur_score:.1f})")
             
             if crops_to_extract:
                 try:
@@ -703,6 +731,18 @@ class MultiCameraPipeline:
                 if cid in self._nodes:
                     self._nodes[cid].fps = s_worker.fps
                 if self.target_manager.is_active() and not self.identity.is_empty and track_res.count > 0:
+                    is_camera_spatially_valid = True
+                    if target.state in (TargetState.LOST, TargetState.UNCERTAIN) and self._active_camera_id:
+                        min_trans_s = self.graph.shortest_path_min_time(self._active_camera_id, cid)
+                        if min_trans_s > 0.0:
+                            elapsed_s = (ts_ms - target.last_seen_timestamp_ms) / 1000.0
+                            if elapsed_s < min_trans_s:
+                                is_camera_spatially_valid = False
+
+                    if not is_camera_spatially_valid:
+                        self.search_manager.on_candidate_lost(cid)
+                        continue
+
                     precomp_cands = precomputed_reid_candidates.get(cid)
                     rec_track, rec_crop, rec_emb, rec_sim = self._match_candidates_against_gallery(
                         worker=s_worker, 
@@ -798,6 +838,12 @@ class MultiCameraPipeline:
         """
         Manages target tracking continuity, crowd occlusion awareness, anti-scooping protection,
         temporal consensus before lock-switching, real-time diagnostic telemetry, and gallery growth.
+        
+        State Machine vs Hysteresis Coexistence:
+        - The TargetState machine (UNCERTAIN -> REJECTED -> SEARCHING) governs tracking degradation when 
+          the primary target's similarity drops, acting as a graceful failure mechanism when no strong alternatives exist.
+        - The Hysteresis logic (switch_margin, _switch_consensus) strictly governs "lock-stealing". It only activates
+          when current_sim is low AND a highly confident alternative candidate is available, preventing oscillation.
         """
         target = self.target_manager.target
         if not self.target_manager.is_active():
@@ -817,6 +863,9 @@ class MultiCameraPipeline:
         match_thresh = self.config.reid.match_threshold
         switch_margin = getattr(self.config.reid, "lock_switch_margin", 0.08)
         auto_thresh = self.config.reid.auto_add_threshold
+        uncertain_min = getattr(self.config.reid, "uncertain_band_min", 0.73)
+        uncertain_max = getattr(self.config.reid, "uncertain_band_max", 0.78)
+        min_margin = getattr(self.config.reid, "min_margin", 0.05)
 
         # Detect crowd occlusion / overlap on the active target
         is_occluded = self._is_occluded(current_track, track_res.tracks, iou_threshold=0.25) if current_track is not None else False
@@ -911,8 +960,8 @@ class MultiCameraPipeline:
             f"Candidates=[{', '.join(cand_telemetry)}] | Gallery=(man={self.identity.manual_count}, auto={self.identity.auto_count})"
         )
 
-        # Scenario 1: Target was actively tracking, locked, or occluded
-        if target.state in (TargetState.TRACKING, TargetState.LOCKED, TargetState.OCCLUDED):
+        # Scenario 1: Target was actively tracking, locked, confirmed, uncertain or occluded
+        if target.state in (TargetState.TRACKING, TargetState.LOCKED, TargetState.OCCLUDED, TargetState.CONFIRMED, TargetState.UNCERTAIN):
             if current_track is not None:
                 if is_occluded:
                     # Crowd / Occlusion safeguard: maintain spatial lock, freeze gallery updates
@@ -922,11 +971,20 @@ class MultiCameraPipeline:
                     self._switch_consensus.clear()
                     return
 
-                # Normal non-occluded verification
+                # Normal non-occluded verification using Phase 1 logic
+                # Check Top-2 margin if applicable
+                margin = best_other_sim - current_sim if best_other_sim > current_sim else current_sim - best_other_sim
+                has_ambiguity = (best_other_sim >= uncertain_min) and (margin < min_margin)
+                
+                if has_ambiguity:
+                    self.target_manager.mark_uncertain(timestamp_ms)
+                    self._current_track_misses += 1
+                    return
+
                 if current_sim >= match_thresh:
                     self._current_track_misses = 0
                     self._switch_consensus.clear()
-                    self.target_manager.mark_tracking(current_track, track_res.frame_id, timestamp_ms)
+                    self.target_manager.mark_confirmed(current_track, track_res.frame_id, timestamp_ms)
 
                     # Auto-enrollment (strictly when clear and quality passes)
                     if current_crop is not None and current_emb is not None and current_sim >= auto_thresh:
@@ -940,78 +998,83 @@ class MultiCameraPipeline:
                             track_id=current_track.track_id,
                         )
                     return
+                elif uncertain_min <= current_sim <= uncertain_max:
+                    self._current_track_misses += 1
+                    self.target_manager.mark_uncertain(timestamp_ms)
+                    return
+                elif current_sim < uncertain_min:
+                    # Score is below the uncertain band
+                    # Check if genuine switch
+                    should_switch = False
+                    if best_other_track is not None and best_other_sim >= match_thresh:
+                        margin_switch = best_other_sim - current_sim
+                        if margin_switch >= switch_margin:
+                            other_tid = best_other_track.track_id
+                            self._switch_consensus[other_tid] = self._switch_consensus.get(other_tid, 0) + 1
 
-                # Current track similarity dipped below match_thresh: Check if genuine switch or transient dip
-                should_switch = False
-                if best_other_track is not None and best_other_sim >= match_thresh:
-                    margin = best_other_sim - current_sim
-                    if margin >= switch_margin:
-                        other_tid = best_other_track.track_id
-                        self._switch_consensus[other_tid] = self._switch_consensus.get(other_tid, 0) + 1
+                            # Anti-scoop: verify switch candidate against manual gallery entries
+                            manual_anchor_pass = True
+                            if self.identity._manual_matrix is not None and len(self.identity._manual_entries) > 0:
+                                manual_anchor_pass = best_other_man_sim >= max(0.55, match_thresh - 0.05)
+                                if not manual_anchor_pass:
+                                    logger.info(
+                                        f"[ANTI-SCOOP] Lock-switch to Track #{other_tid} REJECTED: "
+                                        f"manual anchor check failed (sim_manual={best_other_man_sim:.3f})"
+                                    )
 
-                        # Anti-scoop: verify switch candidate against manual gallery entries
-                        manual_anchor_pass = True
-                        if self.identity._manual_matrix is not None and len(self.identity._manual_entries) > 0:
-                            manual_anchor_pass = best_other_man_sim >= max(0.55, match_thresh - 0.05)
-                            if not manual_anchor_pass:
-                                logger.info(
-                                    f"[ANTI-SCOOP] Lock-switch to Track #{other_tid} REJECTED: "
-                                    f"manual anchor check failed (sim_manual={best_other_man_sim:.3f})"
-                                )
-
-                        if manual_anchor_pass:
-                            # Immediate switch when margin is decisive or current track is very weak
-                            if margin >= 0.15 or current_sim < (match_thresh - 0.20):
-                                should_switch = True
-                            # Moderate consensus: 2 frames for clear margin
-                            elif self._switch_consensus[other_tid] >= 2:
-                                should_switch = True
+                            if manual_anchor_pass:
+                                # Immediate switch when margin is decisive or current track is very weak
+                                if margin_switch >= 0.15 or current_sim < (match_thresh - 0.20):
+                                    should_switch = True
+                                # Moderate consensus: 2 frames for clear margin
+                                elif self._switch_consensus[other_tid] >= 2:
+                                    should_switch = True
+                        else:
+                            self._switch_consensus.clear()
                     else:
                         self._switch_consensus.clear()
-                else:
-                    self._switch_consensus.clear()
 
-                if should_switch and best_other_track is not None:
-                    logger.info(
-                        f"[TARGET LOCK SWITCH] Camera '{self._active_camera_id}': Switching target lock from "
-                        f"Track #{current_track.track_id} (sim={current_sim:.3f}) to Track #{best_other_track.track_id} "
-                        f"(sim={best_other_sim:.3f}, man={best_other_man_sim:.3f})"
-                    )
-                    # Purge auto-enrolled entries from the deposed track AND any stale entries for the new track
-                    self.identity.rollback_auto_entries(for_track_id=current_track.track_id)
-                    self.identity.rollback_auto_entries(for_track_id=best_other_track.track_id)
-                    self._switch_consensus.clear()
-                    self._current_track_misses = 0
-
-                    self.target_manager.reassociate_target(
-                        track=best_other_track,
-                        frame_id=track_res.frame_id,
-                        timestamp_ms=timestamp_ms,
-                        reid_verified=True,
-                    )
-                    if best_other_crop is not None and best_other_emb is not None and best_other_sim >= auto_thresh:
-                        self.identity.add_auto(
-                            crop=best_other_crop,
-                            embedding=best_other_emb,
-                            candidate_similarity=best_other_sim,
-                            camera_id=self._active_camera_id or "camera_0",
-                            timestamp_ms=timestamp_ms,
-                            frame_id=track_res.frame_id,
-                            track_id=best_other_track.track_id,
+                    if should_switch and best_other_track is not None:
+                        logger.info(
+                            f"[TARGET LOCK SWITCH] Camera '{self._active_camera_id}': Switching target lock from "
+                            f"Track #{current_track.track_id} (sim={current_sim:.3f}) to Track #{best_other_track.track_id} "
+                            f"(sim={best_other_sim:.3f}, man={best_other_man_sim:.3f})"
                         )
-                    return
+                        # Purge auto-enrolled entries from the deposed track AND any stale entries for the new track
+                        self.identity.rollback_auto_entries(for_track_id=current_track.track_id)
+                        self.identity.rollback_auto_entries(for_track_id=best_other_track.track_id)
+                        self._switch_consensus.clear()
+                        self._current_track_misses = 0
 
-                # Grace period before declaring LOST (to avoid flipping on single noisy frame)
-                self._current_track_misses += 1
-                if self._current_track_misses < 2:
-                    self.target_manager.mark_tracking(current_track, track_res.frame_id, timestamp_ms)
-                    self.target_manager.target.state = TargetState.UNCERTAIN
-                else:
-                    logger.info(
-                        f"[TARGET LOST] Track #{current_track.track_id} lost after {self._current_track_misses} "
-                        f"misses (sim={current_sim:.3f} < {match_thresh:.3f})"
-                    )
-                    self.target_manager.mark_lost(timestamp_ms)
+                        self.target_manager.reassociate_target(
+                            track=best_other_track,
+                            frame_id=track_res.frame_id,
+                            timestamp_ms=timestamp_ms,
+                            reid_verified=True,
+                        )
+                        self.target_manager.mark_confirmed(best_other_track, track_res.frame_id, timestamp_ms)
+                        if best_other_crop is not None and best_other_emb is not None and best_other_sim >= auto_thresh:
+                            self.identity.add_auto(
+                                crop=best_other_crop,
+                                embedding=best_other_emb,
+                                candidate_similarity=best_other_sim,
+                                camera_id=self._active_camera_id or "camera_0",
+                                timestamp_ms=timestamp_ms,
+                                frame_id=track_res.frame_id,
+                                track_id=best_other_track.track_id,
+                            )
+                        return
+
+                    self._current_track_misses += 1
+                    if self._current_track_misses >= 2:
+                        logger.info(
+                            f"[TARGET REJECTED] Track #{current_track.track_id} rejected after {self._current_track_misses} "
+                            f"misses (sim={current_sim:.3f} < {uncertain_min:.3f})"
+                        )
+                        self.target_manager.mark_rejected(timestamp_ms)
+                        self.target_manager.mark_searching(timestamp_ms)
+                    else:
+                        self.target_manager.mark_uncertain(timestamp_ms)
             else:
                 # Current track dropped out of view
                 if best_other_track is not None and best_other_sim >= self._reacquisition_threshold:
@@ -1030,10 +1093,12 @@ class MultiCameraPipeline:
                             timestamp_ms=timestamp_ms,
                             reid_verified=True,
                         )
+                        self.target_manager.mark_confirmed(best_other_track, track_res.frame_id, timestamp_ms)
                         return
                 self.target_manager.mark_lost(timestamp_ms)
+                self.target_manager.mark_searching(timestamp_ms)
 
-        # Scenario 2: Target was LOST or UNCERTAIN — Evidence-gated reacquisition (anti-scoop)
+        # Scenario 2: Target was LOST, SEARCHING, or REJECTED — Evidence-gated reacquisition (anti-scoop)
         else:
             # Feed all candidates into the EvidenceEngine
             evidence_records = []

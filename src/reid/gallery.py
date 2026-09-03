@@ -109,6 +109,10 @@ class TargetGallery:
         Clears the existing gallery and seeds it with a newly selected target.
         Bypasses similarity thresholds (human-confirmed ground truth).
         Always enrolled as a permanent, protected manual entry (is_manual=True).
+        
+        Note (Phase 1 Ambiguity Resolution): 
+        A manual override (seeding) completely resets and replaces the existing Frozen 
+        Trusted Anchor. The gallery is purged, and this new entry becomes the singular seed anchor.
         """
         self.clear()
         self._target_label = target_label
@@ -155,6 +159,13 @@ class TargetGallery:
         """
         Manually captures and adds a new viewpoint to the existing target gallery.
         Protected entry (is_manual=True) that will not be evicted by automatic updates.
+        
+        Note (Phase 1 Ambiguity Resolution): 
+        Manual captures (e.g., right-click "add to gallery") are granted immediate 
+        anchor-tier trust (is_anchor=True implicitly via is_manual=True), meaning they 
+        are protected from auto-eviction. They enter a bounded, protected secondary 
+        manual memory pool, meaning they share anchor trust but do not erase or 
+        replace the original initial seed anchor.
         """
         if embedding is None:
             if self.reid_extractor is None or crop is None or crop.size == 0:
@@ -347,25 +358,30 @@ class TargetGallery:
         sig_alpha = 15.0
         sig_beta = 0.82
 
-        def _compute_robust_score(raw_dots: np.ndarray, entries: List[GalleryEntry]) -> Tuple[np.ndarray, np.ndarray]:
+        def _compute_robust_score(raw_dots: np.ndarray, entries: List[GalleryEntry], use_max: bool = False) -> Tuple[np.ndarray, np.ndarray]:
             # raw_dots shape: (K, M)
             # Find best match for visualization thumbnail
             best_indices = np.argmax(raw_dots, axis=1)
             
-            # Use Top-50% robust mean aggregation to prevent single-image contamination
-            # and ensure ALL relevant images individually contribute to the score.
-            k_top = max(1, len(entries) // 2)
-            topk_raw = np.sort(raw_dots, axis=1)[:, -k_top:]
-            raw_mean = np.mean(topk_raw, axis=1)
+            if use_max:
+                # Manual entries (anchor tier) are human-verified distinct viewpoints.
+                # Use max-similarity so any single valid viewpoint strongly matches.
+                agg_score = np.max(raw_dots, axis=1)
+            else:
+                # Auto entries may contain noise/drift.
+                # Use Top-50% robust mean aggregation to prevent single-image contamination.
+                k_top = max(1, len(entries) // 2)
+                topk_raw = np.sort(raw_dots, axis=1)[:, -k_top:]
+                agg_score = np.mean(topk_raw, axis=1)
             
             # Apply soft-scaling Sigmoid
-            cal_scores = 1.0 / (1.0 + np.exp(-sig_alpha * (raw_mean - sig_beta)))
+            cal_scores = 1.0 / (1.0 + np.exp(-sig_alpha * (agg_score - sig_beta)))
             return cal_scores, best_indices
 
         # 1. Compute manual similarities
         if has_manual:
             raw_m_dots = c_matrix @ self._manual_matrix.T  # (K, M)
-            m_max_scores, m_best_indices = _compute_robust_score(raw_m_dots, self._manual_entries)
+            m_max_scores, m_best_indices = _compute_robust_score(raw_m_dots, self._manual_entries, use_max=True)
         else:
             m_best_indices = np.zeros(len(candidate_embeddings), dtype=int)
             m_max_scores = np.zeros(len(candidate_embeddings), dtype=np.float32)

@@ -26,9 +26,11 @@ tracking:
 
 reid:
   model_name: "osnet_x1_0"
-  match_threshold: 0.65
-  reacquisition_threshold: 0.75
-  auto_add_threshold: 0.80
+  match_threshold: 0.78
+  uncertain_band_min: 0.73
+  uncertain_band_max: 0.78
+  reacquisition_threshold: 0.78
+  auto_add_threshold: 0.82
   auto_add_min_consecutive: 3
   diversity_threshold: 0.92
   max_gallery_size: 25
@@ -37,11 +39,10 @@ reid:
   extract_interval_frames: 3
   min_crop_width: 32
   min_crop_height: 64
-  min_sharpness: 20.0
-
-
-
-
+  
+  # PROVISIONAL / INITIAL thresholds pending calibration against real camera footage
+  # (resolution, lighting, and noise vary significantly per camera)
+  min_sharpness: 60.0
 
 visualization:
   show_window: true
