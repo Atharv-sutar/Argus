@@ -123,21 +123,22 @@ def probe_local_webcams(
 
     if cv2 is not None and not _SHUTDOWN_EVENT.is_set():
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                for idx in range(max_indices):
-                    if _SHUTDOWN_EVENT.is_set():
-                        break
-                    try:
-                        future = executor.submit(_probe_single_device, idx)
-                        res = future.result(timeout=timeout_per_index)
-                        if res is not None:
-                            cameras.append(res)
-                    except concurrent.futures.TimeoutError:
-                        logger.warning(f"[TOPOLOGY/PROBE] Webcam index {idx} probe timed out after {timeout_per_index}s (skipped)")
-                    except (RuntimeError, concurrent.futures.CancelledError):
-                        break
-                    except Exception as e:
-                        logger.debug(f"[TOPOLOGY/PROBE] Error probing index {idx}: {e}")
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_indices)
+            for idx in range(max_indices):
+                if _SHUTDOWN_EVENT.is_set():
+                    break
+                try:
+                    future = executor.submit(_probe_single_device, idx)
+                    res = future.result(timeout=timeout_per_index)
+                    if res is not None:
+                        cameras.append(res)
+                except concurrent.futures.TimeoutError:
+                    logger.warning(f"[TOPOLOGY/PROBE] Webcam index {idx} probe timed out after {timeout_per_index}s (skipped)")
+                except (RuntimeError, concurrent.futures.CancelledError):
+                    break
+                except Exception as e:
+                    logger.debug(f"[TOPOLOGY/PROBE] Error probing index {idx}: {e}")
+            executor.shutdown(wait=False)
         except (RuntimeError, concurrent.futures.CancelledError):
             pass
 

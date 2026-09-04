@@ -637,9 +637,13 @@ class MultiCameraPipeline:
                             c_crop = worker.extract_crop(frame, track.box)
                             if c_crop is not None and c_crop.size > 0 and c_crop.shape[0] >= 12 and c_crop.shape[1] >= 12:
                                 import cv2
-                                # Simple Tracklet Quality Gate (Blur Filter)
-                                gray_crop = cv2.cvtColor(c_crop, cv2.COLOR_BGR2GRAY)
-                                blur_score = cv2.Laplacian(gray_crop, cv2.CV_64F).var()
+                                blur_score = 100.0
+                                try:
+                                    # Simple Tracklet Quality Gate (Blur Filter)
+                                    gray_crop = cv2.cvtColor(c_crop, cv2.COLOR_BGR2GRAY)
+                                    blur_score = cv2.Laplacian(gray_crop, cv2.CV_64F).var()
+                                except Exception as e:
+                                    logger.error(f"[TRACKLET REID] Error applying blur filter: {e}")
                                 
                                 # Only extract ReID if crop is reasonably sharp (variance > threshold)
                                 # For small crops, 50-100 is a reasonable threshold
@@ -1420,7 +1424,7 @@ class MultiCameraPipeline:
             if is_active:
                 status_str = "ACTIVE"
             elif is_searching:
-                status_str = f"SEARCHING (R={self.search_manager.current_radius})"
+                status_str = f"SEARCHING (R={self.search_manager.get_progress().search_radius})"
             elif node.is_online:
                 status_str = "STANDBY"
             else:
