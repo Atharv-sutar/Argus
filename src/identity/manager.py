@@ -299,6 +299,11 @@ class IdentityManager:
             if auto_mat is not None:
                 auto_sim = float(np.max(np.dot(auto_mat, emb.vector)))
                 
+            # Cap auto_sim when manual entries exist to prevent auto-enrolled near-duplicates
+            # from inflating the effective similarity beyond what human-verified gallery supports.
+            if man_mat is not None and len(man_mat) > 0 and auto_sim > man_sim + 0.05:
+                auto_sim = man_sim + 0.05
+                
             eff_sim = max(man_sim, auto_sim)
             results.append((eff_sim, man_sim, auto_sim, -1))
         return results
@@ -336,7 +341,7 @@ class IdentityManager:
 
         # Diversity check against recent provisional entries
         for prev_emb in ident.provisional_gallery[-5:]:
-            if prev_emb.dim == embedding.dim and prev_emb.cosine_similarity(embedding) > 0.94:
+            if prev_emb.dim == embedding.dim and prev_emb.cosine_similarity(embedding) > 0.96:
                 return False
                 
         # Only add if it passes

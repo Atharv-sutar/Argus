@@ -53,6 +53,8 @@ class OpenCVCamera(BaseCamera):
         self._latest_frame: Optional[np.ndarray] = None
         self._latest_timestamp_ms: float = 0.0
         self._has_new_frame = False
+        self._frame_seq: int = 0  # monotonically increasing sequence for freshness detection
+        self._last_read_seq: int = 0  # last sequence returned by read()
 
         self._open_stream()
 
@@ -177,6 +179,7 @@ class OpenCVCamera(BaseCamera):
                 self._latest_frame = frame
                 self._latest_timestamp_ms = now_ms
                 self._has_new_frame = True
+                self._frame_seq += 1
 
     def _reopen_stream(self) -> None:
         """Attempts to reopen the VideoCapture device on failure."""
@@ -223,6 +226,12 @@ class OpenCVCamera(BaseCamera):
     def is_opened(self) -> bool:
         return not self._is_closed and (self._running or (self._cap is not None and self._cap.isOpened()))
 
+    @property
+    def frame_seq(self) -> int:
+        """Current frame sequence number. Increments each time the capture thread reads a new frame."""
+        with self._lock:
+            return self._frame_seq
+
     def read(self) -> Tuple[bool, Optional[np.ndarray], float]:
         if not self.is_opened():
             return False, None, 0.0
@@ -231,6 +240,7 @@ class OpenCVCamera(BaseCamera):
             # Non-blocking instant read from latest frame buffer
             with self._lock:
                 if self._latest_frame is not None:
+                    self._last_read_seq = self._frame_seq
                     return True, self._latest_frame.copy(), self._latest_timestamp_ms
                 return False, None, 0.0
 

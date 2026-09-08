@@ -352,11 +352,19 @@ class MultiCameraPipeline:
                 frame_to_process = worker._last_frame
 
         if frame_to_process is not None:
-            if hasattr(worker, "detector"):
-                det_res = worker.detector.detect(frame_to_process, timestamp_ms=time.time() * 1000.0)
-            else:
-                det_res = self._default_detector_factory().detect(frame_to_process, timestamp_ms=time.time() * 1000.0)
-            worker.process_frame(frame_to_process, time.time() * 1000.0, det_res)
+            ts_ms = time.time() * 1000.0
+            try:
+                if hasattr(worker, "detector"):
+                    det_res = worker.detector.detect(frame_to_process, timestamp_ms=ts_ms)
+                elif self._shared_detector is not None:
+                    batch_res = self._shared_detector.detect_batch([frame_to_process], timestamps_ms=[ts_ms])
+                    det_res = batch_res[0] if batch_res else None
+                else:
+                    det_res = self._default_detector_factory().detect(frame_to_process, timestamp_ms=ts_ms)
+                
+                worker.process_frame(frame_to_process, ts_ms, det_res)
+            except Exception as e:
+                logger.error(f"[MULTI-CAM] Detection failure: {e}")
 
         if worker._last_track_result is None or worker._last_frame is None:
             return None
@@ -1384,23 +1392,36 @@ class MultiCameraPipeline:
             if camera_id in self._latest_jpegs:
                 return self._latest_jpegs[camera_id]
 
-        # Check node last_frame
-        node = self._nodes.get(camera_id)
-        frame = node.last_frame if node is not None else None
+        # 2. Live camera fallback: read a fresh frame directly from the camera
+        #    This ensures the MJPEG stream never goes completely stale, even when
+        #    the pipeline step() is paused or busy with AI inference.
+        frame = None
+        worker = self._workers.get(camera_id)
+        if worker is not None and worker.camera.is_opened():
+            try:
+                # Prefer the live camera frame to avoid re-encoding stale pipeline frames
+                success, live_frame, _ = worker.camera.read()
+                if success and live_frame is not None:
+                    frame = live_frame
+            except Exception:
+                pass
 
-        # Fallback to worker last_frame
+        # 3. Fallback to cached frames if live read failed
         if frame is None:
-            worker = self._workers.get(camera_id)
-            if worker is not None and worker._last_frame is not None:
-                frame = worker._last_frame
+            node = self._nodes.get(camera_id)
+            frame = node.last_frame if node is not None else None
+            
+        if frame is None and worker is not None:
+            frame = worker._last_frame
 
         if frame is not None:
             try:
                 ret, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
                 if ret:
                     raw_bytes = buf.tobytes()
-                    with self._frame_lock:
-                        self._latest_jpegs[camera_id] = raw_bytes
+                    # Do not store this live fallback into _latest_jpegs, otherwise the UI
+                    # stream staleness detector will think it's a stable pipeline frame.
+                    # We just return it directly so the stream stays live.
                     return raw_bytes
             except Exception:
                 pass

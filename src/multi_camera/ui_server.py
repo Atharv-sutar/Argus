@@ -282,6 +282,8 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     self.end_headers()
 
                     try:
+                        last_frame_id = None
+                        last_changed_time = time.time()
                         while not _SHUTDOWN_EVENT.is_set() and (self.runtime_pipeline is None or getattr(self.runtime_pipeline, "is_running", True)):
                             frame_bytes = None
                             if self.runtime_pipeline is not None:
@@ -295,6 +297,19 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                                     frame_bytes = buf.tobytes()
 
                             if frame_bytes is not None:
+                                # Staleness detection: if the same JPEG has been served for >1.5s,
+                                # evict the pipeline cache to force a live camera read next iteration
+                                frame_id = id(frame_bytes)
+                                if frame_id != last_frame_id:
+                                    last_frame_id = frame_id
+                                    last_changed_time = time.time()
+                                elif time.time() - last_changed_time > 1.5:
+                                    # Force cache eviction so get_camera_frame_jpeg falls through to live read
+                                    if self.runtime_pipeline is not None:
+                                        with self.runtime_pipeline._frame_lock:
+                                            self.runtime_pipeline._latest_jpegs.pop(cam_id, None)
+                                    last_changed_time = time.time()  # reset to avoid spamming evictions
+
                                 header = (
                                     b"--frame\r\n"
                                     b"Content-Type: image/jpeg\r\n"

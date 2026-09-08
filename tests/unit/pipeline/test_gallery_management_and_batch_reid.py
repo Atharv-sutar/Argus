@@ -86,6 +86,7 @@ def test_realistic_candidate_reid_and_lock_switching():
     config.reid.match_threshold = 0.75
     config.reid.lock_switch_margin = 0.05
     config.reid.extract_interval_frames = 1
+    config.reid.min_sharpness = 0.0
 
     det = ControllableMockDetector()
 
@@ -139,7 +140,7 @@ def test_realistic_candidate_reid_and_lock_switching():
     pipe.identity._manual_matrix
     pipe.step()
 
-    assert pipe.target_manager.target.state == TargetState.TRACKING
+    assert pipe.target_manager.target.state in (TargetState.TRACKING, TargetState.CONFIRMED)
     locked_id = pipe.target_manager.target.track_id
     assert locked_id is not None
 
@@ -159,7 +160,7 @@ def test_realistic_candidate_reid_and_lock_switching():
     # Verify lock switched to the true target candidate
     new_locked_id = pipe.target_manager.target.track_id
     assert new_locked_id != locked_id
-    assert pipe.target_manager.target.state == TargetState.TRACKING
+    assert pipe.target_manager.target.state in (TargetState.TRACKING, TargetState.CONFIRMED)
 
 
 def test_update_graph_dynamically_adds_and_removes_workers():

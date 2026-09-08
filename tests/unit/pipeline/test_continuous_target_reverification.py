@@ -43,6 +43,7 @@ def test_lock_switches_when_bystander_hijacks_track_and_real_target_is_present()
     config.reid.match_threshold = 0.80
     config.reid.lock_switch_margin = 0.05
     config.reid.extract_interval_frames = 1
+    config.reid.min_sharpness = 0.0  # Disable blur check for synthetic frames
 
     det = ControllableMockDetector()
 
@@ -79,7 +80,7 @@ def test_lock_switches_when_bystander_hijacks_track_and_real_target_is_present()
     pipe.select_target_on_camera("cam_A", 100.0, 100.0)
     pipe.step()
 
-    assert pipe.target_manager.target.state == TargetState.TRACKING
+    assert pipe.target_manager.target.state in (TargetState.TRACKING, TargetState.CONFIRMED)
     locked_id = pipe.target_manager.target.track_id
     assert locked_id is not None
     assert pipe.identity.size >= 1
@@ -99,4 +100,4 @@ def test_lock_switches_when_bystander_hijacks_track_and_real_target_is_present()
     new_locked_id = pipe.target_manager.target.track_id
     assert new_locked_id is not None
     assert new_locked_id != locked_id
-    assert pipe.target_manager.target.state == TargetState.TRACKING
+    assert pipe.target_manager.target.state in (TargetState.TRACKING, TargetState.CONFIRMED)

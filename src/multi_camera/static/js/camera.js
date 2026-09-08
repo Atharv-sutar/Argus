@@ -26,8 +26,9 @@ class CameraManager {
       btnDiscoverToolbar.addEventListener('click', () => this.discover());
     }
 
-    // Auto-discover webcams on initial load
-    setTimeout(() => this.discover(), 300);
+    // Auto-discover webcams after initial page load (deferred to avoid blocking
+    // the HTTP server during critical early API requests like topology graph load)
+    setTimeout(() => this.discover(), 5000);
 
     const customForm = document.getElementById('form-custom-camera');
     customForm.addEventListener('submit', (e) => {

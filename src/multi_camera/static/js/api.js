@@ -5,16 +5,35 @@ const API = {
   baseUrl: '',
 
   async getGraph() {
-    try {
-      const res = await fetch(`${this.baseUrl}/api/graph`);
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || `Failed to load graph (${res.status} ${res.statusText})`);
+    const attempt = async () => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      try {
+        const res = await fetch(`${this.baseUrl}/api/graph`, { signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || `Failed to load graph (${res.status} ${res.statusText})`);
+        }
+        return await res.json();
+      } catch (err) {
+        clearTimeout(timeoutId);
+        throw err;
       }
-      return await res.json();
-    } catch (err) {
-      console.error('[API] getGraph error:', err);
-      throw err;
+    };
+
+    try {
+      return await attempt();
+    } catch (firstErr) {
+      // Retry once after 1s delay (server may be busy with camera probe)
+      console.warn('[API] getGraph first attempt failed, retrying in 1s...', firstErr.message);
+      await new Promise(r => setTimeout(r, 1000));
+      try {
+        return await attempt();
+      } catch (retryErr) {
+        console.error('[API] getGraph retry also failed:', retryErr);
+        throw retryErr;
+      }
     }
   },
 

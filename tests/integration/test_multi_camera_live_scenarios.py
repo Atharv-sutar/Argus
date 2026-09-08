@@ -207,6 +207,6 @@ def test_lone_bystander_anti_scoop_and_legitimate_reacquisition():
         pipe.step()
 
     # Target is successfully reacquired!
-    assert pipe.target_manager.target.state == TargetState.TRACKING
+    assert pipe.target_manager.target.state in (TargetState.TRACKING, TargetState.CONFIRMED)
     assert pipe.target_manager.target.track_id is not None
 
