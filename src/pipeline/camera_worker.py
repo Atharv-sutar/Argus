@@ -33,7 +33,6 @@ class CameraWorker:
         self.camera_id = camera_id
 
         self.target_evaluation_enabled: bool = True
-        self.current_target: Target = Target(state=TargetState.UNSELECTED)
         self._fps: float = 0.0
         self._last_frame_time: float = 0.0
         self._last_frame: Optional[np.ndarray] = None
@@ -79,10 +78,6 @@ class CameraWorker:
         candidate_similarities: Optional[Dict[int, float]] = None,
     ) -> np.ndarray:
         """Draws bounding boxes, IDs, target overlays, and real-time similarity metrics on the frame."""
-        if target is not None:
-            self.current_target = target
-        else:
-            self.current_target = Target(state=TargetState.UNSELECTED)
         return self.annotator.annotate(
             frame=frame,
             track_result=track_result,

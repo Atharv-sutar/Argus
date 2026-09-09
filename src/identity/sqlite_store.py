@@ -70,11 +70,7 @@ class SQLiteVectorStore(BaseVectorStore):
             rows = cursor.fetchall()
             return {row[0]: json.loads(row[1]) for row in rows}
 
-    def remove_identity_metadata(self, identity_id: str) -> None:
-        with closing(sqlite3.connect(self.db_path)) as conn:
-            cursor = conn.cursor()
-            cursor.execute('DELETE FROM identities_metadata WHERE identity_id = ?', (identity_id,))
-            conn.commit()
+
 
     def _serialize_emb(self, emb: Embedding) -> str:
         # Base64 encode the flattened float32 array

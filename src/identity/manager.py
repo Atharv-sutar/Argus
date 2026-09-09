@@ -393,7 +393,7 @@ class IdentityManager:
         if self.evidence_engine:
             self.evidence_engine.clear()
 
-        fused, deep, global_v, upper, lower = self._extract_all_representations(crop, embedding)
+        fused, deep, _, upper, lower = self._extract_all_representations(crop, embedding)
 
         # Create initial view cluster and TargetIdentityAnchor
         initial_cluster = ViewCluster(
@@ -491,7 +491,7 @@ class IdentityManager:
         if ident is None or crop is None or crop.size == 0:
             return False
 
-        fused, deep, global_v, upper, lower = self._extract_all_representations(crop)
+        fused, deep, _, upper, lower = self._extract_all_representations(crop)
 
         # If trusted gallery is full, remove oldest to make room
         while len(ident.trusted_gallery) >= self.max_reference_samples:
@@ -579,7 +579,7 @@ class IdentityManager:
             logger.debug(f"[IDENTITY] Cross-camera viewpoint rejected for '{identity_id}': poor quality ({reason})")
             return False
 
-        fused, deep, global_v, upper, lower = self._extract_all_representations(crop)
+        fused, deep, _, upper, lower = self._extract_all_representations(crop)
 
         if ident.anchor is None:
             return False
@@ -734,7 +734,7 @@ class IdentityManager:
         is_valid, q_score, q_reason = self.quality.evaluate(crop)
 
         # Multi-crop feature extraction
-        fused_emb, deep_emb, global_emb, upper_emb, lower_emb = self._extract_all_representations(crop)
+        fused_emb, deep_emb, _, upper_emb, lower_emb = self._extract_all_representations(crop)
 
         # 1. Prototype & Gallery similarities
         proto_sim = ident.trusted_prototype.cosine_similarity(fused_emb) if (ident.trusted_prototype and ident.trusted_prototype.dim == fused_emb.dim) else 0.0
@@ -828,15 +828,6 @@ class IdentityManager:
             rejection_reasons=reasons,
         )
 
-    def verify_candidate_crop(
-        self,
-        crop: np.ndarray,
-        identity_id: str,
-    ) -> Tuple[bool, float]:
-        """Backward-compatible quick verification returning (is_match, score)."""
-        evaluation = self.evaluate_candidate_crop(crop, identity_id)
-        return evaluation.is_match, evaluation.candidate_score
-
     def rank_candidate_crops(
         self,
         candidate_crops: List[Tuple[Any, np.ndarray]],
@@ -856,39 +847,6 @@ class IdentityManager:
 
         evaluations.sort(key=lambda x: x[1], reverse=True)
         return evaluations
-
-    def find_best_candidate(
-        self,
-        candidates: List[Tuple[Any, np.ndarray]],
-        identity_id: str,
-    ) -> Tuple[Optional[Any], float, float, float]:
-        """
-        Finds the best matching candidate crop for a given identity.
-        Returns:
-            Tuple[best_candidate, best_score, second_best_score, margin]
-        """
-        if not candidates:
-            return None, 0.0, 0.0, 0.0
-
-        ranked = self.rank_candidate_crops(candidates, identity_id)
-        if not ranked:
-            return None, 0.0, 0.0, 0.0
-
-        best_cand, best_score, best_eval = ranked[0]
-        second_score = ranked[1][1] if len(ranked) > 1 else 0.0
-        margin = best_score - second_score
-
-        if not best_eval.is_match:
-            return None, best_score, second_score, margin
-
-        if len(ranked) > 1 and margin < self.min_margin:
-            logger.debug(
-                f"[IDENTITY] Candidate for '{identity_id}' rejected by margin: "
-                f"margin={margin:.3f} < min_margin={self.min_margin:.3f}"
-            )
-            return None, best_score, second_score, margin
-
-        return best_cand, best_score, second_score, margin
 
     def clear(self) -> None:
         self._identities.clear()

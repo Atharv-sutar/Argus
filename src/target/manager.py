@@ -225,15 +225,6 @@ class TargetManager:
         self._target.state = TargetState.SEARCHING
         return self._target
 
-    def mark_candidate(self, track: Track, frame_id: int, timestamp_ms: float) -> Target:
-        """Transitions target state to CANDIDATE when a potential match is found but unverified."""
-        self._target.track_id = track.track_id
-        self._target.last_known_box = track.box
-        self._target.last_seen_frame = frame_id
-        self._target.last_seen_timestamp_ms = timestamp_ms
-        self._target.lost_duration_ms = 0.0
-        self._target.state = TargetState.CANDIDATE
-        return self._target
 
     def mark_rejected(self, timestamp_ms: float) -> Target:
         """Transitions target state to REJECTED when verification fails."""
@@ -275,7 +266,6 @@ class TargetManager:
         frame_id: int,
         timestamp_ms: float,
         decision: Optional[VerifiedIdentityDecision] = None,
-        reid_verified: bool = False,
     ) -> bool:
         """
         Reassociates a lost/switched target with a new tracker ID.
