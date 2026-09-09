@@ -70,6 +70,7 @@ class IdentityManager:
         w_deep: float = 0.35,
         w_lower: float = 0.10,
         evidence_engine: Optional[EvidenceEngine] = None,
+        auto_add_threshold: Optional[float] = None,
     ) -> None:
         self.reid = reid_extractor
         self.vector_store = vector_store or InMemoryVectorStore()
@@ -87,7 +88,7 @@ class IdentityManager:
         self.w_color = w_color
         self.w_deep = w_deep
         self.w_lower = w_lower
-        self.auto_add_threshold = 0.85 # shim
+        self.auto_add_threshold = auto_add_threshold if auto_add_threshold is not None else similarity_threshold + 0.10
         self.evidence_engine = evidence_engine or EvidenceEngine(
             window_size=4,
             min_similarity_threshold=similarity_threshold,
@@ -248,17 +249,17 @@ class IdentityManager:
     def rollback_auto_entries(self, for_track_id: int) -> int:
         """
         Shim for TargetGallery.rollback_auto_entries. 
-        Clears the provisional gallery entirely.
+        Removes provisional entries belonging to the specified track.
         """
         ident = self.get_identity("target_0")
         if ident:
-            count = len(ident.provisional_gallery)
-            ident.provisional_gallery.clear()
-            # Clear provisional crops
-            keys_to_del = [k for k in self._entry_crops if "_provisional_" in k]
-            for k in keys_to_del:
-                self._entry_crops.pop(k, None)
-            return count
+            initial_count = len(ident.provisional_gallery)
+            ident.provisional_gallery = [
+                e for e in ident.provisional_gallery 
+                if not (isinstance(e, tuple) and e[1] == for_track_id)
+            ]
+            count_removed = initial_count - len(ident.provisional_gallery)
+            return count_removed
         return 0
 
     @property
@@ -289,7 +290,7 @@ class IdentityManager:
         man_mat = self._manual_matrix
         auto_mat = None
         if ident.provisional_gallery:
-            auto_mat = np.stack([e.vector for e in ident.provisional_gallery])
+            auto_mat = np.stack([e[0].vector if isinstance(e, tuple) else e.vector for e in ident.provisional_gallery])
             
         for emb in embs:
             man_sim = 0.0
@@ -335,18 +336,19 @@ class IdentityManager:
         if man_mat is not None and len(man_mat) > 0:
             m_sims = np.clip(np.dot(man_mat, embedding.vector), 0.0, 1.0)
             max_manual_sim = float(np.max(m_sims))
-            min_anchor = max(0.55, 0.75 - 0.05) # dummy match_threshold 0.75
+            min_anchor = max(0.55, self.similarity_threshold - 0.05)
             if max_manual_sim < min_anchor:
                 return False
 
         # Diversity check against recent provisional entries
         for prev_emb in ident.provisional_gallery[-5:]:
-            if prev_emb.dim == embedding.dim and prev_emb.cosine_similarity(embedding) > 0.96:
+            e = prev_emb[0] if isinstance(prev_emb, tuple) else prev_emb
+            if e.dim == embedding.dim and e.cosine_similarity(embedding) > 0.96:
                 return False
                 
         # Only add if it passes
         idx = len(ident.provisional_gallery)
-        ident.provisional_gallery.append(embedding)
+        ident.provisional_gallery.append((embedding, track_id))
         self._last_auto_add_ts = timestamp_ms if timestamp_ms > 0 else time.time() * 1000.0
         if crop is not None and crop.size > 0:
             self._entry_crops[f"{ident.identity_id}_provisional_{idx}"] = self._encode_crop_thumbnail(crop)
@@ -468,7 +470,8 @@ class IdentityManager:
             for r_emb in ident.trusted_gallery:
                 self.vector_store.add(r_emb, identity_id)
             for a_emb in ident.provisional_gallery:
-                self.vector_store.add(a_emb, identity_id)
+                e = a_emb[0] if isinstance(a_emb, tuple) else a_emb
+                self.vector_store.add(e, identity_id)
 
         return emb
 
@@ -519,7 +522,8 @@ class IdentityManager:
             self._entry_crops[f"{identity_id}_trusted_{idx}"] = self._encode_crop_thumbnail(crop)
 
         self.vector_store.add(fused, identity_id)
-        return True
+
+        q_score = self.quality.evaluate(crop) if crop is not None else 1.0
 
         # Update or add new view cluster in TargetIdentityAnchor
         if ident.anchor is not None:

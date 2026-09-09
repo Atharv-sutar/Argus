@@ -297,14 +297,13 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                                     frame_bytes = buf.tobytes()
 
                             if frame_bytes is not None:
-                                # Staleness detection: if the same JPEG has been served for >1.5s,
-                                # evict the pipeline cache to force a live camera read next iteration
-                                frame_id = id(frame_bytes)
-                                if frame_id != last_frame_id:
-                                    last_frame_id = frame_id
+                                # Staleness detection: using length as a simple robust hash
+                                frame_len = len(frame_bytes)
+                                if frame_len != last_frame_id:
+                                    last_frame_id = frame_len
                                     last_changed_time = time.time()
                                 elif time.time() - last_changed_time > 1.5:
-                                    # Force cache eviction so get_camera_frame_jpeg falls through to live read
+                                    # Force cache eviction so get_camera_frame_jpeg falls through to fallback
                                     if self.runtime_pipeline is not None:
                                         with self.runtime_pipeline._frame_lock:
                                             self.runtime_pipeline._latest_jpegs.pop(cam_id, None)
@@ -466,6 +465,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                             
                             event_data = {
                                 "active_camera": self.runtime_pipeline.active_camera_id,
+                                "topology_version": getattr(self.runtime_pipeline, "topology_version", 0),
                                 "target_state": getattr(self.runtime_pipeline, "target_state", "UNSELECTED"),
                                 "target_track_id": self.runtime_pipeline.target_manager.target.track_id if self.runtime_pipeline.target_manager.target else None,
                                 "transit_history": getattr(self.runtime_pipeline, "transit_history", []),

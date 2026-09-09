@@ -528,6 +528,16 @@ class SurveillanceApp {
         if (data.gallery) {
           this.refreshGallery(data.gallery);
         }
+        if (data.topology_version !== undefined && data.topology_version !== this._lastTopologyVersion) {
+          if (this._lastTopologyVersion !== undefined) {
+            console.log(`[SSE] Topology updated (v${data.topology_version}), reloading grids...`);
+            this.loadLiveMatrix();
+            if (this.currentMode === 'topology') {
+              this.loadGraphTopology();
+            }
+          }
+          this._lastTopologyVersion = data.topology_version;
+        }
       } catch (err) {
         console.error('[SSE] Parse error:', err);
       }
