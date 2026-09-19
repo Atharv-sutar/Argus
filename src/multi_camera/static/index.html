@@ -11,6 +11,20 @@
 </head>
 <body class="theme-dark">
   <div id="app" class="app-container">
+
+    <!-- Handoff Confirmation Overlay -->
+    <div id="handoff-overlay" class="overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center;">
+      <div class="handoff-modal" style="background: var(--bg-panel); padding: 20px; border-radius: 8px; border: 1px solid var(--border-color); text-align: center; max-width: 400px; margin: auto;">
+        <h3 style="margin-top: 0; color: var(--amber-glow);">Uncertain Handoff Detected</h3>
+        <p>Target candidate found on <strong id="handoff-cam-id"></strong> with similarity <strong id="handoff-sim"></strong>.</p>
+        <p>Please confirm if this is the target.</p>
+        <div style="display: flex; gap: 10px; justify-content: center; margin-top: 20px;">
+          <button id="btn-handoff-confirm" class="btn btn-primary">Confirm Match</button>
+          <button id="btn-handoff-reject" class="btn btn-danger">Reject Match</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Top Surveillance Command Header -->
     <header class="app-header">
       <div class="brand">

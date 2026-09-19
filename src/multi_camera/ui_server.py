@@ -507,6 +507,14 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                             gallery = self.runtime_pipeline.gallery
                             thumbnails = gallery.get_thumbnails(max_count=25)
                             
+                            
+                            pending_handoff = None
+                            if getattr(self.runtime_pipeline, "target_state", "UNSELECTED") == "UNCERTAIN":
+                                pending_handoff = {
+                                    "camera_id": getattr(self.runtime_pipeline, "_pending_handoff_cam", None),
+                                    "similarity": getattr(self.runtime_pipeline, "_pending_handoff_sim", 0.0)
+                                }
+                                
                             event_data = {
                                 "active_camera": self.runtime_pipeline.active_camera_id,
                                 "topology_version": getattr(self.runtime_pipeline, "topology_version", 0),
@@ -516,6 +524,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                                 "search_progress": progress.to_dict(),
                                 "camera_statuses": statuses,
                                 "candidate_scores": getattr(self.runtime_pipeline, "last_candidate_scores", {}),
+                                "pending_handoff": pending_handoff,
                                 "gallery": {
                                     "size": gallery.size,
                                     "max_size": gallery.max_size,

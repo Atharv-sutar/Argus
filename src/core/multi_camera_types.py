@@ -47,6 +47,14 @@ class SearchState(str, Enum):
     TIMEOUT = "timeout"        # Search exhausted without finding the target
 
 
+class HandoffDecision(str, Enum):
+    """Decision state for a handoff candidate."""
+    WAITING = "waiting"          # Need more frames to confirm
+    UNCERTAIN = "uncertain"      # Requires human confirmation
+    CONFIRMED = "confirmed"      # High confidence, auto-accept
+    REJECTED = "rejected"        # Match failed or human rejected
+
+
 @dataclass
 class CameraNodeConfig:
     """Static configuration for a single camera node in the topology graph."""

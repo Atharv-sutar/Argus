@@ -6,7 +6,7 @@ import logging
 from typing import Dict, List, Optional, Tuple
 
 from src.core.config import SearchConfig
-from src.core.multi_camera_types import SearchProgress, SearchState
+from src.core.multi_camera_types import SearchProgress, SearchState, HandoffDecision
 from src.multi_camera.camera_graph import CameraGraph
 from src.multi_camera.camera_priority import CameraPrioritizer
 from src.multi_camera.search_state import SearchStateManager
@@ -156,8 +156,8 @@ class SearchManager:
         return newly_activated if newly_activated else None
 
     def on_candidate_found(
-        self, camera_id: str, similarity: float
-    ) -> bool:
+        self, camera_id: str, similarity: float, uncertain_min: float = 0.73, auto_accept_min: float = 0.78
+    ) -> HandoffDecision:
         """
         Called when a ReID candidate is found on a camera.
 
@@ -169,7 +169,7 @@ class SearchManager:
             similarity: ReID similarity score.
 
         Returns:
-            True if the candidate is confirmed (handoff should proceed).
+            HandoffDecision indicating whether to wait, request human confirmation, or auto-accept.
         """
         count = self._state.record_candidate_confirmation(camera_id)
         logger.debug(
@@ -177,9 +177,14 @@ class SearchManager:
             f"confirmation {count}/{self._config.confirmation_frames}"
         )
         if count >= self._config.confirmation_frames:
-            self._state.mark_found(camera_id)
-            return True
-        return False
+            if similarity >= auto_accept_min:
+                self._state.mark_found(camera_id)
+                return HandoffDecision.CONFIRMED
+            elif similarity >= uncertain_min:
+                return HandoffDecision.UNCERTAIN
+            else:
+                return HandoffDecision.WAITING
+        return HandoffDecision.WAITING
 
     def on_candidate_lost(self, camera_id: str) -> None:
         """Called when a candidate fails ReID on a subsequent frame."""

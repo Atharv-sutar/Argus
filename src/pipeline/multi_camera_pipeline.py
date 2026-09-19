@@ -859,8 +859,11 @@ class MultiCameraPipeline:
                 if expansion is not None and len(expansion) > 0:
                     self._activate_search_cameras([cid for cid, _ in expansion])
                 elif expansion == []:
-                    logger.warning("[MULTI-CAM] Multi-camera search timed out without recovery.")
+                    logger.warning("[MULTI-CAM] Multi-camera search timed out without recovery. Target LOST_PERMANENTLY.")
+                    self.target_manager.target.state = TargetState.LOST_PERMANENTLY
                     self._deactivate_search_cameras()
+                    if self.playback_controller:
+                        self.playback_controller.pause()
 
         # 5. Process Search Cameras Main-Thread Logic
         candidate_recovered_cam = None
@@ -895,17 +898,37 @@ class MultiCameraPipeline:
                         track_res=track_res,
                         precomputed_candidates=precomp_cands
                     )
-                    if rec_track is not None and rec_sim >= self._reacquisition_threshold:
-                        confirmed = self.search_manager.on_candidate_found(cid, rec_sim)
-                        if confirmed:
-                            logger.info(f"[MULTI-CAM RECOVERY] Target CONFIRMED on '{cid}' (Track={rec_track.track_id}, sim={rec_sim:.3f}, reacq_thresh={self._reacquisition_threshold:.3f})")
+                    if rec_track is not None and rec_sim >= self.config.reid.uncertain_band_min:
+                        decision = self.search_manager.on_candidate_found(
+                            cid, 
+                            rec_sim, 
+                            uncertain_min=self.config.reid.uncertain_band_min, 
+                            auto_accept_min=self.config.reid.auto_add_threshold
+                        )
+                        if decision == HandoffDecision.CONFIRMED:
+                            logger.info(f"[MULTI-CAM RECOVERY] Target CONFIRMED on '{cid}' (Track={rec_track.track_id}, sim={rec_sim:.3f})")
                             candidate_recovered_cam = cid
                             candidate_recovered_track = rec_track
                             candidate_recovered_crop = rec_crop
                             candidate_recovered_emb = rec_emb
                             break
+                        elif decision == HandoffDecision.UNCERTAIN:
+                            logger.info(f"[MULTI-CAM RECOVERY] Handoff UNCERTAIN on '{cid}' (Track={rec_track.track_id}, sim={rec_sim:.3f}). Requesting human confirmation.")
+                            self.target_manager.target.state = TargetState.UNCERTAIN
+                            self.target_manager.target.last_known_box = rec_track.box
+                            # Store candidate details for UI
+                            self._pending_handoff_cam = cid
+                            self._pending_handoff_track = rec_track
+                            self._pending_handoff_crop = rec_crop
+                            self._pending_handoff_emb = rec_emb
+                            self._pending_handoff_sim = rec_sim
+                            
+                            # Pause playback if recorded mode
+                            if self.playback_controller:
+                                self.playback_controller.pause()
+                            break
                         else:
-                            logger.debug(f"[MULTI-CAM RECOVERY] Candidate sighting on '{cid}' (Track={rec_track.track_id}, sim={rec_sim:.3f}), confirming...")
+                            logger.debug(f"[MULTI-CAM RECOVERY] Candidate sighting on '{cid}' (Track={rec_track.track_id}, sim={rec_sim:.3f}), WAITING for more frames...")
                     else:
                         self.search_manager.on_candidate_lost(cid)
 
@@ -1744,6 +1767,47 @@ class MultiCameraPipeline:
         with self._pipeline_lock:
             self.restart_cameras()
             self._is_paused = False
+
+
+    def confirm_handoff(self) -> bool:
+        """Called by UI to explicitly confirm a pending handoff."""
+        if self.target_manager.target.state == TargetState.UNCERTAIN and getattr(self, '_pending_handoff_cam', None):
+            cid = self._pending_handoff_cam
+            track = self._pending_handoff_track
+            crop = self._pending_handoff_crop
+            emb = self._pending_handoff_emb
+            logger.info(f"[MULTI-CAM HANDOFF] Human CONFIRMED handoff to '{cid}' for Track #{track.track_id}")
+            self._perform_handoff(cid, track, crop, emb)
+            
+            # Clear pending states
+            self._pending_handoff_cam = None
+            self._pending_handoff_track = None
+            self._pending_handoff_crop = None
+            self._pending_handoff_emb = None
+            
+            if self.playback_controller:
+                self.playback_controller.play()
+            return True
+        return False
+
+    def reject_handoff(self) -> bool:
+        """Called by UI to reject a pending handoff."""
+        if self.target_manager.target.state == TargetState.UNCERTAIN and getattr(self, '_pending_handoff_cam', None):
+            cid = self._pending_handoff_cam
+            logger.info(f"[MULTI-CAM HANDOFF] Human REJECTED handoff to '{cid}'")
+            
+            self.target_manager.target.state = TargetState.SEARCHING
+            self.search_manager.on_candidate_lost(cid)
+            
+            self._pending_handoff_cam = None
+            self._pending_handoff_track = None
+            self._pending_handoff_crop = None
+            self._pending_handoff_emb = None
+            
+            if self.playback_controller:
+                self.playback_controller.play()
+            return True
+        return False
 
     def stop(self) -> None:
         """Stop all camera workers and release resources."""

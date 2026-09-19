@@ -52,6 +52,29 @@ class SurveillanceApp {
 
   initEvents() {
     // Mode Switch
+
+    const handoffOverlay = document.getElementById('handoff-overlay');
+    const btnHandoffConfirm = document.getElementById('btn-handoff-confirm');
+    const btnHandoffReject = document.getElementById('btn-handoff-reject');
+    
+    if (btnHandoffConfirm) {
+      btnHandoffConfirm.addEventListener('click', async () => {
+        try {
+          await fetch('/api/handoff/confirm', { method: 'POST' });
+          if(handoffOverlay) handoffOverlay.style.display = 'none';
+        } catch (err) { console.error('Handoff confirm error', err); }
+      });
+    }
+
+    if (btnHandoffReject) {
+      btnHandoffReject.addEventListener('click', async () => {
+        try {
+          await fetch('/api/handoff/reject', { method: 'POST' });
+          if(handoffOverlay) handoffOverlay.style.display = 'none';
+        } catch (err) { console.error('Handoff reject error', err); }
+      });
+    }
+
     document.getElementById('btn-mode-matrix').addEventListener('click', () => this.setMode('matrix'));
     document.getElementById('btn-mode-topology').addEventListener('click', () => this.setMode('topology'));
 
@@ -580,8 +603,33 @@ class SurveillanceApp {
       // Update Header HUD
       this.hdrActiveCam.textContent = st.active_camera || 'None';
 
-      this.hdrTargetState.textContent = this.targetState;
-      this.hdrTargetState.className = `chip-val chip-badge state-${this.targetState.toLowerCase()}`;
+      if (this.targetState === 'LOST_PERMANENTLY') {
+        this.hdrTargetState.textContent = 'TARGET LOST';
+        this.hdrTargetState.className = `chip-val chip-badge state-lost-perm`;
+        this.hdrTargetState.style.background = 'var(--red-glow)';
+        this.hdrTargetState.style.color = '#fff';
+      } else {
+        this.hdrTargetState.textContent = this.targetState;
+        this.hdrTargetState.className = `chip-val chip-badge state-${this.targetState.toLowerCase()}`;
+        this.hdrTargetState.style.background = '';
+        this.hdrTargetState.style.color = '';
+      }
+
+      // Handle Handoff Confirmation Overlay
+      const handoffOverlay = document.getElementById('handoff-overlay');
+      const handoffCamId = document.getElementById('handoff-cam-id');
+      const handoffSim = document.getElementById('handoff-sim');
+      if (this.targetState === 'UNCERTAIN' && st.pending_handoff) {
+        if (handoffOverlay) {
+          handoffOverlay.style.display = 'flex';
+          if (handoffCamId) handoffCamId.textContent = st.pending_handoff.camera_id;
+          if (handoffSim) handoffSim.textContent = st.pending_handoff.similarity.toFixed(2);
+        }
+      } else {
+        if (handoffOverlay) {
+          handoffOverlay.style.display = 'none';
+        }
+      }
 
       const rad = st.search_progress ? st.search_progress.search_radius : 0;
       const searchSt = st.search_progress ? st.search_progress.state.toUpperCase() : 'IDLE';
