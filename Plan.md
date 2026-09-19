@@ -515,14 +515,13 @@ Playback is explicitly paused on uncertain handoff and total timeout, providing 
 
 ---
 
-## Phase 5 — Scalable Camera Management UI
+## Phase 5 — Scalable Camera Management UI ✅ COMPLETED
 
 > **Priority: MEDIUM.** Current topology editing is congested for 50+ cameras.
 
 ### Plan
 
 #### 5.1 — Batch camera detection
-
 Instead of probing one device at a time:
 - Add "Scan Range" controls: start index, end index, max concurrent probes
 - Show results in a paginated table, not a flat list
@@ -530,16 +529,13 @@ Instead of probing one device at a time:
 - For RTSP cameras: add a "Bulk Import" that accepts a CSV or text list of RTSP URLs with labels
 
 #### 5.2 — Camera grouping by floor/zone
-
 Extend the `CameraNodeConfig` to support:
 - `floor: str` (e.g., "Ground Floor", "Floor 2")
 - `zone: str` (e.g., "East Wing", "Parking")
 - `group: str` (optional, for arbitrary grouping)
-
 The topology map should allow filtering by floor/zone/group so that the operator only sees a subset at a time.
 
 #### 5.3 — Search and filter in topology editor
-
 Add a search bar in the topology editor that filters cameras by:
 - Name (partial match)
 - Camera ID
@@ -548,16 +544,13 @@ Add a search bar in the topology editor that filters cameras by:
 - Status (online/offline/standby)
 
 #### 5.4 — Camera list view (alternative to map)
-
 For large deployments, the spatial map becomes unmanageable. Add an alternative **list/table view**:
 - Sortable columns: Name, ID, Floor, Zone, Source, Status, FPS
 - Quick-action buttons: Enable/Disable, Preview, Edit, Delete
 - Bulk operations: select multiple cameras → enable/disable/delete
-
 The map view remains available for spatial layout, but the list view is the default for >10 cameras.
 
 #### 5.5 — Camera preview during topology editing
-
 When adding a camera to the topology, show a live preview thumbnail:
 - Small 320×180 snapshot from the camera
 - Updates every 2 seconds
@@ -578,6 +571,13 @@ When adding a camera to the topology, show a live preview thumbnail:
 - Cameras can be filtered, searched, and bulk-managed
 - RTSP cameras can be imported in bulk
 - Camera preview is available during topology editing
+
+### Phase 5 Reflection
+We introduced scalable camera management tools to the frontend and backend.
+We added `floor`, `zone`, `group` metadata to `CameraNodeConfig` and `CameraGraph`.
+The frontend topology UI now features a toggleable list view, a bulk import API capable of ingesting multiple RTSP endpoints from copy/pasted text, and a search/filter bar to locate cameras by name, ID, zone, and floor.
+The inspector sidebar was modified to show a live stream preview (`/api/preview`) for easy camera identification, and the discovery module was enhanced to scan specific URL/index ranges. Batch selection checkboxes allow enabling/disabling/deleting cameras simultaneously.
+
 
 ---
 
