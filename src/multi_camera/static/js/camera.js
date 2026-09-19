@@ -63,12 +63,20 @@ class CameraManager {
     if (this.app && this.app._isShuttingDown) return;
     const btn1 = document.getElementById('btn-discover');
     const btn2 = document.getElementById('btn-discover-toolbar');
+    
+    let startIdx = 0;
+    let endIdx = 4;
+    const startInput = document.getElementById('discover-start');
+    const endInput = document.getElementById('discover-end');
+    if (startInput) startIdx = parseInt(startInput.value, 10);
+    if (endInput) endIdx = parseInt(endInput.value, 10);
+
     if (btn1) { btn1.disabled = true; btn1.textContent = 'Scanning...'; }
     if (btn2) { btn2.disabled = true; }
 
     this.listEl.innerHTML = '<div class="empty-state"><span class="spinner"></span> Scanning video capture devices...</div>';
     try {
-      const data = await API.discoverCameras();
+      const data = await API.discoverCameras(startIdx, endIdx);
       if (this.app && this.app._isShuttingDown) return;
       this.discoveredCameras = data.cameras || [];
       this.renderList();

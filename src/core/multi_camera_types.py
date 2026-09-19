@@ -67,6 +67,7 @@ class CameraNodeConfig:
     position_y: float = 0.0  # Logical Y position on the map canvas
     floor: Optional[str] = None
     zone: Optional[str] = None
+    group: Optional[str] = None
     description: Optional[str] = None
 
     def to_dict(self) -> dict:
@@ -80,6 +81,7 @@ class CameraNodeConfig:
             "position_y": self.position_y,
             "floor": self.floor,
             "zone": self.zone,
+            "group": self.group,
             "description": self.description,
         }
 
@@ -116,6 +118,7 @@ class CameraNodeConfig:
             position_y=float(data.get("position_y", 0.0) or 0.0),
             floor=data.get("floor"),
             zone=data.get("zone"),
+            group=data.get("group"),
             description=data.get("description"),
         )
 

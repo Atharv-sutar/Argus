@@ -78,6 +78,128 @@ class SurveillanceApp {
     document.getElementById('btn-mode-matrix').addEventListener('click', () => this.setMode('matrix'));
     document.getElementById('btn-mode-topology').addEventListener('click', () => this.setMode('topology'));
 
+    // Bulk Import RTSP
+    const btnBulkImportOpen = document.getElementById('btn-bulk-import-open');
+    const bulkImportOverlay = document.getElementById('bulk-import-overlay');
+    const btnBulkImportCancel = document.getElementById('btn-bulk-import-cancel');
+    const btnBulkImportSubmit = document.getElementById('btn-bulk-import-submit');
+    const bulkImportData = document.getElementById('bulk-import-data');
+
+    if (btnBulkImportOpen) {
+      btnBulkImportOpen.addEventListener('click', () => {
+        if (bulkImportOverlay) bulkImportOverlay.style.display = 'flex';
+      });
+    }
+    if (btnBulkImportCancel) {
+      btnBulkImportCancel.addEventListener('click', () => {
+        if (bulkImportOverlay) bulkImportOverlay.style.display = 'none';
+      });
+    }
+    if (btnBulkImportSubmit) {
+      btnBulkImportSubmit.addEventListener('click', async () => {
+        btnBulkImportSubmit.disabled = true;
+        try {
+          const res = await API.bulkImportCameras(bulkImportData.value);
+          if (res.success) {
+            this.showToast(`Imported ${res.imported} cameras successfully!`, 'success');
+            bulkImportData.value = '';
+            if (bulkImportOverlay) bulkImportOverlay.style.display = 'none';
+            // Refresh graph
+            const graphData = await API.getGraph();
+            if (this.graphCanvas) {
+              this.graphCanvas.loadGraph(graphData);
+            }
+            this.refreshListView(graphData);
+          }
+        } catch (err) {
+          this.showToast(`Bulk import error: ${err.message}`, 'error');
+        } finally {
+          btnBulkImportSubmit.disabled = false;
+        }
+      });
+    }
+
+    // Map/List View Toggle
+    const btnMap = document.getElementById('btn-topo-map');
+    const btnList = document.getElementById('btn-topo-list');
+    const canvasEl = document.getElementById('graph-canvas');
+    const listEl = document.getElementById('topo-list-view');
+
+    if (btnMap && btnList) {
+      btnMap.addEventListener('click', () => {
+        btnMap.classList.add('active');
+        btnList.classList.remove('active');
+        if (canvasEl) canvasEl.style.display = 'block';
+        if (listEl) listEl.style.display = 'none';
+      });
+      btnList.addEventListener('click', async () => {
+        btnList.classList.add('active');
+        btnMap.classList.remove('active');
+        if (canvasEl) canvasEl.style.display = 'none';
+        if (listEl) listEl.style.display = 'block';
+        
+        const graphData = await API.getGraph();
+        this.refreshListView(graphData);
+      });
+    }
+    
+    // Search/Filter for List View
+    const topoSearch = document.getElementById('topo-search-input');
+    const topoFilterZone = document.getElementById('topo-filter-zone');
+    const topoFilterFloor = document.getElementById('topo-filter-floor');
+    const updateList = async () => {
+        const graphData = await API.getGraph();
+        this.refreshListView(graphData);
+    };
+    if (topoSearch) topoSearch.addEventListener('input', updateList);
+    if (topoFilterZone) topoFilterZone.addEventListener('change', updateList);
+    if (topoFilterFloor) topoFilterFloor.addEventListener('change', updateList);
+
+    // List batch actions
+    const btnEnableSel = document.getElementById('btn-list-enable-selected');
+    const btnDisableSel = document.getElementById('btn-list-disable-selected');
+    const btnDelSel = document.getElementById('btn-list-delete-selected');
+    const selectAllCheckbox = document.getElementById('list-select-all');
+
+    if (selectAllCheckbox) {
+      selectAllCheckbox.addEventListener('change', (e) => {
+        const checkboxes = document.querySelectorAll('.list-item-checkbox');
+        checkboxes.forEach(cb => cb.checked = e.target.checked);
+      });
+    }
+
+    const performBatchAction = async (action) => {
+      if (!this.graphCanvas) return;
+      const checkboxes = document.querySelectorAll('.list-item-checkbox:checked');
+      if (checkboxes.length === 0) return;
+      
+      const ids = Array.from(checkboxes).map(cb => cb.dataset.id);
+      
+      this.graphCanvas.nodes.forEach(node => {
+        if (ids.includes(node.camera_id)) {
+          if (action === 'enable') node.enabled = true;
+          if (action === 'disable') node.enabled = false;
+        }
+      });
+      if (action === 'delete') {
+        this.graphCanvas.nodes = this.graphCanvas.nodes.filter(n => !ids.includes(n.camera_id));
+        this.graphCanvas.edges = this.graphCanvas.edges.filter(e => !ids.includes(e.source) && !ids.includes(e.target));
+      }
+      
+      try {
+        await API.saveGraph(this.graphCanvas.toJSON());
+        this.showToast(`Batch ${action} completed`, 'success');
+        this.refreshListView(this.graphCanvas.toJSON());
+      } catch (err) {
+        this.showToast(`Batch error: ${err.message}`, 'error');
+      }
+    };
+
+    if (btnEnableSel) btnEnableSel.addEventListener('click', () => performBatchAction('enable'));
+    if (btnDisableSel) btnDisableSel.addEventListener('click', () => performBatchAction('disable'));
+    if (btnDelSel) btnDelSel.addEventListener('click', () => performBatchAction('delete'));
+
+
     // Grid Layout Buttons
     document.querySelectorAll('.grid-btn').forEach((btn) => {
       btn.addEventListener('click', (e) => {
@@ -210,6 +332,69 @@ class SurveillanceApp {
         this.safeQuit();
       }
     });
+  }
+
+
+  refreshListView(graphData) {
+    const tbody = document.getElementById('topo-list-tbody');
+    const searchInput = document.getElementById('topo-search-input');
+    const filterZone = document.getElementById('topo-filter-zone');
+    const filterFloor = document.getElementById('topo-filter-floor');
+    
+    if (!tbody || !graphData || !graphData.cameras) return;
+    
+    const query = (searchInput ? searchInput.value.toLowerCase() : '');
+    const selZone = (filterZone ? filterZone.value : '');
+    const selFloor = (filterFloor ? filterFloor.value : '');
+    
+    let zones = new Set();
+    let floors = new Set();
+    
+    let cameras = graphData.cameras.filter(c => {
+      if (c.zone) zones.add(c.zone);
+      if (c.floor) floors.add(c.floor);
+      
+      if (selZone && c.zone !== selZone) return false;
+      if (selFloor && c.floor !== selFloor) return false;
+      if (query && !c.name.toLowerCase().includes(query) && !c.camera_id.toLowerCase().includes(query)) return false;
+      return true;
+    });
+    
+    // Populate dropdowns if empty
+    if (filterZone && filterZone.options.length <= 1) {
+      zones.forEach(z => filterZone.add(new Option(z, z)));
+    }
+    if (filterFloor && filterFloor.options.length <= 1) {
+      floors.forEach(f => filterFloor.add(new Option(f, f)));
+    }
+    
+    tbody.innerHTML = cameras.map(c => `
+      <tr style="border-bottom: 1px solid var(--border-color); background: ${c.enabled ? 'transparent' : 'rgba(255,0,0,0.05)'}">
+        <td style="padding: 8px;"><input type="checkbox" class="list-item-checkbox" data-id="${c.camera_id}"></td>
+        <td style="padding: 8px; font-family: monospace;">${c.camera_id}</td>
+        <td style="padding: 8px;">${c.name} ${c.enabled ? '' : '<span style="color:var(--red-glow); font-size:10px;">(DISABLED)</span>'}</td>
+        <td style="padding: 8px;">${c.source_type}</td>
+        <td style="padding: 8px; font-size: 11px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${c.source}">${c.source}</td>
+        <td style="padding: 8px;">${c.floor || '-'} / ${c.zone || '-'}</td>
+        <td style="padding: 8px;">
+          <button class="btn btn-secondary btn-xs" onclick="window.app.toggleCameraState('${c.camera_id}')">${c.enabled ? 'Disable' : 'Enable'}</button>
+        </td>
+      </tr>
+    `).join('');
+  }
+  
+  async toggleCameraState(cameraId) {
+    if (!this.graphCanvas) return;
+    const node = this.graphCanvas.nodes.find(n => n.camera_id === cameraId);
+    if (node) {
+      node.enabled = !node.enabled;
+      try {
+        await API.saveGraph(this.graphCanvas.toJSON());
+        this.refreshListView(this.graphCanvas.toJSON());
+      } catch (err) {
+        this.showToast(`Failed to toggle: ${err.message}`, 'error');
+      }
+    }
   }
 
   async safeQuit() {

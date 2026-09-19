@@ -96,7 +96,8 @@ def _probe_single_device(idx: int) -> Optional[Dict[str, Any]]:
 
 
 def probe_local_webcams(
-    max_indices: int = 4,
+    start_index: int = 0,
+    end_index: int = 4,
     pipeline: Any = None,
     timeout_per_index: float = 1.5,
 ) -> List[Dict[str, Any]]:
@@ -109,7 +110,7 @@ def probe_local_webcams(
 
     cameras: List[Dict[str, Any]] = []
     t_start = time.time()
-    logger.info(f"[TOPOLOGY/PROBE] Starting hardware camera probe (indices 0..{max_indices - 1})...")
+    logger.info(f"[TOPOLOGY/PROBE] Starting hardware camera probe (indices {start_index}..{end_index - 1})...")
 
     in_use_indices = set()
     if pipeline is not None and getattr(pipeline, "_nodes", None):
@@ -121,7 +122,7 @@ def probe_local_webcams(
                     pass
 
     if cv2 is not None and not _SHUTDOWN_EVENT.is_set():
-        for idx in range(max_indices):
+        for idx in range(start_index, end_index):
             if _SHUTDOWN_EVENT.is_set():
                 break
             
@@ -222,8 +223,10 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
 
             # --- REST Endpoints ---
             if path == "/api/cameras/discover":
-                logger.info(f"[TOPOLOGY/DISCOVERY] [GET /api/cameras/discover] Hardware scan initiated from {self.address_string()}")
-                webcams = probe_local_webcams(pipeline=self.runtime_pipeline)
+                start_idx = int(query.get("start", ["0"])[0])
+                end_idx = int(query.get("end", ["4"])[0])
+                logger.info(f"[TOPOLOGY/DISCOVERY] [GET /api/cameras/discover] Hardware scan initiated (indices {start_idx}-{end_idx}) from {self.address_string()}")
+                webcams = probe_local_webcams(start_index=start_idx, end_index=end_idx, pipeline=self.runtime_pipeline)
                 logger.info(f"[TOPOLOGY/DISCOVERY] Returning {len(webcams)} discovered camera(s) to {self.address_string()}")
                 self._send_json({"cameras": webcams})
                 return

@@ -12,6 +12,20 @@
 <body class="theme-dark">
   <div id="app" class="app-container">
 
+
+    <!-- Bulk Import RTSP Modal -->
+    <div id="bulk-import-overlay" class="overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center;">
+      <div class="handoff-modal" style="background: var(--bg-panel); padding: 20px; border-radius: 8px; border: 1px solid var(--border-color); width: 600px; max-width: 90%;">
+        <h3 style="margin-top: 0;">Bulk Import RTSP Cameras</h3>
+        <p>Format: <code>rtsp://url, Display Name</code> (one per line)</p>
+        <textarea id="bulk-import-data" rows="10" style="width: 100%; background: var(--bg-dark); color: #fff; border: 1px solid var(--border-color); padding: 10px; font-family: monospace;" placeholder="rtsp://10.0.0.1/stream1, Entrance\nrtsp://10.0.0.2/stream2, Corridor A"></textarea>
+        <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 15px;">
+          <button id="btn-bulk-import-cancel" class="btn btn-secondary">Cancel</button>
+          <button id="btn-bulk-import-submit" class="btn btn-primary">Import Cameras</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Handoff Confirmation Overlay -->
     <div id="handoff-overlay" class="overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center;">
       <div class="handoff-modal" style="background: var(--bg-panel); padding: 20px; border-radius: 8px; border: 1px solid var(--border-color); text-align: center; max-width: 400px; margin: auto;">
@@ -184,8 +198,12 @@
               <span class="legend-item"><span class="edge-sample edge-travel"></span> Travel</span>
             </div>
 
-            <div class="canvas-actions">
-              <button id="btn-discover-toolbar" class="btn btn-secondary btn-sm" title="Probe and detect connected local webcams">🔍 Detect Cameras</button>
+            <div class="canvas-actions" style="display: flex; align-items: center; gap: 10px;">
+              <div class="view-switch" style="margin-right: 15px;">
+                <button id="btn-topo-map" class="mode-btn active">Map View</button>
+                <button id="btn-topo-list" class="mode-btn">List View</button>
+              </div>
+              <button id="btn-bulk-import-open" class="btn btn-secondary btn-sm" title="Bulk Import RTSP">📦 Bulk Import</button>
               <button id="btn-validate" class="btn btn-secondary btn-sm">Validate</button>
               <button id="btn-save" class="btn btn-primary btn-sm">Save Topology</button>
             </div>
@@ -229,10 +247,16 @@
               <div class="topo-card">
                 <div class="topo-card-header">
                   <h4>LOCAL DISCOVERY</h4>
-                  <button id="btn-discover" class="btn btn-secondary btn-xs">Probe Webcams</button>
                 </div>
-                <div id="discovered-list" class="discovered-list">
-                  <div class="empty-state">Click 'Probe Webcams' to detect connected USB/webcams</div>
+                <div style="display: flex; gap: 5px; margin-bottom: 10px; align-items: center;">
+                  <label style="font-size: 11px;">Range:</label>
+                  <input type="number" id="discover-start" value="0" min="0" max="20" style="width: 40px; padding: 2px;">
+                  <span style="font-size: 11px;">to</span>
+                  <input type="number" id="discover-end" value="4" min="1" max="20" style="width: 40px; padding: 2px;">
+                  <button id="btn-discover" class="btn btn-secondary btn-xs" style="margin-left: auto;">Probe</button>
+                </div>
+                <div id="discovered-list" class="discovered-list" style="max-height: 150px; overflow-y: auto;">
+                  <div class="empty-state">Click 'Probe' to detect connected USB/webcams</div>
                 </div>
                 <div class="preview-box">
                   <img id="preview-image" style="display: none;" alt="Preview">
@@ -258,6 +282,26 @@
                     <div class="form-row">
                       <label>Display Name</label>
                       <input type="text" id="prop-cam-name" required>
+                    </div>
+                    <div class="form-row">
+                      <label>Floor</label>
+                      <input type="text" id="prop-cam-floor" placeholder="Floor 1">
+                    </div>
+                    <div class="form-row">
+                      <label>Zone</label>
+                      <input type="text" id="prop-cam-zone" placeholder="East Wing">
+                    </div>
+                    <div class="form-row">
+                      <label>Group</label>
+                      <input type="text" id="prop-cam-group" placeholder="Indoor">
+                    </div>
+                    <div class="form-row" style="margin-top: 10px; margin-bottom: 10px;">
+                      <label>Live Preview</label>
+                      <div class="preview-box">
+                        <img id="inspector-preview-image" style="display: none;" alt="Preview">
+                        <div id="inspector-preview-placeholder" class="preview-placeholder">Camera Preview</div>
+                        <div id="inspector-preview-info"></div>
+                      </div>
                     </div>
                     <div class="form-row">
                       <label>Source Type</label>
@@ -310,10 +354,46 @@
               </div>
             </aside>
 
+
             <!-- Main Canvas Container -->
             <div id="canvas-container" class="canvas-container">
+              <div id="topo-search-bar" style="position: absolute; top: 10px; left: 10px; z-index: 10; display: flex; gap: 5px; background: rgba(0,0,0,0.6); padding: 5px; border-radius: 4px;">
+                <input type="text" id="topo-search-input" placeholder="Search cameras..." style="padding: 5px; border: 1px solid var(--border-color); background: var(--bg-dark); color: #fff; width: 200px;">
+                <select id="topo-filter-zone" style="padding: 5px; border: 1px solid var(--border-color); background: var(--bg-dark); color: #fff;">
+                  <option value="">All Zones</option>
+                </select>
+                <select id="topo-filter-floor" style="padding: 5px; border: 1px solid var(--border-color); background: var(--bg-dark); color: #fff;">
+                  <option value="">All Floors</option>
+                </select>
+              </div>
+              
               <canvas id="graph-canvas"></canvas>
+              
+              <div id="topo-list-view" style="display: none; position: absolute; top: 50px; left: 10px; right: 10px; bottom: 10px; background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 4px; overflow: auto; padding: 10px; z-index: 5;">
+                <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                  <button id="btn-list-enable-selected" class="btn btn-secondary btn-sm">Enable Selected</button>
+                  <button id="btn-list-disable-selected" class="btn btn-secondary btn-sm">Disable Selected</button>
+                  <button id="btn-list-delete-selected" class="btn btn-danger btn-sm">Delete Selected</button>
+                </div>
+                <table style="width: 100%; border-collapse: collapse; text-align: left;">
+                  <thead>
+                    <tr style="border-bottom: 1px solid var(--border-color);">
+                      <th style="padding: 8px;"><input type="checkbox" id="list-select-all"></th>
+                      <th style="padding: 8px;">ID</th>
+                      <th style="padding: 8px;">Name</th>
+                      <th style="padding: 8px;">Type</th>
+                      <th style="padding: 8px;">Source</th>
+                      <th style="padding: 8px;">Status</th>
+                      <th style="padding: 8px;">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="topo-list-tbody">
+                    <!-- Populated by JS -->
+                  </tbody>
+                </table>
+              </div>
             </div>
+
           </div>
         </section>
 
