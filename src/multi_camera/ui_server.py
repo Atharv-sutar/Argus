@@ -88,6 +88,8 @@ def _probe_single_device(idx: int) -> Optional[Dict[str, Any]]:
         if cap is not None:
             try:
                 cap.release()
+                if sys.platform.startswith("win"):
+                    time.sleep(0.2)
             except Exception:
                 pass
     return None
@@ -100,8 +102,7 @@ def probe_local_webcams(
 ) -> List[Dict[str, Any]]:
     """
     Safe sequential probe of local webcam devices with timeout per index.
-    If a pipeline is active, safely pauses processing and releases camera handles first so that
-    DirectShow on Windows can probe devices without access conflict, then restores pipeline cameras.
+    Skips indices already in use by the live pipeline to prevent flickering.
     """
     if _SHUTDOWN_EVENT.is_set():
         return []
@@ -110,48 +111,42 @@ def probe_local_webcams(
     t_start = time.time()
     logger.info(f"[TOPOLOGY/PROBE] Starting hardware camera probe (indices 0..{max_indices - 1})...")
 
-    # 1. If pipeline is running, safely pause processing and release cameras during probe
-    was_pipeline_active = False
-    if pipeline is not None and hasattr(pipeline, "pause_processing") and not _SHUTDOWN_EVENT.is_set():
-        was_pipeline_active = True
-        try:
-            logger.info("[TOPOLOGY/PROBE] Pausing pipeline processing to release DirectShow camera handles...")
-            pipeline.pause_processing()
-            time.sleep(0.15)  # brief pause for OS to release DirectShow handles
-        except Exception as e:
-            logger.warning(f"[TOPOLOGY/PROBE] Error pausing pipeline for probe: {e}")
+    in_use_indices = set()
+    if pipeline is not None and getattr(pipeline, "_nodes", None):
+        for node in pipeline._nodes.values():
+            if node.config.enabled and node.config.source_type.value == "webcam":
+                try:
+                    in_use_indices.add(int(node.config.source))
+                except ValueError:
+                    pass
 
     if cv2 is not None and not _SHUTDOWN_EVENT.is_set():
-        try:
-            executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_indices)
-            for idx in range(max_indices):
-                if _SHUTDOWN_EVENT.is_set():
-                    break
-                try:
-                    future = executor.submit(_probe_single_device, idx)
-                    res = future.result(timeout=timeout_per_index)
-                    if res is not None:
-                        cameras.append(res)
-                except concurrent.futures.TimeoutError:
-                    logger.warning(f"[TOPOLOGY/PROBE] Webcam index {idx} probe timed out after {timeout_per_index}s (skipped)")
-                except (RuntimeError, concurrent.futures.CancelledError):
-                    break
-                except Exception as e:
-                    logger.debug(f"[TOPOLOGY/PROBE] Error probing index {idx}: {e}")
-            executor.shutdown(wait=False)
-        except (RuntimeError, concurrent.futures.CancelledError):
-            pass
+        for idx in range(max_indices):
+            if _SHUTDOWN_EVENT.is_set():
+                break
+            
+            if idx in in_use_indices:
+                logger.info(f"[TOPOLOGY/PROBE] Skipping index {idx} (already in use by active pipeline)")
+                cameras.append({
+                    "source": idx,
+                    "name": f"Webcam {idx} (In Use)",
+                    "source_type": "webcam",
+                    "width": 640,
+                    "height": 480,
+                    "fps": 30,
+                    "status": "in_use",
+                })
+                continue
+                
+            try:
+                res = _probe_single_device(idx)
+                if res is not None:
+                    cameras.append(res)
+            except Exception as e:
+                logger.debug(f"[TOPOLOGY/PROBE] Error probing index {idx}: {e}")
 
         # Sort discovered cameras by source index
         cameras.sort(key=lambda c: str(c["source"]))
-
-    # 2. Restore pipeline cameras if they were active and shutdown not requested
-    if was_pipeline_active and pipeline is not None and hasattr(pipeline, "resume_processing") and not _SHUTDOWN_EVENT.is_set():
-        try:
-            logger.info("[TOPOLOGY/PROBE] Resuming pipeline processing and restoring camera workers...")
-            pipeline.resume_processing()
-        except Exception as e:
-            logger.warning(f"[TOPOLOGY/PROBE] Error resuming pipeline after probe: {e}")
 
     total_elapsed = time.time() - t_start
     cam_names = [c["name"] for c in cameras]
@@ -287,8 +282,9 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                         last_frame_id = None
                         last_changed_time = time.time()
                         while not _SHUTDOWN_EVENT.is_set() and (self.runtime_pipeline is None or getattr(self.runtime_pipeline, "is_running", True)):
-                            frame_bytes = None
+                            frame_seq = None
                             if self.runtime_pipeline is not None:
+                                frame_seq = getattr(self.runtime_pipeline, "get_camera_frame_seq", lambda c: None)(cam_id)
                                 frame_bytes = self.runtime_pipeline.get_camera_frame_jpeg(cam_id, quality=75)
 
                             if frame_bytes is None:
@@ -299,17 +295,18 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                                     frame_bytes = buf.tobytes()
 
                             if frame_bytes is not None:
-                                # Staleness detection: using length as a simple robust hash
-                                frame_len = len(frame_bytes)
-                                if frame_len != last_frame_id:
-                                    last_frame_id = frame_len
+                                # Staleness detection: using sequence number or length fallback
+                                current_id = frame_seq if frame_seq is not None else len(frame_bytes)
+                                if current_id != last_frame_id:
+                                    last_frame_id = current_id
                                     last_changed_time = time.time()
-                                elif time.time() - last_changed_time > 1.5:
-                                    # Force cache eviction so get_camera_frame_jpeg falls through to fallback
-                                    if self.runtime_pipeline is not None:
-                                        with self.runtime_pipeline._frame_lock:
-                                            self.runtime_pipeline._latest_jpegs.pop(cam_id, None)
-                                    last_changed_time = time.time()  # reset to avoid spamming evictions
+                                elif time.time() - last_changed_time > 2.0:
+                                    # Render STALE overlay
+                                    if cv2 is not None and np is not None:
+                                        blank = np.zeros((360, 640, 3), dtype=np.uint8)
+                                        cv2.putText(blank, f"STALE - RECONNECTING [{cam_id}]", (120, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
+                                        _, buf = cv2.imencode(".jpg", blank, [cv2.IMWRITE_JPEG_QUALITY, 50])
+                                        frame_bytes = buf.tobytes()
 
                                 header = (
                                     b"--frame\r\n"

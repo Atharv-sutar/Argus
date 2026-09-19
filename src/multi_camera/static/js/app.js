@@ -302,19 +302,27 @@ class SurveillanceApp {
 
       let tileClass = 'camera-tile';
       let badgeClass = 'badge-standby';
-      let badgeText = cam.status || 'STANDBY';
+      let badgeText = '⏸️ STANDBY';
 
-      if (isAct) {
+      const camStatus = cam.status ? cam.status.toUpperCase() : 'UNKNOWN';
+
+      if (!cam.enabled || camStatus === 'OFFLINE' || camStatus === 'ERROR') {
+        badgeClass = 'badge-offline';
+        badgeText = '🔴 OFFLINE';
+      } else if (isAct) {
         tileClass += ' tile-active';
         badgeClass = 'badge-active';
-        badgeText = 'ACTIVE FOCUS';
+        badgeText = '🟢 ACTIVE FOCUS';
       } else if (isSearch) {
         tileClass += ' tile-searching';
         badgeClass = 'badge-searching';
-        badgeText = 'SEARCHING';
-      } else if (!cam.enabled) {
-        badgeClass = 'badge-offline';
-        badgeText = 'DISABLED';
+        badgeText = '🟡 SEARCHING';
+      } else if (camStatus === 'ONLINE') {
+        badgeClass = 'badge-standby';
+        badgeText = '🟢 LIVE (STANDBY)';
+      } else if (camStatus === 'CONNECTING') {
+        badgeClass = 'badge-searching';
+        badgeText = '🟡 CONNECTING';
       }
 
       const streamUrl = `${API.getCameraStreamUrl(cam.camera_id)}?t=${Date.now()}`;
@@ -625,18 +633,29 @@ class SurveillanceApp {
           const isAct = (cam.camera_id === st.active_camera);
           const isSearch = searchingCams.has(cam.camera_id);
 
+          const camStatus = (st.camera_statuses && st.camera_statuses[cam.camera_id]) ? st.camera_statuses[cam.camera_id].toUpperCase() : 'UNKNOWN';
+
           tile.classList.toggle('tile-active', isAct);
           tile.classList.toggle('tile-searching', !isAct && isSearch);
 
-          if (isAct) {
+          if (!cam.enabled || camStatus === 'OFFLINE' || camStatus === 'ERROR') {
+            badge.className = 'tile-cam-badge badge-offline';
+            badge.textContent = '🔴 OFFLINE';
+          } else if (isAct) {
             badge.className = 'tile-cam-badge badge-active';
-            badge.textContent = 'ACTIVE FOCUS';
+            badge.textContent = '🟢 ACTIVE FOCUS';
           } else if (isSearch) {
             badge.className = 'tile-cam-badge badge-searching';
-            badge.textContent = `SEARCHING (R=${rad})`;
+            badge.textContent = `🟡 SEARCHING (R=${rad})`;
+          } else if (camStatus === 'ONLINE') {
+            badge.className = 'tile-cam-badge badge-standby';
+            badge.textContent = '🟢 LIVE (STANDBY)';
+          } else if (camStatus === 'CONNECTING') {
+            badge.className = 'tile-cam-badge badge-searching';
+            badge.textContent = '🟡 CONNECTING';
           } else {
             badge.className = 'tile-cam-badge badge-standby';
-            badge.textContent = 'STANDBY';
+            badge.textContent = '⏸️ STANDBY';
           }
         });
       }

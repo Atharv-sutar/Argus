@@ -322,6 +322,13 @@ class MultiCameraPipeline:
     def get_search_progress(self) -> SearchProgress:
         return self.search_manager.get_progress()
 
+    def get_camera_frame_seq(self, camera_id: str) -> int:
+        """Returns the monotonic frame sequence number for the specified camera."""
+        worker = self._workers.get(camera_id)
+        if worker and hasattr(worker.camera, "frame_seq"):
+            return worker.camera.frame_seq
+        return 0
+
     def select_target_on_camera(
         self, camera_id: str, x: float, y: float
     ) -> Optional[int]:
