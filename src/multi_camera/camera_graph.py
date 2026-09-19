@@ -337,7 +337,7 @@ class CameraGraph:
     def to_dict(self) -> dict:
         """Serialize the entire graph to a JSON-compatible dictionary."""
         return {
-            "version": 1,
+            "schema_version": 2,
             "cameras": [node.to_dict() for node in self._nodes.values()],
             "edges": [edge.to_dict() for edge in self._edges.values()],
             "background_map": self.background_map,
@@ -350,7 +350,10 @@ class CameraGraph:
         graph.background_map = data.get("background_map")
 
         for cam_data in data.get("cameras", []):
-            graph.add_node(CameraNodeConfig.from_dict(cam_data))
+            try:
+                graph.add_node(CameraNodeConfig.from_dict(cam_data))
+            except Exception as e:
+                logger.warning(f"Skipping invalid camera during load: {e}")
 
         for edge_data in data.get("edges", []):
             try:
@@ -361,27 +364,72 @@ class CameraGraph:
         return graph
 
     def save(self, path: Union[str, Path]) -> None:
-        """Save the graph configuration to a JSON file."""
+        """Save the graph configuration to a JSON file safely with atomic writes."""
         file_path = Path(path)
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(file_path, "w", encoding="utf-8") as f:
+        
+        tmp_path = file_path.with_suffix(".json.tmp")
+        bak_path = file_path.with_suffix(".json.bak")
+        
+        # 1. Write to temp file
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(self.to_dict(), f, indent=2)
-        logger.info(f"Camera graph saved to {file_path}")
+            
+        # 2. Validate written file
+        try:
+            with open(tmp_path, "r", encoding="utf-8") as f:
+                json.load(f)
+        except Exception as e:
+            if tmp_path.exists():
+                tmp_path.unlink()
+            raise RuntimeError(f"Failed to write valid JSON, write aborted: {e}")
+            
+        # 3. Create backup and replace
+        if file_path.exists():
+            file_path.replace(bak_path)
+            
+        tmp_path.replace(file_path)
+        logger.info(f"Camera graph saved atomically to {file_path}")
 
     @classmethod
     def load(cls, path: Union[str, Path]) -> CameraGraph:
-        """Load a graph configuration from a JSON file."""
+        """Load a graph configuration from a JSON file, with automatic backup recovery."""
         file_path = Path(path)
+        bak_path = file_path.with_suffix(".json.bak")
+        
+        def _try_load(p: Path) -> Optional[CameraGraph]:
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                return cls.from_dict(data)
+            except Exception as e:
+                logger.error(f"Failed to load graph from {p}: {e}")
+                return None
+
         if not file_path.is_file():
-            logger.info(f"No graph file at {file_path}, returning empty graph")
+            if bak_path.is_file():
+                logger.warning(f"Graph file missing at {file_path}, attempting to load backup...")
+                graph = _try_load(bak_path)
+                if graph:
+                    return graph
+            logger.info(f"No graph file at {file_path}, returning empty graph.")
             return cls()
 
-        with open(file_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        graph = cls.from_dict(data)
-        logger.info(
-            f"Camera graph loaded from {file_path}: "
-            f"{graph.node_count()} cameras, {graph.edge_count()} edges"
-        )
-        return graph
+        graph = _try_load(file_path)
+        if graph:
+            logger.info(
+                f"Camera graph loaded from {file_path}: "
+                f"{graph.node_count()} cameras, {graph.edge_count()} edges"
+            )
+            return graph
+            
+        # If primary load failed, try backup
+        if bak_path.is_file():
+            logger.warning(f"Primary graph load failed, attempting to recover from backup {bak_path}...")
+            graph = _try_load(bak_path)
+            if graph:
+                logger.info(f"Successfully recovered graph from backup: {graph.node_count()} cameras, {graph.edge_count()} edges")
+                return graph
+                
+        logger.error("Both primary and backup graph loads failed. Starting with empty graph.")
+        return cls()

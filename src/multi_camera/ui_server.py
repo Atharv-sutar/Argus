@@ -164,6 +164,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
 
     graph_file: Path = Path("configs/camera_graph.json")
     runtime_pipeline = None  # Optional MultiCameraPipeline reference
+    graph_lock = threading.Lock()
 
     def log_message(self, format: str, *args: Any) -> None:
         # Route standard HTTP access logs to debug file log
@@ -241,8 +242,9 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     self._send_json({"cameras": cards, "active_camera": active_cam})
                 elif self.graph_file.is_file():
                     try:
-                        with open(self.graph_file, "r", encoding="utf-8") as f:
-                            data = json.load(f)
+                        with self.graph_lock:
+                            graph = CameraGraph.load(self.graph_file)
+                            data = graph.to_dict()
                         cams = []
                         for c in data.get("cameras", []):
                             cams.append({
@@ -368,8 +370,9 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 logger.info(f"[TOPOLOGY] [GET /api/graph] Reading topology from '{self.graph_file.resolve()}' (exists={self.graph_file.is_file()})")
                 if self.graph_file.is_file():
                     try:
-                        with open(self.graph_file, "r", encoding="utf-8") as f:
-                            data = json.load(f)
+                        with self.graph_lock:
+                            graph = CameraGraph.load(self.graph_file)
+                            data = graph.to_dict()
                         cams = data.get("cameras", [])
                         edges = data.get("edges", [])
                         logger.info(f"[TOPOLOGY] Loaded topology: {len(cams)} cameras ({[c.get('camera_id') for c in cams]}), {len(edges)} edges")
@@ -561,7 +564,8 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 # Reload graph file if present so newly saved or enabled cameras are picked up
                 if self.graph_file.is_file():
                     try:
-                        fresh_graph = CameraGraph.load(self.graph_file)
+                        with self.graph_lock:
+                            fresh_graph = CameraGraph.load(self.graph_file)
                         self.runtime_pipeline.update_graph(fresh_graph)
                     except Exception as e:
                         logger.warning(f"[LIVE MATRIX] Could not reload graph before restart: {e}")
@@ -593,7 +597,8 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     self._send_json({"success": False, "errors": errors}, status=HTTPStatus.BAD_REQUEST)
                     return
 
-                graph.save(self.graph_file)
+                with self.graph_lock:
+                    graph.save(self.graph_file)
                 logger.info(f"[TOPOLOGY] Graph saved successfully to '{self.graph_file.resolve()}'")
 
                 # Dynamically sync running pipeline with updated topology graph
