@@ -141,6 +141,7 @@ class TargetState(str, Enum):
     CANDIDATE = "CANDIDATE"
     REJECTED = "REJECTED"
     CONFIRMED = "CONFIRMED"
+    LOST_PERMANENTLY = "LOST_PERMANENTLY"
 
 
 @dataclass
