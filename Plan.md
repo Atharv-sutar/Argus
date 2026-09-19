@@ -119,7 +119,7 @@ The topology saving and loading logic was updated to use atomic file operations 
 
 ---
 
-## Phase 1 — Camera Detection & Stream Stability
+## Phase 1 — Camera Detection & Stream Stability ✅ COMPLETED
 
 > **Priority: HIGH.** Cameras turn on/off multiple times before displaying footage, sometimes never rendering properly.
 
@@ -179,6 +179,9 @@ Add a per-camera health badge visible in the live matrix:
 - Camera probe never causes flickering on already-active cameras
 - Streams render within 2 seconds of camera activation
 - Stale streams are visually indicated, never silently frozen
+
+### Phase 1 Reflection
+Sequential probing has completely eliminated the race condition where `cv2.VideoCapture` would lock up when multiple probes accessed the DirectShow graph simultaneously. By passing the list of in-use indices to the probe method, active pipelines no longer freeze or flicker when the user scans for new cameras. MJPEG streams now correctly show a `STALE — RECONNECTING` overlay when the monotonic `frame_seq` counter stops advancing. The UI correctly surfaces LIVE/OFFLINE status badges based on server-side health checks.
 
 ---
 
