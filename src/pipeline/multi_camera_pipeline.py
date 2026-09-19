@@ -145,6 +145,10 @@ class MultiCameraPipeline:
         self._last_candidate_scores: Dict[int, float] = {}
         self._switch_consensus: Dict[int, int] = {}
         self._current_track_misses: int = 0
+        self._pipeline_start_time: float = time.time()
+        self._last_fps_time: float = time.time()
+        self._last_fps_frames: int = 0
+        self._current_fps: float = 0.0
 
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=12, thread_name_prefix="CamWorker")
 
@@ -326,6 +330,53 @@ class MultiCameraPipeline:
             logger.warning(f"[MULTI-CAM] Failed to initialize worker for camera '{camera_id}': {e}")
             node.mark_offline()
             return None
+
+
+    def get_telemetry(self) -> 'PipelineTelemetry':
+        from src.core.types import PipelineTelemetry
+        import time
+
+        # Compute FPS
+        now = time.time()
+        elapsed = now - self._last_fps_time
+        if elapsed >= 1.0:
+            frames_since = self._frame_count - self._last_fps_frames
+            self._current_fps = frames_since / elapsed
+            self._last_fps_time = now
+            self._last_fps_frames = self._frame_count
+
+        # Estimate GPU memory (if CUDA)
+        gpu_mb = 0.0
+        try:
+            import torch
+            if torch.cuda.is_available():
+                gpu_mb = torch.cuda.memory_allocated() / (1024 * 1024)
+        except:
+            pass
+
+        statuses = {
+            cid: node.status.value for cid, node in self._nodes.items() if node.status
+        }
+        
+        gallery = self.gallery
+        target = self.target_manager.target
+        
+        return PipelineTelemetry(
+            active_camera_id=self.active_camera_id,
+            target_state=self.target_state,
+            target_track_id=target.track_id if target else None,
+            camera_statuses=statuses,
+            search_progress=self.get_search_progress().to_dict() if self.get_search_progress() else None,
+            gallery_size=gallery.size,
+            gallery_max=gallery.max_size,
+            gallery_manual=gallery.manual_count,
+            gallery_auto=gallery.auto_count,
+            fps=round(self._current_fps, 1),
+            gpu_memory_mb=round(gpu_mb, 1),
+            candidate_scores=self.last_candidate_scores,
+            transit_history=self.transit_history,
+            uptime_s=round(now - self._pipeline_start_time, 1)
+        )
 
     def get_camera_status(self, camera_id: str) -> Optional[CameraStatus]:
         node = self._nodes.get(camera_id)

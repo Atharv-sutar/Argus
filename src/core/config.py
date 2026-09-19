@@ -178,3 +178,14 @@ class AppConfig:
             storage=storage_config,
         )
 
+
+    def to_dict(self) -> Dict[str, Any]:
+        import dataclasses
+        return dataclasses.asdict(self)
+
+    def save(self, path: Union[str, Path]) -> None:
+        """Save configuration to a YAML file."""
+        import yaml
+        file_path = Path(path)
+        with open(file_path, 'w', encoding='utf-8') as f:
+            yaml.safe_dump(self.to_dict(), f, default_flow_style=False, sort_keys=False)

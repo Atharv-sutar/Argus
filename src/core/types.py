@@ -524,3 +524,21 @@ class Identity:
 
 
 
+
+@dataclass
+class PipelineTelemetry:
+    """Decoupled UI state snapshot for the web frontend."""
+    active_camera_id: Optional[str]
+    target_state: str
+    target_track_id: Optional[int]
+    camera_statuses: Dict[str, str]
+    search_progress: Optional[dict]
+    gallery_size: int
+    gallery_max: int
+    gallery_manual: int
+    gallery_auto: int
+    fps: float
+    gpu_memory_mb: float
+    candidate_scores: Dict[str, float]
+    transit_history: List[Any]
+    uptime_s: float

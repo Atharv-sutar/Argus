@@ -13,6 +13,54 @@
   <div id="app" class="app-container">
 
 
+    
+    <!-- Settings Overlay -->
+    <div id="settings-overlay" class="overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center;">
+      <div class="handoff-modal" style="background: var(--bg-panel); padding: 20px; border-radius: 8px; border: 1px solid var(--border-color); width: 600px; max-width: 90%;">
+        <h3 style="margin-top: 0; color: var(--cyan-bright);">Advanced Settings</h3>
+        <form id="form-settings" class="topo-form">
+            <div class="form-row">
+                <label>Max Search Radius</label>
+                <input type="number" id="set-max-radius" min="1" max="5">
+            </div>
+            <div class="form-row">
+                <label>Total Recovery Timeout (s)</label>
+                <input type="number" id="set-recovery-timeout" min="10" max="600" step="10">
+            </div>
+            <div class="form-row">
+                <label>ReID Match Threshold</label>
+                <input type="number" id="set-match-threshold" min="0.1" max="1.0" step="0.05">
+            </div>
+            <div class="form-row">
+                <label>Tracking Buffer (frames)</label>
+                <input type="number" id="set-track-buffer" min="10" max="300" step="10">
+            </div>
+            <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px;">
+                <button type="button" id="btn-settings-cancel" class="btn btn-secondary">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+            </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Shortcuts Overlay -->
+    <div id="shortcuts-overlay" class="overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center;">
+      <div class="handoff-modal" style="background: var(--bg-panel); padding: 20px; border-radius: 8px; border: 1px solid var(--border-color); width: 400px; max-width: 90%;">
+        <h3 style="margin-top: 0; color: var(--amber-glow);">Keyboard Shortcuts</h3>
+        <ul style="list-style: none; padding: 0; margin-bottom: 20px;">
+            <li style="margin-bottom: 8px;"><strong>Space</strong> - Play/Pause (Playback)</li>
+            <li style="margin-bottom: 8px;"><strong>a</strong> - Add target angle to gallery</li>
+            <li style="margin-bottom: 8px;"><strong>c</strong> - Clear active target</li>
+            <li style="margin-bottom: 8px;"><strong>s</strong> - Open Settings</li>
+            <li style="margin-bottom: 8px;"><strong>q</strong> - Shutdown server</li>
+            <li style="margin-bottom: 8px;"><strong>?</strong> - Toggle Shortcuts</li>
+        </ul>
+        <div style="display: flex; justify-content: flex-end;">
+            <button type="button" id="btn-shortcuts-close" class="btn btn-primary">Close</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Bulk Import RTSP Modal -->
     <div id="bulk-import-overlay" class="overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center;">
       <div class="handoff-modal" style="background: var(--bg-panel); padding: 20px; border-radius: 8px; border: 1px solid var(--border-color); width: 600px; max-width: 90%;">
@@ -108,14 +156,22 @@
         <button id="btn-clear-target-global" class="btn btn-danger btn-sm" title="Clear active target and reset search (Shortcut: 'c')">
           Clear Target
         </button>
+        
+        <button id="btn-settings-global" class="btn btn-secondary btn-sm" title="Advanced Settings (Shortcut: 's')">
+          ⚙️
+        </button>
+        <button id="btn-shortcuts-global" class="btn btn-secondary btn-sm" title="Keyboard Shortcuts (Shortcut: '?')">
+          ❓
+        </button>
         <button id="btn-quit-global" class="btn btn-quit btn-sm" title="Safely shutdown all camera pipelines and server (Shortcut: 'q')">
+
           Shutdown
         </button>
       </div>
     </header>
 
     <!-- Main Content Workspace (Split: Center Matrix / Right Gallery) -->
-    <div class="workspace">
+    <div class="workspace" style="bottom: 30px;">
       
       <!-- Center Main Stage -->
       <main class="panel center-panel">
@@ -352,7 +408,16 @@
                   </form>
                 </div>
               </div>
-            </aside>
+      
+        <!-- Event Log Panel -->
+        <div class="gallery-section-subhead" style="margin-top: 15px; border-top: 1px solid var(--border-color); padding-top: 15px;">
+            <span>OPERATIONAL EVENT LOG</span>
+        </div>
+        <div id="event-log-container" style="flex: 1; min-height: 150px; max-height: 250px; overflow-y: auto; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 4px; padding: 10px; font-family: 'JetBrains Mono', monospace; font-size: 11px; margin-bottom: 10px;">
+            <div style="color: var(--text-dim);">System initialized. Waiting for events...</div>
+        </div>
+      </aside>
+
 
 
             <!-- Main Canvas Container -->
@@ -481,9 +546,28 @@
             </div>
           </div>
         </div>
+
+        <!-- Event Log Panel -->
+        <div class="gallery-section-subhead" style="margin-top: 15px; border-top: 1px solid var(--border-color); padding-top: 15px;">
+            <span>OPERATIONAL EVENT LOG</span>
+        </div>
+        <div id="event-log-container" style="flex: 1; min-height: 150px; max-height: 250px; overflow-y: auto; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 4px; padding: 10px; font-family: 'JetBrains Mono', monospace; font-size: 11px; margin-bottom: 10px;">
+            <div style="color: var(--text-dim);">System initialized. Waiting for events...</div>
+        </div>
       </aside>
 
+
     </div>
+
+    
+  <div class="operator-status-bar" style="position: fixed; bottom: 0; left: 0; width: 100%; height: 30px; background: var(--bg-dark); border-top: 1px solid var(--border-color); display: flex; align-items: center; padding: 0 15px; font-family: 'JetBrains Mono', monospace; font-size: 11px; z-index: 100;">
+    <div style="display: flex; gap: 20px; align-items: center; width: 100%;">
+        <div><span style="color: var(--text-dim);">UPTIME:</span> <span id="status-uptime">0s</span></div>
+        <div><span style="color: var(--text-dim);">FPS:</span> <span id="status-fps">0.0</span></div>
+        <div><span style="color: var(--text-dim);">GPU MEM:</span> <span id="status-gpu">0.0 MB</span></div>
+        <div style="margin-left: auto; color: var(--cyan-bright);"><span id="status-mode">LIVE SURVEILLANCE</span></div>
+    </div>
+  </div>
 
     <!-- Toast Notification Container -->
     <div id="toast-container" class="toast-container"></div>

@@ -366,51 +366,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                         self.send_error(HTTPStatus.NOT_FOUND, f"No frame available for camera '{cam_id}'")
                     return
 
-    
-        elif path == "/api/playback/load":
-            folder = payload.get("folder", "")
-            if not folder:
-                self._send_json({"success": False, "error": "No folder provided"}, status=400)
-                return
-            
-            logger.info(f"[PLAYBACK] Loading folder {folder}")
-            if getattr(self.runtime_pipeline, 'playback_controller', None):
-                # We would load videos for each camera in the graph here
-                # For this prototype we assume they are already loaded or we just reset
-                pass
-            self._send_json({"success": True})
-            return
-
-        elif path == "/api/playback/control":
-            action = payload.get("action")
-            val = payload.get("value")
-            ctrl = getattr(self.runtime_pipeline, 'playback_controller', None)
-            if ctrl:
-                if action == "play":
-                    ctrl.play()
-                elif action == "pause":
-                    ctrl.pause()
-                elif action == "toggle":
-                    ctrl.toggle_play_pause()
-                elif action == "seek":
-                    ctrl.seek(float(val))
-                elif action == "speed":
-                    ctrl.set_speed(float(val))
-            self._send_json({"success": True})
-            return
-
-        elif path == "/api/playback/complete":
-            recorder = getattr(self.runtime_pipeline, 'route_recorder', None)
-            if recorder:
-                events = recorder.get_events()
-                case_id = payload.get("case_id", "CASE-0001")
-                logger.info(f"[PLAYBACK] Completing route for {case_id} with {len(events)} events")
-                # We would call journey_stitcher here, but that takes time. 
-                # For now just send success.
-            self._send_json({"success": True})
-            return
-
-        elif path == "/api/graph":
+            elif path == "/api/graph":
                 logger.info(f"[TOPOLOGY] [GET /api/graph] Reading topology from '{self.graph_file.resolve()}' (exists={self.graph_file.is_file()})")
                 if self.graph_file.is_file():
                     try:
@@ -429,29 +385,18 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     self._send_json({"version": 1, "cameras": [], "edges": [], "background_map": None})
                 return
 
+            elif path == "/api/settings":
+                if self.runtime_pipeline is not None:
+                    self._send_json(self.runtime_pipeline.config.to_dict())
+                else:
+                    self._send_json({"error": "Pipeline not running"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+
             elif path == "/api/status":
                 if self.runtime_pipeline is not None:
-                    progress = self.runtime_pipeline.get_search_progress()
-                    statuses = {
-                        cid: self.runtime_pipeline.get_camera_status(cid).value
-                        for cid in self.runtime_pipeline.graph.all_camera_ids()
-                        if self.runtime_pipeline.get_camera_status(cid)
-                    }
-                    gallery = self.runtime_pipeline.gallery
-                    status_data = {
-                        "active_camera": self.runtime_pipeline.active_camera_id,
-                        "target_state": getattr(self.runtime_pipeline, "target_state", "UNSELECTED"),
-                        "target_track_id": self.runtime_pipeline.target_manager.target.track_id if self.runtime_pipeline.target_manager.target else None,
-                        "transit_history": getattr(self.runtime_pipeline, "transit_history", []),
-                        "search_progress": progress.to_dict(),
-                        "camera_statuses": statuses,
-                        "candidate_scores": getattr(self.runtime_pipeline, "last_candidate_scores", {}),
-                        "gallery_size": gallery.size,
-                        "gallery_max": gallery.max_size,
-                        "gallery_manual": gallery.manual_count,
-                        "gallery_auto": gallery.auto_count,
-                    }
-                    logger.debug(f"[STATUS] [GET /api/status] active={status_data['active_camera']}, target_state={status_data['target_state']}, gallery={gallery.size}/{gallery.max_size}")
+                    telemetry = self.runtime_pipeline.get_telemetry()
+                    import dataclasses
+                    status_data = dataclasses.asdict(telemetry)
                     self._send_json(status_data)
                 else:
                     self._send_json({
@@ -466,6 +411,9 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                         "gallery_max": 25,
                         "gallery_manual": 0,
                         "gallery_auto": 0,
+                        "fps": 0.0,
+                        "gpu_memory_mb": 0.0,
+                        "uptime_s": 0.0
                     })
                 return
 
@@ -635,50 +583,6 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": False, "error": "Runtime pipeline not active"}, status=HTTPStatus.BAD_REQUEST)
             return
 
-
-        elif path == "/api/playback/load":
-            folder = payload.get("folder", "")
-            if not folder:
-                self._send_json({"success": False, "error": "No folder provided"}, status=400)
-                return
-            
-            logger.info(f"[PLAYBACK] Loading folder {folder}")
-            if getattr(self.runtime_pipeline, 'playback_controller', None):
-                # We would load videos for each camera in the graph here
-                # For this prototype we assume they are already loaded or we just reset
-                pass
-            self._send_json({"success": True})
-            return
-
-        elif path == "/api/playback/control":
-            action = payload.get("action")
-            val = payload.get("value")
-            ctrl = getattr(self.runtime_pipeline, 'playback_controller', None)
-            if ctrl:
-                if action == "play":
-                    ctrl.play()
-                elif action == "pause":
-                    ctrl.pause()
-                elif action == "toggle":
-                    ctrl.toggle_play_pause()
-                elif action == "seek":
-                    ctrl.seek(float(val))
-                elif action == "speed":
-                    ctrl.set_speed(float(val))
-            self._send_json({"success": True})
-            return
-
-        elif path == "/api/playback/complete":
-            recorder = getattr(self.runtime_pipeline, 'route_recorder', None)
-            if recorder:
-                events = recorder.get_events()
-                case_id = payload.get("case_id", "CASE-0001")
-                logger.info(f"[PLAYBACK] Completing route for {case_id} with {len(events)} events")
-                # We would call journey_stitcher here, but that takes time. 
-                # For now just send success.
-            self._send_json({"success": True})
-            return
-
         elif path == "/api/graph":
             logger.info(f"[TOPOLOGY] [POST /api/graph] Topology save requested from {self.address_string()} ({content_length} bytes)")
             try:
@@ -720,6 +624,40 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 logger.warning(f"[TOPOLOGY] Exception during validation: {e}")
                 self._send_json({"valid": False, "errors": [str(e)]})
+            return
+
+        elif path == "/api/settings":
+            if self.runtime_pipeline is not None:
+                try:
+                    # Update configuration fields based on payload
+                    cfg = self.runtime_pipeline.config
+                    
+                    if "multi_camera" in payload and "search" in payload["multi_camera"]:
+                        search_pl = payload["multi_camera"]["search"]
+                        if "max_radius" in search_pl:
+                            cfg.multi_camera.search.max_radius = int(search_pl["max_radius"])
+                        if "total_recovery_timeout" in search_pl:
+                            cfg.multi_camera.search.total_recovery_timeout = float(search_pl["total_recovery_timeout"])
+                            
+                    if "reid" in payload:
+                        reid_pl = payload["reid"]
+                        if "match_threshold" in reid_pl:
+                            cfg.reid.match_threshold = float(reid_pl["match_threshold"])
+                            
+                    if "tracking" in payload:
+                        track_pl = payload["tracking"]
+                        if "track_buffer" in track_pl:
+                            cfg.tracking.track_buffer = int(track_pl["track_buffer"])
+                            
+                    # Save to default.yaml
+                    cfg.save("configs/default.yaml")
+                    self._send_json({"success": True, "message": "Settings updated"})
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).exception(f"[SETTINGS] Failed to update settings: {e}")
+                    self._send_json({"success": False, "error": str(e)}, status=HTTPStatus.BAD_REQUEST)
+            else:
+                self._send_json({"success": False, "error": "Pipeline not running"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
             return
 
         elif path == "/api/target/select":

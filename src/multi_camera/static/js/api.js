@@ -232,4 +232,31 @@ const API = {
   getPreviewUrl(source, sourceType) {
     return `${this.baseUrl}/api/preview?source=${encodeURIComponent(source)}&type=${encodeURIComponent(sourceType)}&t=${Date.now()}`;
   }
+
+    // Settings API
+    static async getSettings() {
+        try {
+            const res = await fetch('/api/settings');
+            if (!res.ok) throw new Error('Settings fetch failed');
+            return await res.json();
+        } catch (e) {
+            console.error('getSettings error:', e);
+            return null;
+        }
+    }
+
+    static async updateSettings(settings) {
+        try {
+            const res = await fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(settings)
+            });
+            return await res.json();
+        } catch (e) {
+            console.error('updateSettings error:', e);
+            return { success: false, error: e.message };
+        }
+    }
+
 };
