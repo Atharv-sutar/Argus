@@ -229,7 +229,8 @@ class IdentityManager:
             for emb in ident.trusted_gallery:
                 self.vector_store.add(emb, "target_0")
             for emb in ident.provisional_gallery:
-                self.vector_store.add(emb, "target_0")
+                self.vector_store.add(emb[0] if isinstance(emb, tuple) else emb, "target_0")
+            self.save_target_gallery()
         return removed
 
     def match(self, candidate_embedding: Embedding) -> Tuple[float, Optional[Any]]:
@@ -357,6 +358,7 @@ class IdentityManager:
         while len(ident.provisional_gallery) > self.max_gallery_size:
             ident.provisional_gallery.pop(0)
 
+        self.save_target_gallery()
         return True
 
     def _extract_all_representations(
@@ -380,60 +382,99 @@ class IdentityManager:
         label: Optional[str] = None,
         timestamp_ms: float = 0.0,
         embedding: Optional[Embedding] = None,
+        clear_existing: bool = True,
     ) -> Optional[Embedding]:
         """
         Registers a fresh target identity, initializes trusted reference galleries,
-        and computes normalized reference prototypes.
+        and computes normalized reference prototypes. If clear_existing is False,
+        appends to the existing identity instead.
         """
         if crop is None or crop.size == 0:
             return None
 
-        # Clean previous vector store entries for this identity
-        self.vector_store.remove_identity(identity_id)
-        if self.evidence_engine:
-            self.evidence_engine.clear()
+        if clear_existing:
+            # Clean previous vector store entries for this identity
+            self.vector_store.remove_identity(identity_id)
+            if self.evidence_engine:
+                self.evidence_engine.clear()
 
-        fused, deep, _, upper, lower = self._extract_all_representations(crop, embedding)
+            fused, deep, _, upper, lower = self._extract_all_representations(crop, embedding)
 
-        # Create initial view cluster and TargetIdentityAnchor
-        initial_cluster = ViewCluster(
-            cluster_id=f"{identity_id}_view_0",
-            label="initial_enrollment",
-            exemplars=[fused],
-            centroid=fused,
-        )
-        anchor = TargetIdentityAnchor(
-            identity_id=identity_id,
-            label=label or identity_id,
-            clusters=[initial_cluster],
-            model_name=fused.model_name,
-            feature_dim=fused.dim,
-            created_timestamp_ms=timestamp_ms,
-        )
+            # Create initial view cluster and TargetIdentityAnchor
+            initial_cluster = ViewCluster(
+                cluster_id=f"{identity_id}_view_0",
+                label="initial_enrollment",
+                exemplars=[fused],
+                centroid=fused,
+            )
+            anchor = TargetIdentityAnchor(
+                identity_id=identity_id,
+                label=label or identity_id,
+                clusters=[initial_cluster],
+                model_name=fused.model_name,
+                feature_dim=fused.dim,
+                created_timestamp_ms=timestamp_ms,
+            )
 
-        ident = Identity(
-            identity_id=identity_id,
-            label=label or identity_id,
-            trusted_gallery=[fused],
-            trusted_upper_gallery=[upper],
-            trusted_lower_gallery=[lower],
-            anchor=anchor,
-            view_clusters=[initial_cluster],
-            provisional_gallery=[],
-            last_seen_timestamp_ms=timestamp_ms,
-        )
-        ident.update_prototype()
-        self._identities[identity_id] = ident
-        self.vector_store.add(fused, identity_id)
+            ident = Identity(
+                identity_id=identity_id,
+                label=label or identity_id,
+                trusted_gallery=[fused],
+                trusted_upper_gallery=[upper],
+                trusted_lower_gallery=[lower],
+                anchor=anchor,
+                view_clusters=[initial_cluster],
+                provisional_gallery=[],
+                last_seen_timestamp_ms=timestamp_ms,
+            )
+            ident.update_prototype()
+            self._identities[identity_id] = ident
+            self.vector_store.add(fused, identity_id)
 
-        # Store initial crop thumbnail
-        if crop is not None and crop.size > 0:
-            self._entry_crops[f"{identity_id}_trusted_0"] = self._encode_crop_thumbnail(crop)
+            # Store initial crop thumbnail
+            if crop is not None and crop.size > 0:
+                self._entry_crops[f"{identity_id}_trusted_0"] = self._encode_crop_thumbnail(crop)
 
-        logger.info(
-            f"[IDENTITY] Registered new target identity '{identity_id}' ({ident.label}) with immutable TargetIdentityAnchor"
-        )
-        return fused
+            logger.info(
+                f"[IDENTITY] Registered new target identity '{identity_id}' ({ident.label}) with immutable TargetIdentityAnchor"
+            )
+            if identity_id == "target_0":
+                self.save_target_gallery()
+            return fused
+        else:
+            ident = self._identities.get(identity_id)
+            if not ident:
+                # If it doesn't exist, just act like clear_existing=True
+                return self.register_new_target(crop, identity_id, label, timestamp_ms, embedding, clear_existing=True)
+            
+            fused, deep, _, upper, lower = self._extract_all_representations(crop, embedding)
+            
+            # Enforce max reference samples
+            if len(ident.trusted_gallery) >= self.max_reference_samples:
+                ident.trusted_gallery.pop(0)
+                if ident.trusted_upper_gallery: ident.trusted_upper_gallery.pop(0)
+                if ident.trusted_lower_gallery: ident.trusted_lower_gallery.pop(0)
+
+            idx = len(ident.trusted_gallery)
+            ident.trusted_gallery.append(fused)
+            ident.trusted_upper_gallery.append(upper)
+            ident.trusted_lower_gallery.append(lower)
+            ident.update_prototype()
+            
+            self.vector_store.add(fused, identity_id)
+            if crop is not None and crop.size > 0:
+                # Need to find an unused index for the crop
+                idx = 0
+                while f"{identity_id}_trusted_{idx}" in self._entry_crops:
+                    idx += 1
+                self._entry_crops[f"{identity_id}_trusted_{idx}"] = self._encode_crop_thumbnail(crop)
+
+            logger.info(
+                f"[IDENTITY] Corrected target identity '{identity_id}' ({ident.label}) appended to gallery"
+            )
+            if identity_id == "target_0":
+                self.save_target_gallery()
+            return fused
 
     def register_or_update(
         self,
@@ -847,6 +888,90 @@ class IdentityManager:
 
         evaluations.sort(key=lambda x: x[1], reverse=True)
         return evaluations
+
+    def save_target_gallery(self) -> None:
+        """Saves the target_0 gallery state and crops to the vector store metadata."""
+        if not hasattr(self.vector_store, "save_identity_metadata"):
+            return
+            
+        ident = self.get_identity("target_0")
+        if not ident:
+            return
+            
+        data = {
+            "identity_id": ident.identity_id,
+            "label": ident.label,
+            "last_seen_timestamp_ms": ident.last_seen_timestamp_ms,
+            "trusted_count": len(ident.trusted_gallery),
+            "provisional_count": len(ident.provisional_gallery),
+            "entry_crops": {k: v for k, v in self._entry_crops.items() if k.startswith(f"{ident.identity_id}_")}
+        }
+        self.vector_store.save_identity_metadata("target_0", data)
+        logger.info(f"[IDENTITY] Saved target_0 gallery metadata: {len(ident.trusted_gallery)} trusted, {len(ident.provisional_gallery)} provisional.")
+
+    def load_target_gallery(self) -> bool:
+        """Loads the target_0 gallery state and crops from the vector store metadata."""
+        if not hasattr(self.vector_store, "load_all_identity_metadata") or not hasattr(self.vector_store, "get_embeddings_for_identity"):
+            return False
+            
+        metadata_dict = self.vector_store.load_all_identity_metadata()
+        if "target_0" not in metadata_dict:
+            return False
+            
+        data = metadata_dict["target_0"]
+        embeddings = self.vector_store.get_embeddings_for_identity("target_0")
+        if not embeddings:
+            return False
+            
+        # Reconstruct identity
+        trusted_count = data.get("trusted_count", 0)
+        
+        trusted_gallery = embeddings[:trusted_count]
+        provisional_gallery = embeddings[trusted_count:]
+        
+        # We also need upper/lower for trusted_gallery, but since we didn't save them separately,
+        # we can just use the fused embeddings for now or extract from crop if needed.
+        # But since we just load embeddings, we will use the embedding itself as upper/lower to prevent errors.
+        
+        initial_cluster = ViewCluster(
+            cluster_id="target_0_view_0",
+            label="loaded_enrollment",
+            exemplars=trusted_gallery,
+            centroid=trusted_gallery[0] if trusted_gallery else None,
+        )
+        anchor = TargetIdentityAnchor(
+            identity_id="target_0",
+            label=data.get("label", "target_0"),
+            clusters=[initial_cluster],
+            model_name=trusted_gallery[0].model_name if trusted_gallery else "unknown",
+            feature_dim=trusted_gallery[0].dim if trusted_gallery else 0,
+            created_timestamp_ms=data.get("last_seen_timestamp_ms", 0.0),
+        )
+
+        ident = Identity(
+            identity_id="target_0",
+            label=data.get("label", "target_0"),
+            trusted_gallery=list(trusted_gallery),
+            trusted_upper_gallery=list(trusted_gallery),
+            trusted_lower_gallery=list(trusted_gallery),
+            anchor=anchor,
+            view_clusters=[initial_cluster],
+            provisional_gallery=list(provisional_gallery),
+            last_seen_timestamp_ms=data.get("last_seen_timestamp_ms", 0.0),
+        )
+        ident.update_prototype()
+        self._identities["target_0"] = ident
+        
+        # Restore entry crops
+        entry_crops = data.get("entry_crops", {})
+        for k, v in entry_crops.items():
+            self._entry_crops[k] = v
+            
+        if self.evidence_engine:
+            self.evidence_engine.clear()
+            
+        logger.info(f"[IDENTITY] Loaded target_0 gallery metadata: {len(ident.trusted_gallery)} trusted, {len(ident.provisional_gallery)} provisional.")
+        return True
 
     def clear(self) -> None:
         self._identities.clear()

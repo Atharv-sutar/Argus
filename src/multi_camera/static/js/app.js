@@ -350,7 +350,7 @@ class SurveillanceApp {
           
           <div class="camera-tile-overlay">
             <button class="tile-overlay-btn btn-focus-cam" data-cam="${cam.camera_id}">Set Active</button>
-            <span style="font-size:10px; color:#94a3b8;">Click feed to lock target</span>
+            <span style="font-size:10px; color:#94a3b8;">Click: Correct Target | Shift+Click: New Target</span>
             <button class="tile-overlay-btn btn-snap-cam" data-cam="${cam.camera_id}">+ Angle</button>
           </div>
         </div>
@@ -430,11 +430,12 @@ class SurveillanceApp {
 
         const targetX = clickOnImgX * scaleX;
         const targetY = clickOnImgY * scaleY;
+        const startNew = e.shiftKey;
 
         try {
-          const res = await API.selectTarget(cam.camera_id, targetX, targetY);
+          const res = await API.selectTarget(cam.camera_id, targetX, targetY, null, startNew);
           if (res && res.selected_id !== null && res.selected_id !== undefined) {
-            this.showToast(`Target locked! Tracker ID: ${res.selected_id} on ${cam.name || cam.camera_id}`, 'success');
+            this.showToast(`Target ${startNew ? 'selected (New)' : 'corrected'}! Tracker ID: ${res.selected_id} on ${cam.name || cam.camera_id}`, 'success');
             this.activeCameraId = cam.camera_id;
             this._pendingActiveCameraSwitch = cam.camera_id;
             this._pendingActiveCameraSwitchTime = Date.now();
@@ -697,7 +698,23 @@ class SurveillanceApp {
           <div class="gallery-empty-state">
             <div class="empty-icon">&#128100;</div>
             <div class="empty-text">No target locked</div>
-            <div class="empty-hint">Click on any tracked person in a live camera feed to lock focus and seed their appearance gallery.</div>
+            <div class="empty-hint">Shift+Click on any person in a feed to start tracking.</div>
+          </div>
+        `;
+        return;
+      }
+
+      if (this.targetState === 'UNSELECTED') {
+        const items = [...g.thumbnails].reverse();
+        this.galleryCardsList.innerHTML = `
+          <div class="gallery-empty-state" style="border: 1px solid rgba(0, 242, 254, 0.3); background: rgba(0, 242, 254, 0.05); margin-bottom: 12px; height: auto; padding: 16px;">
+            <div class="empty-icon" style="color: #00f2fe;">&#128100;</div>
+            <div class="empty-text" style="color: #00f2fe; margin-bottom: 8px;">Previous Gallery Loaded</div>
+            <div class="empty-hint" style="color: #94a3b8; font-size: 11px;">Click on a person in any feed to resume tracking, or clear gallery.</div>
+            <button class="btn btn-danger btn-sm" style="margin-top: 12px;" onclick="window.clearTargetFn && window.clearTargetFn()">Clear Gallery</button>
+          </div>
+          <div style="opacity: 0.5; pointer-events: none;">
+            ${items.map(t => this.renderGalleryCard(t)).join('')}
           </div>
         `;
         return;

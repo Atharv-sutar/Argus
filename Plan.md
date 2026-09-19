@@ -185,7 +185,7 @@ Sequential probing has completely eliminated the race condition where `cv2.Video
 
 ---
 
-## Phase 2 — Gallery Persistence & Human-Assisted Target Correction
+## Phase 2 — Gallery Persistence & Human-Assisted Target Correction ✅ COMPLETED
 
 > **Priority: HIGH.** Core paradigm shift from autonomous to human-assisted.
 
@@ -261,6 +261,9 @@ In the web dashboard, add a gallery panel:
 - Gallery thumbnails are visible and individually deletable in the UI
 - Gallery survives application restarts
 - "New Investigation" is an explicit, deliberate action
+
+### Phase 2 Reflection
+The core logic for tracking has been cleanly divided into `start_new_investigation` (which purges target state and gallery) and `correct_target` (which modifies the active track but appends crops to the existing identity gallery). The gallery state is now fully persistent, utilizing the `SQLiteVectorStore` to persist features in `identities_metadata`. Upon a full application restart, if a gallery exists in the vector store but the target is `UNSELECTED`, the UI explicitly prompts the operator that a previous gallery is loaded and allows resuming the investigation by clicking on any target feed, or explicitly clearing it. Shift+Click now operates as "Start New Investigation", and a normal Click operates as "Correct Target".
 
 ---
 

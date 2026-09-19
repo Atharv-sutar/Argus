@@ -99,7 +99,7 @@ class MultiCameraPipeline:
             
             # Load identities from database on startup
             if vector_store is not None:
-                self.identity_manager.load_from_db(config.storage.db_path)
+                self.identity_manager.load_target_gallery()
 
         if target_manager is not None:
             self.target_manager = target_manager
@@ -370,7 +370,7 @@ class MultiCameraPipeline:
         if worker._last_track_result is None or worker._last_frame is None:
             return None
 
-        selected_id = self.target_manager.select_by_point(
+        selected_id = self.target_manager.start_new_investigation_by_point(
             x=x,
             y=y,
             track_result=worker._last_track_result,
@@ -395,6 +395,67 @@ class MultiCameraPipeline:
             return selected_id
         return None
 
+    def correct_target_on_camera(self, camera_id: str, x: float, y: float) -> Optional[int]:
+        """
+        Corrects target by clicking on coordinates. Preserves existing gallery.
+        """
+        self._sync_nodes_with_graph()
+        worker = self._get_or_create_worker(camera_id)
+        if worker is None:
+            return None
+
+        # Same frame processing logic
+        frame_to_process = None
+        if worker._last_track_result is None:
+            success, frame, ts_ms = worker.read_frame()
+            if success and frame is not None:
+                frame_to_process = frame
+            elif worker._last_frame is not None:
+                frame_to_process = worker._last_frame
+
+        if frame_to_process is not None:
+            ts_ms = time.time() * 1000.0
+            try:
+                if hasattr(worker, "detector"):
+                    det_res = worker.detector.detect(frame_to_process, timestamp_ms=ts_ms)
+                elif self._shared_detector is not None:
+                    batch_res = self._shared_detector.detect_batch([frame_to_process], timestamps_ms=[ts_ms])
+                    det_res = batch_res[0] if batch_res else None
+                else:
+                    det_res = self._default_detector_factory().detect(frame_to_process, timestamp_ms=ts_ms)
+                
+                worker.process_frame(frame_to_process, ts_ms, det_res)
+            except Exception as e:
+                logger.error(f"[MULTI-CAM] Detection failure: {e}")
+
+        if worker._last_track_result is None or worker._last_frame is None:
+            return None
+
+        selected_id = self.target_manager.correct_target_by_point(
+            x=x,
+            y=y,
+            track_result=worker._last_track_result,
+            frame=worker._last_frame,
+            camera_id=camera_id,
+        )
+
+        if selected_id is not None:
+            self._active_camera_id = camera_id
+            self.search_manager.reset()
+            if camera_id in self._nodes:
+                self._nodes[camera_id].mark_active_target()
+            self._transit_history.append({
+                "camera_id": camera_id,
+                "timestamp": time.time(),
+                "event": "TARGET_CORRECTED",
+                "track_id": selected_id,
+            })
+            logger.info(
+                f"[MULTI-CAM] Target corrected on camera '{camera_id}' | Tracker={selected_id} | Gallery preserved."
+            )
+            return selected_id
+        return None
+
 
     def select_target_by_id(self, camera_id: str, track_id: int) -> bool:
         """
@@ -415,7 +476,7 @@ class MultiCameraPipeline:
         if worker._last_track_result is None or worker._last_frame is None:
             return False
 
-        ok = self.target_manager.select_by_track_id(
+        ok = self.target_manager.start_new_investigation(
             track_id=track_id,
             track_result=worker._last_track_result,
             frame=worker._last_frame,
@@ -436,6 +497,56 @@ class MultiCameraPipeline:
                 f"[MULTI-CAM] Target selected by ID on camera '{camera_id}' | Tracker={track_id} | Gallery seeded."
             )
         return ok
+
+    def correct_target_by_id(self, camera_id: str, track_id: int) -> bool:
+        """
+        Corrects the target lock to a different track ID on the specified camera.
+        Appends to the existing gallery instead of resetting it.
+        """
+        self._sync_nodes_with_graph()
+        worker = self._get_or_create_worker(camera_id)
+        if worker is None:
+            return False
+
+        if worker._last_track_result is None and worker.camera.is_opened():
+            success, frame, ts_ms = worker.read_frame()
+            if success and frame is not None:
+                det_res = self._default_detector_factory().detect(frame, timestamp_ms=ts_ms)
+                worker.process_frame(frame, ts_ms, det_res)
+
+        if worker._last_track_result is None or worker._last_frame is None:
+            return False
+
+        ok = self.target_manager.correct_target(
+            track_id=track_id,
+            track_result=worker._last_track_result,
+            frame=worker._last_frame,
+            camera_id=camera_id,
+        )
+        if ok:
+            self._active_camera_id = camera_id
+            self.search_manager.reset()
+            if camera_id in self._nodes:
+                self._nodes[camera_id].mark_active_target()
+            self._transit_history.append({
+                "camera_id": camera_id,
+                "timestamp": time.time(),
+                "event": "TARGET_CORRECTED",
+                "track_id": track_id,
+            })
+            logger.info(
+                f"[MULTI-CAM] Target corrected by ID on camera '{camera_id}' | Tracker={track_id} | Gallery preserved."
+            )
+        return ok
+
+    def clear_target(self) -> None:
+        """Explicitly clear the active target, reverting to UNSELECTED state."""
+        self.target_manager.clear()
+        for node in self._nodes.values():
+            node.is_active = False
+        self._active_camera_id = None
+        self.search_manager.reset()
+        logger.info("[MULTI-CAM] Target explicitly cleared (New Investigation).")
 
     def add_manual_target_sample(self, camera_id: Optional[str] = None) -> bool:
         """

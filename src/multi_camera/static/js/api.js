@@ -121,8 +121,8 @@ const API = {
     }
   },
 
-  async selectTarget(cameraId, x = null, y = null, trackId = null) {
-    const payload = { camera_id: cameraId };
+  async selectTarget(cameraId, x = null, y = null, trackId = null, startNew = false) {
+    const payload = { camera_id: cameraId, start_new: startNew };
     if (x !== null && y !== null) {
       payload.x = x;
       payload.y = y;

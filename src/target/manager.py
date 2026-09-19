@@ -40,7 +40,7 @@ class TargetManager:
         """Returns True if a target has been selected."""
         return self._target.state != TargetState.UNSELECTED
 
-    def select_by_track_id(
+    def start_new_investigation(
         self,
         track_id: int,
         track_result: Optional[TrackResult] = None,
@@ -49,6 +49,7 @@ class TargetManager:
     ) -> bool:
         """
         Manually select and lock onto a specific track ID, seeding a new target gallery.
+        Clears any existing gallery for target_0.
         """
         matched_track: Optional[Track] = None
         frame_id = 0
@@ -82,9 +83,58 @@ class TargetManager:
                     identity_id="target_0",
                     label=f"target_{track_id}",
                     timestamp_ms=timestamp_ms,
+                    clear_existing=True
                 )
 
-        logger.info(f"[TARGET] Logical target selected: Tracker={track_id} on '{camera_id}' | Identity seeded.")
+        logger.info(f"[TARGET] New investigation started: Tracker={track_id} on '{camera_id}' | Identity seeded.")
+        return True
+
+    def correct_target(
+        self,
+        track_id: int,
+        track_result: Optional[TrackResult] = None,
+        frame: Optional[np.ndarray] = None,
+        camera_id: str = "camera_0",
+    ) -> bool:
+        """
+        Correct the target lock to a different track ID.
+        Updates active track ID and appends the new crop to the gallery without clearing it.
+        """
+        matched_track: Optional[Track] = None
+        frame_id = 0
+        timestamp_ms = 0.0
+
+        if track_result is not None:
+            frame_id = track_result.frame_id
+            timestamp_ms = track_result.timestamp_ms
+            for track in track_result.tracks:
+                if track.track_id == track_id:
+                    matched_track = track
+                    break
+
+        box = matched_track.box if matched_track else (self._target.last_known_box if self._target else None)
+
+        self._target.track_id = track_id
+        self._target.state = TargetState.LOCKED
+        if box is not None:
+            self._target.last_known_box = box
+        self._target.last_seen_frame = frame_id
+        self._target.last_seen_timestamp_ms = timestamp_ms
+        self._target.lost_duration_ms = 0.0
+
+        # Append new angle to existing gallery
+        if frame is not None and box is not None and self.identity_manager:
+            crop = self._extract_crop(frame, box)
+            if crop is not None and crop.size > 0:
+                self.identity_manager.register_new_target(
+                    crop=crop,
+                    identity_id="target_0",
+                    label=f"target_{track_id}",
+                    timestamp_ms=timestamp_ms,
+                    clear_existing=False
+                )
+
+        logger.info(f"[TARGET] Target corrected: Tracker={track_id} on '{camera_id}' | Gallery preserved.")
         return True
 
     def update(
@@ -123,7 +173,7 @@ class TargetManager:
 
         return self.mark_lost(track_result.timestamp_ms)
 
-    def select_by_point(
+    def start_new_investigation_by_point(
         self,
         x: float,
         y: float,
@@ -133,7 +183,7 @@ class TargetManager:
         proximity_tolerance: float = 40.0,
     ) -> Optional[int]:
         """
-        Select a target by clicking on pixel coordinates (x, y).
+        Start new investigation by clicking on pixel coordinates (x, y).
         Includes proximity tolerance so clicking near bounding boxes succeeds.
         """
         candidates = []
@@ -157,7 +207,44 @@ class TargetManager:
         # Sort by distance first (exact containment has distance 0.0), then by area
         candidates.sort(key=lambda item: (item[0], item[1].box.area))
         selected = candidates[0][1]
-        self.select_by_track_id(selected.track_id, track_result, frame=frame, camera_id=camera_id)
+        self.start_new_investigation(selected.track_id, track_result, frame=frame, camera_id=camera_id)
+        return selected.track_id
+
+    def correct_target_by_point(
+        self,
+        x: float,
+        y: float,
+        track_result: TrackResult,
+        frame: Optional[np.ndarray] = None,
+        camera_id: str = "camera_0",
+        proximity_tolerance: float = 40.0,
+    ) -> Optional[int]:
+        """
+        Correct target by clicking on pixel coordinates (x, y).
+        Appends to existing gallery instead of clearing.
+        """
+        candidates = []
+        for track in track_result.tracks:
+            b = track.box
+            # Strict containment
+            if b.x1 <= x <= b.x2 and b.y1 <= y <= b.y2:
+                candidates.append((0.0, track))
+            # Proximity check
+            elif (b.x1 - proximity_tolerance) <= x <= (b.x2 + proximity_tolerance) and \
+                 (b.y1 - proximity_tolerance) <= y <= (b.y2 + proximity_tolerance):
+                cx = (b.x1 + b.x2) / 2.0
+                cy = (b.y1 + b.y2) / 2.0
+                dist = ((x - cx)**2 + (y - cy)**2)**0.5
+                candidates.append((dist, track))
+
+        if not candidates:
+            logger.info(f"No track found near point ({x:.1f}, {y:.1f}) across {len(track_result.tracks)} active tracks")
+            return None
+
+        # Sort by distance first (exact containment has distance 0.0), then by area
+        candidates.sort(key=lambda item: (item[0], item[1].box.area))
+        selected = candidates[0][1]
+        self.correct_target(selected.track_id, track_result, frame=frame, camera_id=camera_id)
         return selected.track_id
 
     def add_manual_sample(

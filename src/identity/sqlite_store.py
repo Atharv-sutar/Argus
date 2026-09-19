@@ -139,6 +139,19 @@ class SQLiteVectorStore(BaseVectorStore):
         ranked = sorted(best_per_identity.items(), key=lambda item: item[1], reverse=True)
         return ranked[:top_k]
 
+    def get_embeddings_for_identity(self, identity_id: str) -> List[Embedding]:
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT id, identity_id, vector_b64, model_name, version, 
+                       crop_type, quality_score, camera_id, timestamp_ms
+                FROM embeddings
+                WHERE identity_id = ?
+                ORDER BY id ASC
+            ''', (identity_id,))
+            rows = cursor.fetchall()
+            return [self._deserialize_emb(row) for row in rows]
+
     def count(self) -> int:
         with closing(sqlite3.connect(self.db_path)) as conn:
             cursor = conn.cursor()
@@ -149,6 +162,7 @@ class SQLiteVectorStore(BaseVectorStore):
         with closing(sqlite3.connect(self.db_path)) as conn:
             cursor = conn.cursor()
             cursor.execute('DELETE FROM embeddings WHERE identity_id = ?', (identity_id,))
+            cursor.execute('DELETE FROM identities_metadata WHERE identity_id = ?', (identity_id,))
             conn.commit()
 
     def clear(self) -> None:

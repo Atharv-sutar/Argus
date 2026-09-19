@@ -627,18 +627,29 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             track_id = payload.get("track_id")
             x = payload.get("x")
             y = payload.get("y")
-            logger.info(f"[TARGET] [POST /api/target/select] Target selection on camera '{cam_id}' (track_id={track_id}, x={x}, y={y})")
+            start_new = payload.get("start_new", False)
+            logger.info(f"[TARGET] [POST /api/target/select] Target selection on camera '{cam_id}' (track_id={track_id}, x={x}, y={y}, start_new={start_new})")
 
             if self.runtime_pipeline is not None and cam_id:
                 self.runtime_pipeline.set_active_camera(cam_id)
                 selected_id = None
+                
+                is_active = self.runtime_pipeline.target_manager.is_active()
+                is_correction = is_active and not start_new
+                
                 if track_id is not None:
-                    ok = self.runtime_pipeline.select_target_by_id(cam_id, int(track_id))
+                    if is_correction:
+                        ok = self.runtime_pipeline.correct_target_by_id(cam_id, int(track_id))
+                    else:
+                        ok = self.runtime_pipeline.select_target_by_id(cam_id, int(track_id))
                     selected_id = int(track_id) if ok else None
                 elif x is not None and y is not None:
-                    selected_id = self.runtime_pipeline.select_target_on_camera(cam_id, float(x), float(y))
+                    if is_correction:
+                        selected_id = self.runtime_pipeline.correct_target_on_camera(cam_id, float(x), float(y))
+                    else:
+                        selected_id = self.runtime_pipeline.select_target_on_camera(cam_id, float(x), float(y))
 
-                logger.info(f"[TARGET] Target locked: ID={selected_id}, ActiveCam='{self.runtime_pipeline.active_camera_id}'")
+                logger.info(f"[TARGET] Target locked: ID={selected_id}, ActiveCam='{self.runtime_pipeline.active_camera_id}', Correction={is_correction}")
                 self._send_json({
                     "success": True,
                     "target_locked": (selected_id is not None),
