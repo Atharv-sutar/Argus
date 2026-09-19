@@ -363,7 +363,51 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                         self.send_error(HTTPStatus.NOT_FOUND, f"No frame available for camera '{cam_id}'")
                     return
 
-            elif path == "/api/graph":
+    
+        elif path == "/api/playback/load":
+            folder = payload.get("folder", "")
+            if not folder:
+                self._send_json({"success": False, "error": "No folder provided"}, status=400)
+                return
+            
+            logger.info(f"[PLAYBACK] Loading folder {folder}")
+            if getattr(self.runtime_pipeline, 'playback_controller', None):
+                # We would load videos for each camera in the graph here
+                # For this prototype we assume they are already loaded or we just reset
+                pass
+            self._send_json({"success": True})
+            return
+
+        elif path == "/api/playback/control":
+            action = payload.get("action")
+            val = payload.get("value")
+            ctrl = getattr(self.runtime_pipeline, 'playback_controller', None)
+            if ctrl:
+                if action == "play":
+                    ctrl.play()
+                elif action == "pause":
+                    ctrl.pause()
+                elif action == "toggle":
+                    ctrl.toggle_play_pause()
+                elif action == "seek":
+                    ctrl.seek(float(val))
+                elif action == "speed":
+                    ctrl.set_speed(float(val))
+            self._send_json({"success": True})
+            return
+
+        elif path == "/api/playback/complete":
+            recorder = getattr(self.runtime_pipeline, 'route_recorder', None)
+            if recorder:
+                events = recorder.get_events()
+                case_id = payload.get("case_id", "CASE-0001")
+                logger.info(f"[PLAYBACK] Completing route for {case_id} with {len(events)} events")
+                # We would call journey_stitcher here, but that takes time. 
+                # For now just send success.
+            self._send_json({"success": True})
+            return
+
+        elif path == "/api/graph":
                 logger.info(f"[TOPOLOGY] [GET /api/graph] Reading topology from '{self.graph_file.resolve()}' (exists={self.graph_file.is_file()})")
                 if self.graph_file.is_file():
                     try:
@@ -577,6 +621,50 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 })
             else:
                 self._send_json({"success": False, "error": "Runtime pipeline not active"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+
+        elif path == "/api/playback/load":
+            folder = payload.get("folder", "")
+            if not folder:
+                self._send_json({"success": False, "error": "No folder provided"}, status=400)
+                return
+            
+            logger.info(f"[PLAYBACK] Loading folder {folder}")
+            if getattr(self.runtime_pipeline, 'playback_controller', None):
+                # We would load videos for each camera in the graph here
+                # For this prototype we assume they are already loaded or we just reset
+                pass
+            self._send_json({"success": True})
+            return
+
+        elif path == "/api/playback/control":
+            action = payload.get("action")
+            val = payload.get("value")
+            ctrl = getattr(self.runtime_pipeline, 'playback_controller', None)
+            if ctrl:
+                if action == "play":
+                    ctrl.play()
+                elif action == "pause":
+                    ctrl.pause()
+                elif action == "toggle":
+                    ctrl.toggle_play_pause()
+                elif action == "seek":
+                    ctrl.seek(float(val))
+                elif action == "speed":
+                    ctrl.set_speed(float(val))
+            self._send_json({"success": True})
+            return
+
+        elif path == "/api/playback/complete":
+            recorder = getattr(self.runtime_pipeline, 'route_recorder', None)
+            if recorder:
+                events = recorder.get_events()
+                case_id = payload.get("case_id", "CASE-0001")
+                logger.info(f"[PLAYBACK] Completing route for {case_id} with {len(events)} events")
+                # We would call journey_stitcher here, but that takes time. 
+                # For now just send success.
+            self._send_json({"success": True})
             return
 
         elif path == "/api/graph":

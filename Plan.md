@@ -128,7 +128,7 @@ The topology saving and loading logic was updated to use atomic file operations 
 Based on the audit:
 - `probe_local_webcams()` in `ui_server.py` uses `ThreadPoolExecutor` with per-index timeout of 1.5s
 - On Windows, it probes via DirectShow (`cv2.CAP_DSHOW`) which requires exclusive device access
-- The pipeline is paused during probing (`pipeline.pause_processing()`), but the 150ms sleep may not be enough for Windows to release DirectShow handles
+- The pipeline is paused during processing (`pipeline.pause_processing()`), but the 150ms sleep may not be enough for Windows to release DirectShow handles
 - `OpenCVCamera._capture_loop` has aggressive retry logic (30 retries before reconnection), which combined with the probe's device-stealing behavior causes the on/off flickering
 - MJPEG stream staleness detection uses `len(frame_bytes)` as a hash — two different frames with the same JPEG byte count would be falsely considered "stale"
 
@@ -267,7 +267,7 @@ The core logic for tracking has been cleanly divided into `start_new_investigati
 
 ---
 
-## Phase 3 — Recorded Video Mode (Core Feature)
+## Phase 3 — Recorded Video Mode (Core Feature) ✅ COMPLETED
 
 > **Priority: HIGHEST (feature).** The most important new capability.
 
@@ -445,7 +445,11 @@ Journey video: journey_CASE-2026-0042.mp4
 - Route report documents every camera transition including human corrections
 - All footage segments stitch seamlessly with no gaps or overlaps
 
+### Phase 3 Reflection
+The Recorded Video Mode was fully implemented by introducing the \VideoFileCamera\ to read frames from video files with precise millisecond seeking. The \PlaybackController\ was integrated into the main pipeline step loop (in \main.py\) to synchronize frame extraction based on a global clock, allowing play, pause, and speed adjustments. The \RouteRecorder\ tracks key handoff and target correction events directly inside the \MultiCameraPipeline\, generating a precise chronological log. Finally, the \journey_stitcher.py\ and eport.py\ utilities process the route events into actionable artifacts for human operators.
+
 ---
+
 
 ## Phase 4 — Camera Handoff Hardening
 

@@ -115,6 +115,21 @@
             </div>
           </div>
 
+          <!-- Playback Toolbar -->
+          <div id="playback-toolbar" class="matrix-toolbar" style="display: none; border-top: 1px solid var(--border-color);">
+            <div class="matrix-title-group" style="gap: 15px;">
+              <span class="badge-pill" style="background: var(--amber-glow); color: #fff;">PLAYBACK MODE</span>
+              <button id="btn-play-pause" class="btn btn-primary btn-sm">Pause</button>
+              <button id="btn-speed-up" class="btn btn-secondary btn-sm">Speed: 1x</button>
+            </div>
+            <div class="matrix-grid-controls" style="flex: 1; margin: 0 20px;">
+               <input type="range" id="playback-scrubber" min="0" max="100" value="0" style="width: 100%;" />
+            </div>
+            <div class="matrix-grid-controls">
+               <button id="btn-finish-playback" class="btn btn-quit btn-sm">Complete Route</button>
+            </div>
+          </div>
+
           <!-- Video Grid Container -->
           <div id="camera-matrix-grid" class="camera-matrix-grid layout-auto">
             <!-- Dynamic Camera Tiles Injected by app.js -->

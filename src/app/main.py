@@ -455,6 +455,8 @@ def run_multi_camera_app(
             if not show_window:
                 if not pipeline.is_running or is_shutdown_requested():
                     break
+                if getattr(pipeline, 'playback_controller', None):
+                    pipeline.playback_controller.step()
                 pipeline.step()
                 time.sleep(0.01)
                 continue
@@ -495,6 +497,8 @@ def run_multi_camera_app(
 
             # ===== TARGET_TRACKING STATE =====
             elif ui_state == "TARGET_TRACKING":
+                if getattr(pipeline, 'playback_controller', None):
+                    pipeline.playback_controller.step()
                 results = pipeline.step()
                 active_id = pipeline.active_camera_id
                 active_data = results.get(active_id) if active_id else None
@@ -531,6 +535,8 @@ def run_multi_camera_app(
 
             # ===== SEARCH_VIEW STATE =====
             elif ui_state == "SEARCH_VIEW":
+                if getattr(pipeline, 'playback_controller', None):
+                    pipeline.playback_controller.step()
                 results = pipeline.step()
                 active_id = pipeline.active_camera_id
                 progress = pipeline.get_search_progress()
@@ -556,6 +562,8 @@ def run_multi_camera_app(
 
             # ===== HANDOFF_CONFIRM STATE =====
             elif ui_state == "HANDOFF_CONFIRM":
+                if getattr(pipeline, 'playback_controller', None):
+                    pipeline.playback_controller.step()
                 results = pipeline.step()
                 active_id = pipeline.active_camera_id
                 progress = pipeline.get_search_progress()

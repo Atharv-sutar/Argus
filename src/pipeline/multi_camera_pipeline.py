@@ -25,6 +25,9 @@ from src.detection.yolo_detector import YOLODetector
 from src.multi_camera.camera_graph import CameraGraph
 from src.multi_camera.camera_node import CameraNode
 from src.multi_camera.search_manager import SearchManager
+from src.playback.controller import PlaybackController
+from src.playback.route_recorder import RouteRecorder
+from src.camera.video_file import VideoFileCamera
 from src.pipeline.camera_worker import CameraWorker
 from src.identity.manager import IdentityManager
 from src.reid.extractor import PyTorchReIDExtractor
@@ -62,6 +65,8 @@ class MultiCameraPipeline:
         camera_factory: Optional[Callable[[CameraNodeConfig], BaseCamera]] = None,
         shared_detector: Optional[BaseDetector] = None,
         identity_manager: Optional[Any] = None,
+        playback_controller: Optional[PlaybackController] = None,
+        route_recorder: Optional[RouteRecorder] = None,
     ) -> None:
         self.graph = graph
         self.config = config
@@ -110,6 +115,8 @@ class MultiCameraPipeline:
             )
 
         # 3. Factories
+        self.playback_controller = playback_controller
+        self.route_recorder = route_recorder
         self._shared_detector = shared_detector
         self._detector_factory = detector_factory or self._default_detector_factory
         self._tracker_factory = tracker_factory or self._default_tracker_factory
@@ -230,6 +237,11 @@ class MultiCameraPipeline:
                 height=self.config.camera.height,
                 fps=self.config.camera.fps,
             )
+        if node_cfg.source_type == SourceType.VIDEO_FILE or str(node_cfg.source).lower().endswith(('.mp4', '.avi', '.mkv')):
+            cam = VideoFileCamera(file_path=str(node_cfg.source))
+            if self.playback_controller is not None:
+                self.playback_controller.add_camera(node_cfg.camera_id, cam)
+            return cam
         return OpenCVCamera(
             source=node_cfg.source,
             width=self.config.camera.width,
@@ -534,6 +546,14 @@ class MultiCameraPipeline:
                 "event": "TARGET_CORRECTED",
                 "track_id": track_id,
             })
+            if self.route_recorder and worker._last_track_result:
+                b = (0,0,0,0)
+                for tr in worker._last_track_result.tracks:
+                    if tr.track_id == track_id:
+                        bx = tr.box
+                        b = (int(bx.x1), int(bx.y1), int(bx.width), int(bx.height))
+                        break
+                self.route_recorder.log_event(camera_id, track_id, worker._last_track_result.timestamp_ms, "correction", b, 1.0, True)
             logger.info(
                 f"[MULTI-CAM] Target corrected by ID on camera '{camera_id}' | Tracker={track_id} | Gallery preserved."
             )
@@ -603,6 +623,8 @@ class MultiCameraPipeline:
         self._active_camera_id = None
         self.search_manager.reset()
         self._transit_history.clear()
+        if self.route_recorder:
+            self.route_recorder.clear()
         logger.info("[MULTI-CAM] Target cleared and gallery purged.")
 
     def step(self) -> Dict[str, Tuple[Optional[np.ndarray], Optional[TrackResult], Optional[Target]]]:

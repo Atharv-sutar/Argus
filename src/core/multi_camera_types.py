@@ -175,3 +175,55 @@ class SearchProgress:
             "candidate_camera_id": self.candidate_camera_id,
             "candidate_confirmation_count": self.candidate_confirmation_count,
         }
+
+
+@dataclass
+class SessionMetadata:
+    """Metadata for a recorded surveillance session."""
+    case_id: Optional[str] = None
+    recording_date: Optional[str] = None
+    notes: Optional[str] = None
+    start_time_utc: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "case_id": self.case_id,
+            "recording_date": self.recording_date,
+            "notes": self.notes,
+            "start_time_utc": self.start_time_utc,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'SessionMetadata':
+        return cls(
+            case_id=data.get("case_id"),
+            recording_date=data.get("recording_date"),
+            notes=data.get("notes"),
+            start_time_utc=data.get("start_time_utc"),
+        )
+
+
+@dataclass
+class PlaybackConfig:
+    """Configuration for playback of recorded footage."""
+    footage_dir: str = ""
+    playback_speed: float = 1.0
+    loop: bool = False
+    sync_tolerance_ms: float = 100.0
+
+    def to_dict(self) -> dict:
+        return {
+            "footage_dir": self.footage_dir,
+            "playback_speed": self.playback_speed,
+            "loop": self.loop,
+            "sync_tolerance_ms": self.sync_tolerance_ms,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'PlaybackConfig':
+        return cls(
+            footage_dir=data.get("footage_dir", ""),
+            playback_speed=data.get("playback_speed", 1.0),
+            loop=data.get("loop", False),
+            sync_tolerance_ms=data.get("sync_tolerance_ms", 100.0),
+        )
