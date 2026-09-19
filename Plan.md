@@ -26,7 +26,7 @@ This plan is organized into **13 phases**, ordered by dependency and priority. P
 
 ---
 
-## Phase 0 — Topology Reliability (Critical Fix)
+## Phase 0 — Topology Reliability (Critical Fix) ✅ COMPLETED
 
 > **Priority: HIGHEST.** The topology map fails to load ~90% of the time in real-world tests. Nothing else matters if the graph cannot be reliably saved and loaded.
 
@@ -113,6 +113,9 @@ Add a `threading.Lock` around all reads and writes to `camera_graph.json` within
 - Corrupt files are recovered automatically from backup
 - All validation errors are surfaced to the UI operator
 - No silent failures
+
+### Phase 0 Reflection
+The topology saving and loading logic was updated to use atomic file operations (`.tmp`, `.bak`) and robust fallback logic when parsing corrupted files. The `ui_server` now utilizes a `threading.Lock()` to prevent race conditions during concurrent API requests. Testing manually verified that if the json is corrupted, the system correctly falls back to `.bak` avoiding a crash. Schema versioning is included in the output `to_dict` to enable future migrations.
 
 ---
 
