@@ -470,10 +470,10 @@ const API = {
 
   getPreviewUrl(source, sourceType) {
     return `${this.baseUrl}/api/preview?source=${encodeURIComponent(source)}&type=${encodeURIComponent(sourceType)}&t=${Date.now()}`;
-  }
+  },
 
     // Settings API
-    static async getSettings() {
+    async getSettings() {
         try {
             const res = await fetch('/api/settings');
             if (!res.ok) throw new Error('Settings fetch failed');
@@ -482,9 +482,9 @@ const API = {
             console.error('getSettings error:', e);
             return null;
         }
-    }
+    },
 
-    static async updateSettings(settings) {
+    async updateSettings(settings) {
         try {
             const res = await fetch('/api/settings', {
                 method: 'POST',

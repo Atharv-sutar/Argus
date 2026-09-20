@@ -471,8 +471,8 @@ def run_multi_camera_app(
                 if all_cams:
                     canvas, current_tile_maps = _render_monitoring_grid(frames, all_cams)
     
-                if not (getattr(pipeline, 'playback_controller', None) and pipeline.playback_controller.mode == "fast_scan"):
-                    cv2.imshow(window_name, canvas)
+                    if not (getattr(pipeline, 'playback_controller', None) and pipeline.playback_controller.mode == "fast_scan"):
+                        cv2.imshow(window_name, canvas)
 
                 else:
                     blank = np.zeros((400, 640, 3), dtype=np.uint8)

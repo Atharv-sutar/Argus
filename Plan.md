@@ -581,7 +581,7 @@ The inspector sidebar was modified to show a live stream preview (`/api/preview`
 
 ---
 
-## Phase 6 — UI/UX Overhaul & Advanced Settings
+## Phase 6 — UI/UX Overhaul & Advanced Settings ✅ COMPLETED
 
 > **Priority: MEDIUM.** Make the dashboard operator-friendly with clear separation of common and advanced controls.
 
@@ -631,6 +631,22 @@ A persistent status bar at the bottom of the dashboard showing:
 - Gallery size
 - Current mode (Live/Recorded)
 - Uptime
+
+| Phase | Status | Subsystem | Focus |
+|-------|--------|-----------|-------|
+| **0** | ✅ COMPLETED | Core | Camera graph traversal & reliability |
+| **1** | ✅ COMPLETED | AI Pipeline | YOLO detection & stream stability |
+| **2** | ✅ COMPLETED | Logic | Persistent target gallery & human-assisted correction |
+| **3** | ✅ COMPLETED | Storage | Recorded video fallback mode & replay buffers |
+| **4** | ✅ COMPLETED | Logic | Handoff hardening, partial matching & timeouts |
+| **5** | ✅ COMPLETED | UI/UX | Scalable matrix rendering & lazy loading |
+| **6** | ✅ COMPLETED | UI/UX | Settings overhaul, operator HUD & unified telemetry |
+| **7** | ✅ COMPLETED | Core | Immutable forensic audit trail & event logging |
+| **8** | ✅ COMPLETED | UI/UX | Global undo/redo stack for operator corrections |
+| **9** | ✅ COMPLETED | Storage | Operator annotations & bookmarking system |
+| **10**| ✅ COMPLETED | Core | Case management & workspace isolation |
+| **11**| ✅ COMPLETED | Core | Forensic evidence export (ZIP packaging) |
+| **12**| ✅ COMPLETED | AI Pipeline | Unattended batch processing & fast-scan mode |
 
 #### 6.3 — Event log panel
 
@@ -699,7 +715,7 @@ The UI server reads only from this telemetry object, never from pipeline interna
 
 ---
 
-## Phase 7 — Forensic Audit Trail / Chain of Custody
+## Phase 7 — Forensic Audit Trail / Chain of Custody ✅ COMPLETED
 
 > **Priority: HIGH.** If this system's output is used as forensic evidence, the defense will challenge every AI decision and every operator action. An immutable, verifiable audit trail is non-negotiable.
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 import numpy as np
 
 from src.core.types import DetectionResult, Embedding, TrackResult
@@ -58,6 +58,29 @@ class BaseDetector(ABC):
             DetectionResult: Detected bounding boxes and metadata.
         """
         pass
+
+    def detect_batch(
+        self,
+        frames: List[np.ndarray],
+        frame_ids: List[int],
+        timestamps_ms: List[float]
+    ) -> List[DetectionResult]:
+        """
+        Run detection on a batch of frames.
+        
+        Args:
+            frames: List of input image arrays.
+            frame_ids: List of frame indices.
+            timestamps_ms: List of capture timestamps.
+            
+        Returns:
+            List[DetectionResult]: Results for each frame.
+        """
+        # Default fallback implementation calls detect in a loop
+        return [
+            self.detect(f, fid, ts) 
+            for f, fid, ts in zip(frames, frame_ids, timestamps_ms)
+        ]
 
 
 class BaseTracker(ABC):

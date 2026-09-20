@@ -297,6 +297,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                         last_changed_time = time.time()
                         while not _SHUTDOWN_EVENT.is_set() and (self.runtime_pipeline is None or getattr(self.runtime_pipeline, "is_running", True)):
                             frame_seq = None
+                            frame_bytes = None
                             if self.runtime_pipeline is not None:
                                 frame_seq = getattr(self.runtime_pipeline, "get_camera_frame_seq", lambda c: None)(cam_id)
                                 frame_bytes = self.runtime_pipeline.get_camera_frame_jpeg(cam_id, quality=75)
@@ -771,7 +772,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     # Save to default.yaml
                     cfg.save("configs/default.yaml")
                     if hasattr(self.runtime_pipeline, "apply_config_update"):
-                        self.runtime_pipeline.apply_config_update(config)
+                        self.runtime_pipeline.apply_config_update(cfg)
                     self._audit(AuditEventType.CONFIG_CHANGE, "Advanced settings updated")
                     self._send_json({"success": True, "message": "Settings updated"})
                 except Exception as e:
@@ -847,7 +848,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/playback/fast-scan/start":
             try:
-                data = self._read_json()
+                data = payload
                 skip_zones = data.get("skip_zones", [])
                 if hasattr(self, 'pipeline') and self.runtime_pipeline and getattr(self.runtime_pipeline, 'playback_controller', None):
                     self.runtime_pipeline.playback_controller.start_fast_scan(skip_zones)
@@ -878,13 +879,14 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
         elif path.startswith("/api/cases/") and path.endswith("/export"):
             case_id = path.split("/")[3]
             if self.case_manager:
+                cm = self.case_manager
                 try:
-                    case = self.case_manager.open_case(case_id)  # just to get the metadata
+                    case = cm.open_case(case_id)  # just to get the metadata
                     self.export_status[case_id] = {"status": "running"}
                     
                     def run_export():
                         try:
-                            exporter = EvidenceExporter(self.case_manager.cases_dir, "exports")
+                            exporter = EvidenceExporter(cm.cases_dir, "exports")
                             zip_path = exporter.export(case)
                             self.export_status[case_id] = {"status": "completed", "zip_path": zip_path}
                         except Exception as e:
@@ -1076,7 +1078,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
         # Reuse existing pipeline capture if source is already managed by pipeline
         if self.runtime_pipeline is not None:
             for cid, node in getattr(self.runtime_pipeline, "_nodes", {}).items():
-                if str(node.config.source) == str(source_param) or cid == source_param:
+                if str(node.config.source) == source_param or cid == source_param:
                     jpeg = self.runtime_pipeline.get_camera_frame_jpeg(cid)
                     if jpeg:
                         return jpeg

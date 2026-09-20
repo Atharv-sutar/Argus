@@ -19,11 +19,13 @@ from src.core.multi_camera_types import (
     SearchProgress,
     SearchState,
     SourceType,
+    HandoffDecision,
 )
-from src.core.types import BoundingBox, DetectionResult, Embedding, Target, TargetState, Track, TrackResult
+from src.core.types import BoundingBox, DetectionResult, Embedding, Target, TargetState, Track, TrackResult, PipelineTelemetry
 from src.detection.yolo_detector import YOLODetector
 from src.multi_camera.camera_graph import CameraGraph
 from src.multi_camera.camera_node import CameraNode
+from src.audit.logger import AuditLogger
 from src.multi_camera.search_manager import SearchManager
 from src.playback.controller import PlaybackController
 from src.playback.route_recorder import RouteRecorder
@@ -73,6 +75,7 @@ class MultiCameraPipeline:
         self.graph = graph
         self.config = config
         self.search_config = config.multi_camera.search
+        self.audit_logger = audit_logger
 
         # 1. ReID Extractor
         if reid_extractor is not None:
@@ -107,10 +110,7 @@ class MultiCameraPipeline:
             
             # Load identities from database on startup
             if vector_store is not None:
-                self.identity_manager.load_target_gallery(
-                    max_gallery_size=config.reid.max_gallery_size,
-                    audit_logger=audit_logger,
-                )
+                self.identity_manager.load_target_gallery()
 
         self.undo_stack = UndoStack(max_depth=10)
         self.identity_manager.undo_stack = self.undo_stack
@@ -189,15 +189,15 @@ class MultiCameraPipeline:
         return self._is_running
 
     @property
-    def identity(self) -> IdentityManager:
+    def identity(self) -> Optional[IdentityManager]:
         """The identity manager managing targets."""
-        return self.target_manager.identity_manager
+        return self.target_manager.identity_manager if self.target_manager else None
 
     @property
-    def gallery(self) -> IdentityManager:
+    def gallery(self) -> Optional[IdentityManager]:
         """Backward-compatible alias: returns the IdentityManager which exposes
         size, max_size, manual_count, auto_count, get_thumbnails, remove_entry."""
-        return self.target_manager.identity_manager
+        return self.target_manager.identity_manager if self.target_manager else None
 
     @property
     def last_candidate_scores(self) -> Dict[int, float]:
@@ -378,13 +378,13 @@ class MultiCameraPipeline:
             target_track_id=target.track_id if target else None,
             camera_statuses=statuses,
             search_progress=self.get_search_progress().to_dict() if self.get_search_progress() else None,
-            gallery_size=gallery.size,
-            gallery_max=gallery.max_size,
-            gallery_manual=gallery.manual_count,
-            gallery_auto=gallery.auto_count,
+            gallery_size=gallery.size if gallery else 0,
+            gallery_max=gallery.max_size if gallery else 0,
+            gallery_manual=gallery.manual_count if gallery else 0,
+            gallery_auto=gallery.auto_count if gallery else 0,
             fps=round(self._current_fps, 1),
             gpu_memory_mb=round(gpu_mb, 1),
-            candidate_scores=self.last_candidate_scores,
+            candidate_scores={str(k): v for k, v in self.last_candidate_scores.items()},
             transit_history=self.transit_history,
             uptime_s=round(now - self._pipeline_start_time, 1)
         )
@@ -432,12 +432,13 @@ class MultiCameraPipeline:
                 if hasattr(worker, "detector"):
                     det_res = worker.detector.detect(frame_to_process, timestamp_ms=ts_ms)
                 elif self._shared_detector is not None:
-                    batch_res = self._shared_detector.detect_batch([frame_to_process], timestamps_ms=[ts_ms])
+                    batch_res = self._shared_detector.detect_batch([frame_to_process], timestamps_ms=[ts_ms]) # type: ignore
                     det_res = batch_res[0] if batch_res else None
                 else:
                     det_res = self._default_detector_factory().detect(frame_to_process, timestamp_ms=ts_ms)
                 
-                worker.process_frame(frame_to_process, ts_ms, det_res)
+                if det_res is not None:
+                    worker.process_frame(frame_to_process, ts_ms, det_res)
             except Exception as e:
                 logger.error(f"[MULTI-CAM] Detection failure: {e}")
 
@@ -493,12 +494,13 @@ class MultiCameraPipeline:
                 if hasattr(worker, "detector"):
                     det_res = worker.detector.detect(frame_to_process, timestamp_ms=ts_ms)
                 elif self._shared_detector is not None:
-                    batch_res = self._shared_detector.detect_batch([frame_to_process], timestamps_ms=[ts_ms])
+                    batch_res = self._shared_detector.detect_batch([frame_to_process], timestamps_ms=[ts_ms]) # type: ignore
                     det_res = batch_res[0] if batch_res else None
                 else:
                     det_res = self._default_detector_factory().detect(frame_to_process, timestamp_ms=ts_ms)
                 
-                worker.process_frame(frame_to_process, ts_ms, det_res)
+                if det_res is not None:
+                    worker.process_frame(frame_to_process, ts_ms, det_res)
             except Exception as e:
                 logger.error(f"[MULTI-CAM] Detection failure: {e}")
 
@@ -768,7 +770,7 @@ class MultiCameraPipeline:
                     yolo_meta.append((cid, ts_ms))
         
         if yolo_frames:
-            batch_det_results = self._default_detector_factory().detect_batch(
+            batch_det_results = self._default_detector_factory().detect_batch( # type: ignore
                 frames=yolo_frames,
                 frame_ids=[self._frame_count] * len(yolo_frames),
                 timestamps_ms=[ts for _, ts in yolo_meta]
@@ -875,17 +877,19 @@ class MultiCameraPipeline:
             _, role, frame, ts_ms, track_res = phase1_results[active_cam_id]
             if frame is not None and role == "active":
                 active_track_res = track_res
-                if active_cam_id in self._nodes:
-                    self._nodes[active_cam_id].fps = active_worker.fps
-                
-                precomp_cands = precomputed_reid_candidates.get(active_cam_id)
-                self._evaluate_active_camera_target(
-                    worker=active_worker, 
-                    frame=frame, 
-                    track_res=active_track_res, 
-                    timestamp_ms=ts_ms,
-                    precomputed_candidates=precomp_cands
-                )
+                active_worker = self._workers.get(active_cam_id)
+                if active_worker is not None:
+                    if active_cam_id in self._nodes:
+                        self._nodes[active_cam_id].fps = active_worker.fps
+                    
+                    precomp_cands = precomputed_reid_candidates.get(active_cam_id)
+                    self._evaluate_active_camera_target(
+                        worker=active_worker, 
+                        frame=frame, 
+                        track_res=active_track_res, 
+                        timestamp_ms=ts_ms,
+                        precomputed_candidates=precomp_cands
+                    )
             elif active_cam_id in self._nodes:
                 self._nodes[active_cam_id].mark_offline()
         elif active_cam_id and active_cam_id in self._nodes:
@@ -1002,9 +1006,9 @@ class MultiCameraPipeline:
         def _task_annotate_and_encode(cid: str, role: str, worker: CameraWorker, frame: np.ndarray, track_res: Optional[TrackResult], target: Optional[Target], candidate_scores: Dict[int, float]):
             ann_frame = frame
             if role == "active":
-                ann_frame = worker.annotate(frame, track_res, target, candidate_similarities=candidate_scores)
+                ann_frame = worker.annotate(frame, track_res or TrackResult(tracks=[]), target, candidate_similarities=candidate_scores or {})
             elif role == "search":
-                ann_frame = worker.annotate(frame, track_res, None)
+                ann_frame = worker.annotate(frame, track_res or TrackResult(tracks=[]), None)
             elif role == "standby":
                 pass # Standby doesn't need annotation
             
@@ -1343,6 +1347,7 @@ class MultiCameraPipeline:
                 candidates_to_extract, embs, match_details
             ):
                 eff_sim_f = float(eff_sim)
+                man_sim_f = float(man_sim)
                 is_match = eff_sim_f >= self._reacquisition_threshold
 
                 # Lone-bystander anti-scoop: Fix P-13
@@ -1624,6 +1629,7 @@ class MultiCameraPipeline:
             node = self._nodes.get(camera_id)
             frame = node.last_frame if node is not None else None
             
+        worker = self._workers.get(camera_id)
         if frame is None and worker is not None:
             frame = worker._last_frame
 
@@ -1655,7 +1661,7 @@ class MultiCameraPipeline:
             is_active = (cid == self._active_camera_id)
             is_searching = (cid in searching_cams)
             
-            if is_active:
+            if is_active and node.is_online:
                 status_str = "ACTIVE"
             elif is_searching:
                 status_str = f"SEARCHING (R={self.search_manager.get_progress().search_radius})"
@@ -1841,8 +1847,9 @@ class MultiCameraPipeline:
             track = self._pending_handoff_track
             crop = self._pending_handoff_crop
             emb = self._pending_handoff_emb
-            logger.info(f"[MULTI-CAM HANDOFF] Human CONFIRMED handoff to '{cid}' for Track #{track.track_id}")
-            self._perform_handoff(cid, track, crop, emb)
+            if track is not None:
+                logger.info(f"[MULTI-CAM HANDOFF] Human CONFIRMED handoff to '{cid}' for Track #{track.track_id}")
+                self._perform_handoff(cid, track, crop, emb)
             
             # Clear pending states
             self._pending_handoff_cam = None
