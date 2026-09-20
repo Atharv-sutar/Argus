@@ -803,7 +803,7 @@ Add a `verify_chain()` method to `AuditLogger` that reads all rows and verifies 
 
 ---
 
-## Phase 8 — Undo/Redo for Operator Corrections
+## Phase 8 — Undo/Redo for Operator Corrections (COMPLETED)
 
 > **Priority: MEDIUM.** The operator must be able to recover from mis-clicks without restarting the investigation.
 

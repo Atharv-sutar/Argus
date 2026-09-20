@@ -417,6 +417,13 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     })
                 return
 
+            elif path == "/api/undo/stack":
+                if self.runtime_pipeline is not None and getattr(self.runtime_pipeline, "undo_stack", None):
+                    self._send_json(self.runtime_pipeline.undo_stack.get_state())
+                else:
+                    self._send_json({"can_undo": False, "can_redo": False, "last_action_name": None, "next_redo_name": None})
+                return
+
             elif path == "/api/target/gallery":
                 if self.runtime_pipeline is not None:
                     gallery = self.runtime_pipeline.gallery
@@ -658,6 +665,28 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     self._send_json({"success": False, "error": str(e)}, status=HTTPStatus.BAD_REQUEST)
             else:
                 self._send_json({"success": False, "error": "Pipeline not running"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+
+        elif path == "/api/undo":
+            if self.runtime_pipeline is not None:
+                res = self.runtime_pipeline.undo_last_action()
+                if res:
+                    self._send_json({"success": True, "action": res})
+                else:
+                    self._send_json({"success": False, "error": "Nothing to undo"}, status=HTTPStatus.BAD_REQUEST)
+            else:
+                self._send_json({"success": False, "error": "Pipeline not active"}, status=HTTPStatus.BAD_REQUEST)
+            return
+            
+        elif path == "/api/redo":
+            if self.runtime_pipeline is not None:
+                res = self.runtime_pipeline.redo_last_action()
+                if res:
+                    self._send_json({"success": True, "action": res})
+                else:
+                    self._send_json({"success": False, "error": "Nothing to redo"}, status=HTTPStatus.BAD_REQUEST)
+            else:
+                self._send_json({"success": False, "error": "Pipeline not active"}, status=HTTPStatus.BAD_REQUEST)
             return
 
         elif path == "/api/target/select":

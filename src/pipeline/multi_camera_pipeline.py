@@ -35,6 +35,7 @@ from src.reid.quality import ReIDCropQuality
 from src.target.manager import TargetManager
 from src.tracking.byte_tracker import ByteTracker
 from src.visualization.annotator import FrameAnnotator
+from src.core.undo_stack import UndoStack
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,7 @@ class MultiCameraPipeline:
         identity_manager: Optional[Any] = None,
         playback_controller: Optional[PlaybackController] = None,
         route_recorder: Optional[RouteRecorder] = None,
+        audit_logger: Optional[AuditLogger] = None,
     ) -> None:
         self.graph = graph
         self.config = config
@@ -100,11 +102,18 @@ class MultiCameraPipeline:
                 reacquisition_threshold=config.reid.reacquisition_threshold if hasattr(config.reid, 'reacquisition_threshold') else max(0.75, config.reid.match_threshold + 0.10),
                 min_margin=config.reid.min_margin,
                 auto_add_threshold=getattr(config.reid, 'auto_add_threshold', config.reid.match_threshold + 0.05),
+                audit_logger=audit_logger,
             )
             
             # Load identities from database on startup
             if vector_store is not None:
-                self.identity_manager.load_target_gallery()
+                self.identity_manager.load_target_gallery(
+                    max_gallery_size=config.reid.max_gallery_size,
+                    audit_logger=audit_logger,
+                )
+
+        self.undo_stack = UndoStack(max_depth=10)
+        self.identity_manager.undo_stack = self.undo_stack
 
         if target_manager is not None:
             self.target_manager = target_manager
@@ -112,6 +121,8 @@ class MultiCameraPipeline:
             self.target_manager = TargetManager(
                 identity_manager=self.identity_manager,
                 min_margin=config.reid.min_margin,
+                audit_logger=audit_logger,
+                undo_stack=self.undo_stack,
             )
 
         # 3. Factories
@@ -128,7 +139,7 @@ class MultiCameraPipeline:
         self._annotators: Dict[str, FrameAnnotator] = {}
 
         # 5. Search manager
-        self.search_manager = SearchManager(self.graph, self.search_config)
+        self.search_manager = SearchManager(self.graph, self.search_config, audit_logger=self.audit_logger)
 
         # 6. Active tracking state
         self._active_camera_id: Optional[str] = None

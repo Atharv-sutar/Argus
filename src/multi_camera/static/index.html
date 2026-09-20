@@ -51,6 +51,8 @@
             <li style="margin-bottom: 8px;"><strong>Space</strong> - Play/Pause (Playback)</li>
             <li style="margin-bottom: 8px;"><strong>a</strong> - Add target angle to gallery</li>
             <li style="margin-bottom: 8px;"><strong>c</strong> - Clear active target</li>
+            <li style="margin-bottom: 8px;"><strong>Ctrl+z</strong> - Undo last action</li>
+            <li style="margin-bottom: 8px;"><strong>Ctrl+Shift+z</strong> - Redo action</li>
             <li style="margin-bottom: 8px;"><strong>s</strong> - Open Settings</li>
             <li style="margin-bottom: 8px;"><strong>q</strong> - Shutdown server</li>
             <li style="margin-bottom: 8px;"><strong>?</strong> - Toggle Shortcuts</li>
@@ -150,6 +152,12 @@
           </button>
         </div>
 
+        <button id="btn-undo-global" class="btn btn-secondary btn-sm" title="Undo Last Action (Shortcut: Ctrl+Z)" disabled>
+          ↺ Undo
+        </button>
+        <button id="btn-redo-global" class="btn btn-secondary btn-sm" title="Redo Action (Shortcut: Ctrl+Shift+Z)" disabled>
+          ↻ Redo
+        </button>
         <button id="btn-add-sample-global" class="btn btn-primary btn-sm" title="Capture current angle to target gallery (Shortcut: 'a')">
           + Add Angle
         </button>

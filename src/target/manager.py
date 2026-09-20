@@ -8,6 +8,8 @@ import numpy as np
 
 from src.core.types import BoundingBox, Embedding, GalleryEntry, Target, TargetState, Track, TrackResult, VerifiedIdentityDecision
 from src.identity.manager import IdentityManager
+from src.audit.logger import AuditLogger, AuditEventType
+from src.core.undo_stack import UndoStack, UndoableAction
 
 logger = logging.getLogger(__name__)
 
@@ -21,11 +23,15 @@ class TargetManager:
     def __init__(
         self,
         identity_manager: Optional[IdentityManager] = None,
+        audit_logger: Optional[AuditLogger] = None,
         lost_timeout_ms: float = 2000.0,
         reassociation_iou_thresh: float = 0.3,
         min_margin: float = 0.05,
+        undo_stack: Optional[UndoStack] = None,
     ) -> None:
         self.identity_manager = identity_manager
+        self.audit_logger = audit_logger
+        self.undo_stack = undo_stack
         self.lost_timeout_ms = lost_timeout_ms
         self.reassociation_iou_thresh = reassociation_iou_thresh
         self.min_margin = min_margin
@@ -87,6 +93,13 @@ class TargetManager:
                 )
 
         logger.info(f"[TARGET] New investigation started: Tracker={track_id} on '{camera_id}' | Identity seeded.")
+        if self.audit_logger:
+            self.audit_logger.log(
+                AuditEventType.TARGET_SELECTED,
+                {"camera_id": camera_id, "track_id": track_id, "bbox": [box.x1, box.y1, box.x2, box.y2] if box else None, "frame_timestamp_ms": timestamp_ms},
+                camera_id=camera_id,
+                track_id=track_id
+            )
         return True
 
     def correct_target(
@@ -113,6 +126,15 @@ class TargetManager:
                     break
 
         box = matched_track.box if matched_track else (self._target.last_known_box if self._target else None)
+        
+        old_track_id = self._target.track_id
+        
+        if self.undo_stack:
+            self.undo_stack.push(UndoableAction(
+                action_type="target_correction",
+                forward_data={"new_track_id": track_id, "camera_id": camera_id},
+                reverse_data={"old_track_id": old_track_id, "camera_id": camera_id}
+            ))
 
         self._target.track_id = track_id
         self._target.state = TargetState.LOCKED
@@ -135,7 +157,31 @@ class TargetManager:
                 )
 
         logger.info(f"[TARGET] Target corrected: Tracker={track_id} on '{camera_id}' | Gallery preserved.")
+        if self.audit_logger:
+            self.audit_logger.log(
+                AuditEventType.HUMAN_CORRECTION,
+                {"camera_id": camera_id, "old_track_id": self._target.track_id if self._target else None, "new_track_id": track_id, "gallery_preserved": True},
+                camera_id=camera_id,
+                track_id=track_id
+            )
         return True
+
+
+    def undo_target_correction(self, reverse_data: dict) -> None:
+        """Revert target to previous track ID."""
+        old_track_id = reverse_data.get("old_track_id")
+        if old_track_id is not None:
+            self._target.track_id = old_track_id
+            self._target.state = TargetState.LOCKED
+            logger.info(f"[TARGET] Target correction undone. Reverted to Tracker={old_track_id}")
+
+    def redo_target_correction(self, forward_data: dict) -> None:
+        """Re-apply target correction."""
+        new_track_id = forward_data.get("new_track_id")
+        if new_track_id is not None:
+            self._target.track_id = new_track_id
+            self._target.state = TargetState.LOCKED
+            logger.info(f"[TARGET] Target correction redone. Reverted to Tracker={new_track_id}")
 
     def update(
         self,
@@ -279,6 +325,12 @@ class TargetManager:
         self._target.last_seen_frame = frame_id
         self._target.last_seen_timestamp_ms = timestamp_ms
         self._target.lost_duration_ms = 0.0
+        if self._target.state not in (TargetState.TRACKING, TargetState.LOCKED) and self.audit_logger:
+            self.audit_logger.log(
+                AuditEventType.TARGET_LOCKED,
+                {"camera_id": None, "track_id": track.track_id, "reid_confidence": None},
+                track_id=track.track_id
+            )
         self._target.state = TargetState.TRACKING
         return self._target
 
@@ -299,6 +351,12 @@ class TargetManager:
         else:
             elapsed = self._target.lost_duration_ms + 33.3
         self._target.lost_duration_ms = elapsed
+        if self._target.state != TargetState.LOST and self.audit_logger:
+            self.audit_logger.log(
+                AuditEventType.TARGET_LOST,
+                {"camera_id": None, "last_track_id": self._target.track_id, "last_seen_timestamp_ms": self._target.last_seen_timestamp_ms},
+                track_id=self._target.track_id
+            )
         self._target.state = TargetState.LOST
         return self._target
 

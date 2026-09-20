@@ -20,6 +20,8 @@ from src.core.types import (
 from src.identity.store import InMemoryVectorStore
 from src.identity.evidence import EvidenceEngine
 from src.reid.quality import CropQualityEvaluator
+from src.audit.logger import AuditLogger, AuditEventType
+from src.core.undo_stack import UndoStack, UndoableAction
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +73,11 @@ class IdentityManager:
         w_lower: float = 0.10,
         evidence_engine: Optional[EvidenceEngine] = None,
         auto_add_threshold: Optional[float] = None,
+        audit_logger: Optional[AuditLogger] = None,
+        undo_stack: Optional[UndoStack] = None,
     ) -> None:
         self.reid = reid_extractor
+        self.undo_stack = undo_stack
         self.vector_store = vector_store or InMemoryVectorStore()
         self.similarity_threshold = similarity_threshold
         self.reacquisition_threshold = reacquisition_threshold
@@ -89,6 +94,7 @@ class IdentityManager:
         self.w_deep = w_deep
         self.w_lower = w_lower
         self.auto_add_threshold = auto_add_threshold if auto_add_threshold is not None else similarity_threshold + 0.10
+        self.audit_logger = audit_logger
         self.evidence_engine = evidence_engine or EvidenceEngine(
             window_size=4,
             min_similarity_threshold=similarity_threshold,
@@ -200,16 +206,16 @@ class IdentityManager:
             return False
 
         removed = False
+        removed_data = {}
         if entry_id.startswith("trusted_"):
             try:
                 idx = int(entry_id.split("_", 1)[1])
                 if 0 <= idx < len(ident.trusted_gallery):
-                    ident.trusted_gallery.pop(idx)
-                    if 0 <= idx < len(ident.trusted_upper_gallery):
-                        ident.trusted_upper_gallery.pop(idx)
-                    if 0 <= idx < len(ident.trusted_lower_gallery):
-                        ident.trusted_lower_gallery.pop(idx)
-                    self._entry_crops.pop(f"{ident.identity_id}_{entry_id}", None)
+                    emb = ident.trusted_gallery.pop(idx)
+                    up = ident.trusted_upper_gallery.pop(idx) if 0 <= idx < len(ident.trusted_upper_gallery) else None
+                    lo = ident.trusted_lower_gallery.pop(idx) if 0 <= idx < len(ident.trusted_lower_gallery) else None
+                    crop = self._entry_crops.pop(f"{ident.identity_id}_{entry_id}", None)
+                    removed_data = {"emb": emb, "up": up, "lo": lo, "crop": crop, "idx": idx, "type": "trusted"}
                     removed = True
             except (ValueError, IndexError):
                 pass
@@ -217,13 +223,28 @@ class IdentityManager:
             try:
                 idx = int(entry_id.split("_", 1)[1])
                 if 0 <= idx < len(ident.provisional_gallery):
-                    ident.provisional_gallery.pop(idx)
-                    self._entry_crops.pop(f"{ident.identity_id}_{entry_id}", None)
+                    emb = ident.provisional_gallery.pop(idx)
+                    crop = self._entry_crops.pop(f"{ident.identity_id}_{entry_id}", None)
+                    removed_data = {"emb": emb, "crop": crop, "idx": idx, "type": "provisional"}
                     removed = True
             except (ValueError, IndexError):
                 pass
 
+        if removed and hasattr(self, "undo_stack") and self.undo_stack:
+            self.undo_stack.push(UndoableAction(
+                action_type="gallery_remove",
+                forward_data={"entry_id": entry_id},
+                reverse_data={"entry_id": entry_id, "data": removed_data}
+            ))
+
         if removed:
+            if hasattr(self, "audit_logger") and self.audit_logger:
+                self.audit_logger.log(
+                    AuditEventType.GALLERY_REMOVE,
+                    {"entry_id": entry_id, "source": "manual" if entry_id.startswith("trusted_") else "auto", "gallery_size_after": self.size},
+                    camera_id=None,
+                    track_id=None
+                )
             # Rebuild vector store for this identity
             self.vector_store.remove_identity("target_0")
             for emb in ident.trusted_gallery:
@@ -233,6 +254,54 @@ class IdentityManager:
             self.save_target_gallery()
         return removed
 
+
+    def undo_gallery_remove(self, reverse_data: dict) -> None:
+        """Undo a gallery removal."""
+        entry_id = reverse_data.get("entry_id")
+        data = reverse_data.get("data")
+        ident = self.get_identity("target_0")
+        if not ident or not data: return
+        
+        idx = data["idx"]
+        crop = data.get("crop")
+        if data["type"] == "trusted":
+            ident.trusted_gallery.insert(idx, data["emb"])
+            if data["up"]: ident.trusted_upper_gallery.insert(idx, data["up"])
+            if data["lo"]: ident.trusted_lower_gallery.insert(idx, data["lo"])
+            if crop is not None: self._entry_crops[f"{ident.identity_id}_{entry_id}"] = crop
+        else:
+            ident.provisional_gallery.insert(idx, data["emb"])
+            if crop is not None: self._entry_crops[f"{ident.identity_id}_{entry_id}"] = crop
+        
+        self.vector_store.remove_identity("target_0")
+        for emb in ident.trusted_gallery: self.vector_store.add(emb, "target_0")
+        for emb in ident.provisional_gallery: self.vector_store.add(emb[0] if isinstance(emb, tuple) else emb, "target_0")
+        self.save_target_gallery()
+        logger.info(f"[IDENTITY] Gallery remove undone for {entry_id}")
+
+    def redo_gallery_remove(self, forward_data: dict) -> None:
+        """Redo a gallery removal."""
+        entry_id = forward_data.get("entry_id")
+        if entry_id:
+            # temporally disable undo pushing while redoing
+            old_undo = getattr(self, "undo_stack", None)
+            self.undo_stack = None
+            self.remove_entry(entry_id)
+            self.undo_stack = old_undo
+            logger.info(f"[IDENTITY] Gallery remove redone for {entry_id}")
+
+    def undo_gallery_add(self, reverse_data: dict) -> None:
+        pass # To implement if manual adds are tracked
+
+    def redo_gallery_add(self, forward_data: dict) -> None:
+        pass
+
+    def undo_gallery_clear(self, reverse_data: dict) -> None:
+        pass
+        
+    def redo_gallery_clear(self, forward_data: dict) -> None:
+        pass
+
     def match(self, candidate_embedding: Embedding) -> Tuple[float, Optional[Any]]:
         """Shim for TargetGallery.match"""
         res = self.match_batch([candidate_embedding])
@@ -240,6 +309,11 @@ class IdentityManager:
         
     def clear(self, identity_id: str = "target_0") -> None:
         """Shim for TargetGallery.clear"""
+        if hasattr(self, "audit_logger") and self.audit_logger:
+            self.audit_logger.log(
+                AuditEventType.GALLERY_CLEAR,
+                {"cleared_count": self.size, "reason": "manual_clear"},
+            )
         if identity_id in self._identities:
             del self._identities[identity_id]
         self.vector_store.remove_identity(identity_id)
@@ -593,6 +667,12 @@ class IdentityManager:
             f"[IDENTITY] Added diverse reference sample {len(ident.trusted_gallery)}/{self.max_reference_samples} "
             f"for '{identity_id}' (quality={q_score:.2f}, clusters={len(ident.view_clusters)})"
         )
+        if hasattr(self, "audit_logger") and self.audit_logger:
+            self.audit_logger.log(
+                AuditEventType.GALLERY_ADD,
+                {"source": "manual", "camera_id": None, "quality_score": float(q_score), "gallery_size_after": self.size},
+                camera_id=None
+            )
         return True
 
     def enroll_cross_camera_viewpoint(
@@ -731,6 +811,12 @@ class IdentityManager:
             f"[IDENTITY] Added adaptive observation for '{identity_id}' (candidate_score={eval_res.candidate_score:.3f}, "
             f"adaptive_count={len(ident.provisional_gallery)}/{self.max_gallery_size})"
         )
+        if hasattr(self, "audit_logger") and self.audit_logger:
+            self.audit_logger.log(
+                AuditEventType.GALLERY_ADD,
+                {"source": "auto", "camera_id": None, "quality_score": float(q_score), "gallery_size_after": self.size},
+                camera_id=None
+            )
         return True
 
     def flush_adaptive_gallery(self, identity_id: str) -> None:
@@ -849,6 +935,11 @@ class IdentityManager:
 
         is_match = (is_qual_pass and is_ref_pass and is_score_pass and is_upper_pass)
         decision = "MATCH" if is_match else "NO_MATCH"
+        if hasattr(self, "audit_logger") and self.audit_logger:
+            self.audit_logger.log(
+                AuditEventType.REID_MATCH,
+                {"camera_id": None, "track_id": None, "similarity_score": float(candidate_score), "threshold": float(self.similarity_threshold), "decision": decision}
+            )
 
         return CandidateEvaluation(
             is_match=is_match,

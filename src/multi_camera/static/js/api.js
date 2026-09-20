@@ -143,6 +143,17 @@ const API = {
     }
   },
 
+  async getAuditLogs(limit = 100, offset = 0) {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/audit/log?limit=${limit}&offset=${offset}`);
+      if (!res.ok) return { success: false, logs: [] };
+      return await res.json();
+    } catch (err) {
+      console.error('[API] getAuditLogs error:', err);
+      return { success: false, logs: [] };
+    }
+  },
+
   async getStatus() {
     try {
       const res = await fetch(`${this.baseUrl}/api/status`);
@@ -199,6 +210,39 @@ const API = {
       return await res.json();
     } catch (err) {
       console.error('[API] deleteGalleryEntry error:', err);
+      throw err;
+    }
+  },
+
+
+  async getUndoStack() {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/undo/stack`);
+      if (!res.ok) return { can_undo: false, can_redo: false };
+      return await res.json();
+    } catch (err) {
+      return { can_undo: false, can_redo: false };
+    }
+  },
+
+  async undoAction() {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/undo`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Undo failed');
+      return data;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  async redoAction() {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/redo`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Redo failed');
+      return data;
+    } catch (err) {
       throw err;
     }
   },

@@ -10,6 +10,7 @@ from src.core.multi_camera_types import SearchProgress, SearchState, HandoffDeci
 from src.multi_camera.camera_graph import CameraGraph
 from src.multi_camera.camera_priority import CameraPrioritizer
 from src.multi_camera.search_state import SearchStateManager
+from src.audit.logger import AuditLogger, AuditEventType
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,8 @@ class SearchManager:
     - Make identity decisions (that's the IdentityManager's job)
     """
 
-    def __init__(self, graph: CameraGraph, config: SearchConfig) -> None:
+    def __init__(self, graph: CameraGraph, config: SearchConfig, audit_logger: Optional[AuditLogger] = None) -> None:
+        self.audit_logger = audit_logger
         self._graph = graph
         self._config = config
         self._state = SearchStateManager(config)
@@ -57,6 +59,12 @@ class SearchManager:
             List of (camera_id, priority_score) to activate for search.
         """
         self._state.start_search(camera_id)
+        if hasattr(self, "audit_logger") and self.audit_logger:
+            self.audit_logger.log(
+                AuditEventType.SEARCH_START,
+                {"from_camera_id": camera_id, "initial_radius": self._config.initial_radius, "search_cameras": []},
+                camera_id=camera_id
+            )
 
         # Get initial neighbors at configured initial radius
         neighbors = self._graph.get_neighbors(camera_id, self._config.initial_radius)
@@ -152,6 +160,12 @@ class SearchManager:
                 f"Search expanded to radius {new_radius}: "
                 f"activating {len(newly_activated)} new cameras immediately, {len(ranked) - len(newly_activated)} pending"
             )
+            if hasattr(self, "audit_logger") and self.audit_logger:
+                self.audit_logger.log(
+                    AuditEventType.SEARCH_EXPAND,
+                    {"new_radius": new_radius, "added_cameras": [c for c, s in ranked]},
+                    camera_id=origin
+                )
 
         return newly_activated if newly_activated else None
 

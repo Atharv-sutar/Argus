@@ -247,6 +247,36 @@ class SurveillanceApp {
     };
     this.clearTargetFn = clearTargetFn;
 
+    const undoFn = async () => {
+      try {
+        const res = await API.undoAction();
+        this.showToast(`Undid action: ${res.action.action_type}`, 'success');
+        await this.refreshStatus();
+        await this.refreshGallery();
+        this.pollUndoStack();
+      } catch (err) {
+        this.showToast(err.message, 'error');
+      }
+    };
+    this.undoFn = undoFn;
+
+    const redoFn = async () => {
+      try {
+        const res = await API.redoAction();
+        this.showToast(`Redid action: ${res.action.action_type}`, 'success');
+        await this.refreshStatus();
+        await this.refreshGallery();
+        this.pollUndoStack();
+      } catch (err) {
+        this.showToast(err.message, 'error');
+      }
+    };
+    this.redoFn = redoFn;
+
+    document.getElementById('btn-undo-global')?.addEventListener('click', undoFn);
+    document.getElementById('btn-redo-global')?.addEventListener('click', redoFn);
+
+
     document.getElementById('btn-add-sample-global').addEventListener('click', addSampleFn);
     document.getElementById('btn-card-add-sample').addEventListener('click', addSampleFn);
 
@@ -318,7 +348,13 @@ class SurveillanceApp {
     window.addEventListener('keydown', (e) => {
       if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
       const key = e.key.toLowerCase();
-      if (key === 'a') {
+      if (key === 'z' && e.ctrlKey && e.shiftKey) {
+        e.preventDefault();
+        redoFn();
+      } else if (key === 'z' && e.ctrlKey) {
+        e.preventDefault();
+        undoFn();
+      } else if (key === 'a') {
         e.preventDefault();
         addSampleFn();
       } else if (key === 'c') {
@@ -409,6 +445,10 @@ class SurveillanceApp {
     if (this.galleryPollTimer) {
       clearInterval(this.galleryPollTimer);
       this.galleryPollTimer = null;
+    }
+    if (this.auditLogPollTimer) {
+      clearInterval(this.auditLogPollTimer);
+      this.auditLogPollTimer = null;
     }
 
     // 2. Disconnect all live MJPEG video streams immediately to release sockets & server threads
@@ -730,6 +770,15 @@ class SurveillanceApp {
      PERIODIC STATUS & GALLERY POLLING
      ========================================================================== */
 
+
+  async pollUndoStack() {
+    const stack = await API.getUndoStack();
+    const btnUndo = document.getElementById('btn-undo-global');
+    const btnRedo = document.getElementById('btn-redo-global');
+    if (btnUndo) btnUndo.disabled = !stack.can_undo;
+    if (btnRedo) btnRedo.disabled = !stack.can_redo;
+  }
+
   startPolling() {
     console.log('[SSE] Initializing Server-Sent Events for unified telemetry...');
     if (this.telemetrySource) {
@@ -763,6 +812,49 @@ class SurveillanceApp {
     this.telemetrySource.onerror = (err) => {
       console.warn('[SSE] Connection lost, retrying automatically...', err);
     };
+
+    if (this.auditLogPollTimer) clearInterval(this.auditLogPollTimer);
+    this.updateAuditLog();
+    this.auditLogPollTimer = setInterval(() => this.updateAuditLog(), 3000);
+  }
+
+  async updateAuditLog() {
+    try {
+      const res = await API.getAuditLogs(50, 0);
+      if (res && res.success && res.logs) {
+        const container = document.getElementById('event-log-container');
+        if (!container) return;
+        
+        if (res.logs.length === 0) {
+          container.innerHTML = '<div style="color: var(--text-dim);">System initialized. Waiting for events...</div>';
+          return;
+        }
+
+        const logHtml = res.logs.map(log => {
+          const timeStr = new Date(log.timestamp).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+          let color = '#94a3b8'; // default
+          if (log.event_type.includes('START') || log.event_type.includes('MATCH')) color = '#00f2fe';
+          if (log.event_type.includes('LOST') || log.event_type.includes('REJECT') || log.event_type.includes('REMOVE') || log.event_type.includes('CLEAR')) color = 'var(--red-glow)';
+          if (log.event_type.includes('ADD') || log.event_type.includes('ACCEPT') || log.event_type.includes('LOCKED')) color = '#10b981';
+          if (log.event_type.includes('CORRECTION') || log.event_type.includes('EXPAND')) color = '#f59e0b';
+          
+          let detStr = log.details;
+          if (detStr.length > 60) {
+             detStr = detStr.substring(0, 57) + '...';
+          }
+          
+          return `<div style="margin-bottom: 4px; display: flex; gap: 8px;">
+            <span style="color: #64748b;">[${timeStr}]</span>
+            <span style="color: ${color}; min-width: 130px; font-weight: 600;">${log.event_type}</span>
+            <span style="color: #cbd5e1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title='${log.details}'>${detStr}</span>
+          </div>`;
+        }).join('');
+        
+        container.innerHTML = logHtml;
+      }
+    } catch(err) {
+      // ignore
+    }
   }
 
   async refreshStatus(st = null) {
