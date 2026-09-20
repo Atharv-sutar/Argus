@@ -643,7 +643,7 @@ class IdentityManager:
 
         self.vector_store.add(fused, identity_id)
 
-        q_score = self.quality.evaluate(crop) if crop is not None else 1.0
+        _, q_score, _ = self.quality.evaluate(crop) if crop is not None else (True, 1.0, "ok")
 
         # Update or add new view cluster in TargetIdentityAnchor
         if ident.anchor is not None:
