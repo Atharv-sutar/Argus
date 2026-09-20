@@ -810,7 +810,7 @@ class MultiCameraPipeline:
 
         # Execute Phase 4: Batched ReID Extraction
         target = self.target_manager.target
-        should_reid = (self._frame_count % self.reid_interval == 0) or (target.state == TargetState.LOST)
+        should_reid = (self._frame_count % self.reid_interval == 0)
         
         precomputed_reid_candidates: Dict[str, List[Tuple[Track, np.ndarray, Embedding]]] = {}
         

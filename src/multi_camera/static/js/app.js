@@ -288,6 +288,7 @@ class SurveillanceApp {
       }
     };
     this.clearTargetFn = clearTargetFn;
+    window.clearTargetFn = clearTargetFn;
 
     const undoFn = async () => {
       try {
@@ -689,8 +690,28 @@ class SurveillanceApp {
       } else if (key === 's') {
         e.preventDefault();
         if (btnSettings) btnSettings.click();
+      } else if (key === '?') {
+        e.preventDefault();
+        const overlay = document.getElementById('shortcuts-overlay');
+        if (overlay) overlay.style.display = overlay.style.display === 'none' ? 'flex' : 'none';
       }
     });
+    
+    const btnShortcutsGlobal = document.getElementById('btn-shortcuts-global');
+    if (btnShortcutsGlobal) {
+        btnShortcutsGlobal.addEventListener('click', () => {
+            const overlay = document.getElementById('shortcuts-overlay');
+            if (overlay) overlay.style.display = 'flex';
+        });
+    }
+    
+    const btnShortcutsClose = document.getElementById('btn-shortcuts-close');
+    if (btnShortcutsClose) {
+        btnShortcutsClose.addEventListener('click', () => {
+            const overlay = document.getElementById('shortcuts-overlay');
+            if (overlay) overlay.style.display = 'none';
+        });
+    }
   }
 
 
@@ -1200,19 +1221,19 @@ class SurveillanceApp {
 
       const pendingGraceMs = 2000;
       if (this._pendingActiveCameraSwitch && (Date.now() - this._pendingActiveCameraSwitchTime) < pendingGraceMs) {
-        if (st.active_camera === this._pendingActiveCameraSwitch) {
+        if (st.active_camera_id === this._pendingActiveCameraSwitch) {
           this._pendingActiveCameraSwitch = null;
         }
       } else {
         this._pendingActiveCameraSwitch = null;
-        this.activeCameraId = st.active_camera;
+        this.activeCameraId = st.active_camera_id;
       }
 
       this.targetState = st.target_state || 'UNSELECTED';
       this.searchProgress = st.search_progress;
 
       // Update Header HUD
-      this.hdrActiveCam.textContent = st.active_camera || 'None';
+      this.hdrActiveCam.textContent = st.active_camera_id || 'None';
 
       if (this.targetState === 'LOST_PERMANENTLY') {
         this.hdrTargetState.textContent = 'TARGET LOST';
@@ -1254,7 +1275,7 @@ class SurveillanceApp {
       this.cardTargetId.textContent = st.target_track_id ? `Tracker #${st.target_track_id}` : (st.target_state !== 'UNSELECTED' ? 'TARGET_0' : 'UNSELECTED');
       this.cardTargetState.textContent = this.targetState;
       this.cardTargetState.className = `state-tag state-${this.targetState.toLowerCase()}`;
-      this.cardTargetCam.textContent = st.active_camera || 'None';
+      this.cardTargetCam.textContent = st.active_camera_id || 'None';
 
       const scores = st.candidate_scores || {};
       const scoreKeys = Object.keys(scores);
@@ -1290,7 +1311,7 @@ class SurveillanceApp {
           const badge = document.getElementById(`badge-${cam.camera_id}`);
           if (!tile || !badge) return;
 
-          const isAct = (cam.camera_id === st.active_camera);
+          const isAct = (cam.camera_id === st.active_camera_id);
           const isSearch = searchingCams.has(cam.camera_id);
 
           const camStatus = (st.camera_statuses && st.camera_statuses[cam.camera_id]) ? st.camera_statuses[cam.camera_id].toUpperCase() : 'UNKNOWN';

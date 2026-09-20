@@ -412,7 +412,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     self._send_json(status_data)
                 else:
                     self._send_json({
-                        "active_camera": None,
+                        "active_camera_id": None,
                         "target_state": "UNSELECTED",
                         "target_track_id": None,
                         "transit_history": [],
