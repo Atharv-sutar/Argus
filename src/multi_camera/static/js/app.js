@@ -564,6 +564,103 @@ class SurveillanceApp {
       btnQuit.addEventListener('click', () => this.safeQuit());
     }
 
+    // Settings UI Binding
+    const btnSettings = document.getElementById('btn-settings-global');
+    const settingsOverlay = document.getElementById('settings-overlay');
+    const btnSettingsCancel = document.getElementById('btn-settings-cancel');
+    const formSettings = document.getElementById('form-settings');
+
+    if (btnSettings && settingsOverlay) {
+      btnSettings.addEventListener('click', async () => {
+        try {
+          const settings = await API.getSettings();
+          if (settings) {
+            document.getElementById('set-max-radius').value = settings.multi_camera.max_search_radius;
+            document.getElementById('set-recovery-timeout').value = settings.multi_camera.total_recovery_timeout;
+            document.getElementById('set-match-threshold').value = settings.reid.match_threshold;
+            document.getElementById('set-track-buffer').value = settings.tracking.track_buffer;
+            settingsOverlay.style.display = 'flex';
+          }
+        } catch(e) {
+          this.showToast('Failed to load settings', 'error');
+        }
+      });
+      
+      btnSettingsCancel.addEventListener('click', () => {
+        settingsOverlay.style.display = 'none';
+      });
+
+      formSettings.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const configUpdates = {
+          multi_camera: {
+            max_search_radius: parseInt(document.getElementById('set-max-radius').value),
+            total_recovery_timeout: parseInt(document.getElementById('set-recovery-timeout').value)
+          },
+          reid: {
+            match_threshold: parseFloat(document.getElementById('set-match-threshold').value)
+          },
+          tracking: {
+            track_buffer: parseInt(document.getElementById('set-track-buffer').value)
+          }
+        };
+        try {
+          await API.updateSettings(configUpdates);
+          this.showToast('Settings applied successfully', 'success');
+          settingsOverlay.style.display = 'none';
+        } catch(err) {
+          this.showToast(`Failed to apply settings: ${err.message}`, 'error');
+        }
+      });
+    }
+
+    // Audit Trail UI Binding
+    const btnAudit = document.getElementById('btn-audit-global');
+    const auditOverlay = document.getElementById('audit-overlay');
+    const btnAuditClose = document.getElementById('btn-audit-close');
+    const auditModalContainer = document.getElementById('audit-modal-log-container');
+
+    if (btnAudit && auditOverlay) {
+      btnAudit.addEventListener('click', async () => {
+        auditOverlay.style.display = 'flex';
+        try {
+          if (auditModalContainer) {
+            auditModalContainer.innerHTML = '<div style="color: var(--text-dim);">Loading audit logs...</div>';
+          }
+          const res = await API.getAuditLogs(500, 0);
+          if (res && res.success && res.logs && auditModalContainer) {
+            if (res.logs.length === 0) {
+              auditModalContainer.innerHTML = '<div style="color: var(--text-dim);">No audit logs found.</div>';
+              return;
+            }
+            const logHtml = res.logs.map(log => {
+              const timeStr = new Date(log.timestamp).toLocaleString();
+              let color = '#94a3b8'; // default
+              if (log.event_type.includes('START') || log.event_type.includes('MATCH')) color = '#00f2fe';
+              if (log.event_type.includes('LOST') || log.event_type.includes('REJECT') || log.event_type.includes('REMOVE') || log.event_type.includes('CLEAR')) color = 'var(--red-glow)';
+              if (log.event_type.includes('ADD') || log.event_type.includes('ACCEPT') || log.event_type.includes('LOCKED')) color = '#10b981';
+              if (log.event_type.includes('CORRECTION') || log.event_type.includes('EXPAND')) color = '#f59e0b';
+              
+              return `<div style="margin-bottom: 6px; display: flex; gap: 12px; border-bottom: 1px solid var(--border-color); padding-bottom: 4px;">
+                <span style="color: #64748b; min-width: 150px;">[${timeStr}]</span>
+                <span style="color: ${color}; min-width: 150px; font-weight: 600;">${log.event_type}</span>
+                <span style="color: #cbd5e1;">${log.details}</span>
+              </div>`;
+            }).join('');
+            auditModalContainer.innerHTML = logHtml;
+          }
+        } catch(e) {
+          if (auditModalContainer) {
+             auditModalContainer.innerHTML = `<div style="color: var(--red-glow);">Failed to load audit logs: ${e.message}</div>`;
+          }
+        }
+      });
+
+      btnAuditClose.addEventListener('click', () => {
+        auditOverlay.style.display = 'none';
+      });
+    }
+
     // Global Keyboard Shortcuts (Issue 2)
     window.addEventListener('keydown', (e) => {
       if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
@@ -589,6 +686,9 @@ class SurveillanceApp {
       } else if (key === 'q') {
         e.preventDefault();
         this.safeQuit();
+      } else if (key === 's') {
+        e.preventDefault();
+        if (btnSettings) btnSettings.click();
       }
     });
   }
@@ -1219,6 +1319,15 @@ class SurveillanceApp {
           }
         });
       }
+
+      // Update bottom status bar
+      const uptimeEl = document.getElementById('status-uptime');
+      const fpsEl = document.getElementById('status-fps');
+      const gpuEl = document.getElementById('status-gpu');
+      if (uptimeEl && st.uptime_s !== undefined) uptimeEl.textContent = `${st.uptime_s.toFixed(0)}s`;
+      if (fpsEl && st.fps !== undefined) fpsEl.textContent = st.fps.toFixed(1);
+      if (gpuEl && st.gpu_memory_mb !== undefined) gpuEl.textContent = `${st.gpu_memory_mb.toFixed(1)} MB`;
+
     } catch (e) {
       console.debug('Status poll error', e);
     }

@@ -34,6 +34,7 @@ from src.core.multi_camera_types import (
 from src.multi_camera.camera_graph import CameraGraph
 from src.playback.annotations import Annotation, AnnotationStore
 from src.case.manager import CaseManager
+from src.audit.logger import AuditLogger, AuditEventType
 from src.case.evidence_exporter import EvidenceExporter
 import threading
 import os
@@ -465,127 +466,25 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     self._send_json({"cases": []})
                 return
 
-            elif path.startswith("/api/cases/") and path.endswith("/export/status"):
-                case_id = path.split("/")[3]
-                status = self.export_status.get(case_id, {"status": "none"})
-                self._send_json(status)
+            elif path == "/api/audit/log":
+                if hasattr(self, 'audit_logger') and self.audit_logger:
+                    limit = int(query.get("limit", ["100"])[0])
+                    offset = int(query.get("offset", ["0"])[0])
+                    logs = self.audit_logger.get_logs(limit=limit, offset=offset)
+                    self._send_json({"success": True, "logs": logs})
+                else:
+                    self._send_json({"success": False, "logs": []})
                 return
 
-            elif path.startswith("/api/cases/") and path.endswith("/export/download"):
-                case_id = path.split("/")[3]
-                status = self.export_status.get(case_id, {})
-                if status.get("status") == "completed" and status.get("zip_path"):
-                    zip_path = status["zip_path"]
-                    if os.path.exists(zip_path):
-                        self.send_response(200)
-                        self.send_header('Content-Type', 'application/zip')
-                        self.send_header('Content-Disposition', f'attachment; filename="EVIDENCE_{case_id}.zip"')
-                        self.send_header('Content-Length', str(os.path.getsize(zip_path)))
-                        self.end_headers()
-                        with open(zip_path, 'rb') as f:
-                            self.wfile.write(f.read())
-                        return
-                self.send_error(404, "Export not found or not ready")
-                return
-
-            elif path == "/api/cases":
-            if self.case_manager:
-                try:
-                    case_id = payload.get("case_id")
-                    if not case_id:
-                        self._send_json({"success": False, "error": "case_id required"}, status=HTTPStatus.BAD_REQUEST)
-                        return
-                    case = self.case_manager.create_case(
-                        case_id=case_id,
-                        mode=payload.get("mode", "live"),
-                        operator=payload.get("operator", ""),
-                        notes=payload.get("notes", "")
-                    )
-                    self._send_json({"success": True, "case": case.to_dict()})
-                except Exception as e:
-                    self._send_json({"success": False, "error": str(e)}, status=HTTPStatus.BAD_REQUEST)
-            return
-
-        elif path.startswith("/api/cases/") and path.endswith("/open"):
-            if self.case_manager:
-                case_id = path.split("/")[-2]
-                try:
-                    # Switch cases
-                    case = self.case_manager.open_case(case_id)
-                    case_dir = self.case_manager.get_active_case_dir()
-                    
-                    # Update active paths
-                    if self.annotation_store:
-                        self.annotation_store.set_db_path(str(case_dir / "annotations.db"))
-                        
-                    if self.runtime_pipeline:
-                        if hasattr(self.runtime_pipeline.identity_manager, "set_db_path"):
-                            self.runtime_pipeline.identity_manager.set_db_path(str(case_dir / "gallery" / "entries.db"))
-                            
-                    self._send_json({"success": True, "case": case.to_dict()})
-                except Exception as e:
-                    self._send_json({"success": False, "error": str(e)}, status=HTTPStatus.BAD_REQUEST)
-            return
-
-
-        elif path == "/api/playback/fast-scan/start":
-            try:
-                data = self._read_json()
-                skip_zones = data.get("skip_zones", [])
+            elif path == "/api/playback/stats":
                 if hasattr(self, 'pipeline') and self.runtime_pipeline and getattr(self.runtime_pipeline, 'playback_controller', None):
-                    self.runtime_pipeline.playback_controller.start_fast_scan(skip_zones)
-                    self._send_json({"success": True})
+                    stats = self.runtime_pipeline.playback_controller.stats
+                    self._send_json({"success": True, "stats": stats, "mode": self.runtime_pipeline.playback_controller.mode})
                 else:
                     self._send_json({"success": False, "error": "Playback controller not found"}, status=400)
-            except Exception as e:
-                self._send_json({"success": False, "error": str(e)}, status=500)
-            return
+                return
 
-        elif path == "/api/playback/fast-scan/pause":
-            if hasattr(self, 'pipeline') and self.runtime_pipeline and getattr(self.runtime_pipeline, 'playback_controller', None):
-                self.runtime_pipeline.playback_controller.mode = "playback"
-                self.runtime_pipeline.playback_controller.pause()
-                self._send_json({"success": True})
-            else:
-                self._send_json({"success": False, "error": "Playback controller not found"}, status=400)
-            return
-
-        elif path == "/api/playback/stats":
-            if hasattr(self, 'pipeline') and self.runtime_pipeline and getattr(self.runtime_pipeline, 'playback_controller', None):
-                stats = self.runtime_pipeline.playback_controller.stats
-                self._send_json({"success": True, "stats": stats, "mode": self.runtime_pipeline.playback_controller.mode})
-            else:
-                self._send_json({"success": False, "error": "Playback controller not found"}, status=400)
-            return
-
-        elif path.startswith("/api/cases/") and path.endswith("/export"):
-            case_id = path.split("/")[3]
-            if self.case_manager:
-                try:
-                    case = self.case_manager.open_case(case_id)  # just to get the metadata
-                    self.export_status[case_id] = {"status": "running"}
-                    
-                    def run_export():
-                        try:
-                            exporter = EvidenceExporter(self.case_manager.cases_dir, "exports")
-                            zip_path = exporter.export(case)
-                            self.export_status[case_id] = {"status": "completed", "zip_path": zip_path}
-                        except Exception as e:
-                            self.export_status[case_id] = {"status": "error", "error": str(e)}
-                            
-                    threading.Thread(target=run_export, daemon=True).start()
-                    self._send_json({"success": True, "status": "running"})
-                except Exception as e:
-                    self._send_json({"success": False, "error": str(e)}, status=HTTPStatus.BAD_REQUEST)
-            return
-
-        elif path.startswith("/api/cases/") and path.endswith("/close"):
-            if self.case_manager:
-                self.case_manager.close_case()
-                self._send_json({"success": True})
-            return
-
-        elif path == "/api/annotations":
+            elif path == "/api/annotations":
                 if self.annotation_store:
                     cam_id = query.get("camera_id", [None])[0]
                     if cam_id:
@@ -646,24 +545,9 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                                     "similarity": getattr(self.runtime_pipeline, "_pending_handoff_sim", 0.0)
                                 }
                                 
-                            event_data = {
-                                "active_camera": self.runtime_pipeline.active_camera_id,
-                                "topology_version": getattr(self.runtime_pipeline, "topology_version", 0),
-                                "target_state": getattr(self.runtime_pipeline, "target_state", "UNSELECTED"),
-                                "target_track_id": self.runtime_pipeline.target_manager.target.track_id if self.runtime_pipeline.target_manager.target else None,
-                                "transit_history": getattr(self.runtime_pipeline, "transit_history", []),
-                                "search_progress": progress.to_dict(),
-                                "camera_statuses": statuses,
-                                "candidate_scores": getattr(self.runtime_pipeline, "last_candidate_scores", {}),
-                                "pending_handoff": pending_handoff,
-                                "gallery": {
-                                    "size": gallery.size,
-                                    "max_size": gallery.max_size,
-                                    "manual_count": gallery.manual_count,
-                                    "auto_count": gallery.auto_count,
-                                    "thumbnails": thumbnails,
-                                }
-                            }
+                            import dataclasses
+                            telemetry = self.runtime_pipeline.get_telemetry()
+                            event_data = dataclasses.asdict(telemetry)
                             
                             payload = json.dumps(event_data)
                             self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
@@ -760,6 +644,10 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": False}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
         self.send_error(HTTPStatus.NOT_FOUND)
+
+    def _audit(self, event_type: AuditEventType, details: str):
+        if hasattr(self, 'audit_logger') and self.audit_logger:
+            self.audit_logger.log(event_type=event_type, details=details, user_id="operator")
 
     def do_POST(self) -> None:
         if not self._is_authorized():
@@ -882,6 +770,9 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                             
                     # Save to default.yaml
                     cfg.save("configs/default.yaml")
+                    if hasattr(self.runtime_pipeline, "apply_config_update"):
+                        self.runtime_pipeline.apply_config_update(config)
+                    self._audit(AuditEventType.CONFIG_CHANGE, "Advanced settings updated")
                     self._send_json({"success": True, "message": "Settings updated"})
                 except Exception as e:
                     import logging
@@ -895,6 +786,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             if self.runtime_pipeline is not None:
                 res = self.runtime_pipeline.undo_last_action()
                 if res:
+                    self._audit(AuditEventType.UNDO, "Reverted last target action")
                     self._send_json({"success": True, "action": res})
                 else:
                     self._send_json({"success": False, "error": "Nothing to undo"}, status=HTTPStatus.BAD_REQUEST)
@@ -1062,6 +954,11 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                         selected_id = self.runtime_pipeline.select_target_on_camera(cam_id, float(x), float(y))
 
                 logger.info(f"[TARGET] Target locked: ID={selected_id}, ActiveCam='{self.runtime_pipeline.active_camera_id}', Correction={is_correction}")
+                if selected_id is not None:
+                    if is_correction:
+                        self._audit(AuditEventType.HUMAN_CORRECTION, f"Target corrected to ID={selected_id} on {cam_id}")
+                    else:
+                        self._audit(AuditEventType.TARGET_SELECTED, f"Target selected: ID={selected_id} on {cam_id}")
                 self._send_json({
                     "success": True,
                     "target_locked": (selected_id is not None),
@@ -1078,6 +975,8 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             if self.runtime_pipeline is not None:
                 cam_id = payload.get("camera_id")
                 ok = self.runtime_pipeline.add_manual_target_sample(cam_id)
+                if ok:
+                    self._audit(AuditEventType.GALLERY_ADD, f"Manual sample captured from {cam_id}")
                 logger.info(f"[TARGET] Manual sample captured on '{cam_id}' -> success={ok}, gallery size={self.runtime_pipeline.gallery.size}")
                 self._send_json({
                     "success": ok,
@@ -1093,9 +992,28 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             logger.info(f"[TARGET] [POST /api/target/clear] Target clear requested from {self.address_string()}")
             if self.runtime_pipeline is not None:
                 self.runtime_pipeline.clear_target()
+                self._audit(AuditEventType.GALLERY_CLEAR, "Target and gallery cleared")
                 self._send_json({"success": True, "message": "Target cleared"})
             else:
                 self._send_json({"success": False, "error": "Runtime pipeline not active"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        elif path == "/api/handoff/confirm":
+            if self.runtime_pipeline is not None:
+                self.runtime_pipeline.accept_handoff()
+                self._audit(AuditEventType.HANDOFF_ACCEPTED, "Operator confirmed uncertain handoff")
+                self._send_json({"success": True})
+            else:
+                self._send_json({"success": False}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        elif path == "/api/handoff/reject":
+            if self.runtime_pipeline is not None:
+                self.runtime_pipeline.reject_handoff()
+                self._audit(AuditEventType.HANDOFF_REJECTED, "Operator rejected uncertain handoff")
+                self._send_json({"success": True})
+            else:
+                self._send_json({"success": False}, status=HTTPStatus.BAD_REQUEST)
             return
 
         elif path == "/api/target/gallery/delete":
@@ -1104,6 +1022,8 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             if self.runtime_pipeline is not None:
                 if entry_id:
                     ok = self.runtime_pipeline.gallery.remove_entry(entry_id)
+                    if ok:
+                        self._audit(AuditEventType.GALLERY_REMOVE, f"Gallery entry deleted: {entry_id}")
                     self._send_json({
                         "success": ok,
                         "size": self.runtime_pipeline.gallery.size,
@@ -1221,6 +1141,11 @@ def run_ui_server(
     MappingAPIHandler.runtime_pipeline = pipeline
     MappingAPIHandler.annotation_store = AnnotationStore()
     MappingAPIHandler.case_manager = CaseManager("cases")
+    
+    # Initialize global audit logger
+    audit_db = Path("cases") / "audit.db"
+    audit_db.parent.mkdir(parents=True, exist_ok=True)
+    MappingAPIHandler.audit_logger = AuditLogger(audit_db)
 
     server = ArgusHTTPServer(("127.0.0.1", port), MappingAPIHandler)
     logger.info(f"Camera Mapping UI server running at http://127.0.0.1:{port}")

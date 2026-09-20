@@ -48,3 +48,9 @@ data/
 logs/
 *.mp4
 *.avi
+
+# Test Artifacts
+test_cases_export/
+test_exports/
+*.sqlite
+test_annotations.sqlite

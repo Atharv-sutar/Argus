@@ -1533,6 +1533,9 @@ class MultiCameraPipeline:
                 timestamp_ms=time.time() * 1000.0,
                 track_id=recovered_track.track_id,
             )
+            
+        if self.playback_controller:
+            self.playback_controller.record_auto_accept()
 
         self._handoff_timestamp = time.time()
         self._transit_history.append({

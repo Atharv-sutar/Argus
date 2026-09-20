@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 from src.camera.video_file import VideoFileCamera
 
