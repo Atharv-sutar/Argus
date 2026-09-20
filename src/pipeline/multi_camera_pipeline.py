@@ -623,15 +623,6 @@ class MultiCameraPipeline:
             )
         return ok
 
-    def clear_target(self) -> None:
-        """Explicitly clear the active target, reverting to UNSELECTED state."""
-        self.target_manager.clear()
-        for node in self._nodes.values():
-            node.is_active = False
-        self._active_camera_id = None
-        self.search_manager.reset()
-        logger.info("[MULTI-CAM] Target explicitly cleared (New Investigation).")
-
     def add_manual_target_sample(self, camera_id: Optional[str] = None) -> bool:
         """
         Human-confirmed manual capture: adds the current locked target's appearance crop
@@ -689,7 +680,39 @@ class MultiCameraPipeline:
         self._transit_history.clear()
         if self.route_recorder:
             self.route_recorder.clear()
-        logger.info("[MULTI-CAM] Target cleared and gallery purged.")
+            
+        if getattr(self, "playback_controller", None):
+            self.playback_controller.is_playing = True
+            
+        logger.info("[MULTI-CAM] Target cleared and gallery purged. Playback resumed if paused.")
+
+    def undo_last_action(self) -> Optional[dict]:
+        if not hasattr(self, "undo_stack") or not self.undo_stack:
+            return None
+        action = self.undo_stack.pop_undo()
+        if not action:
+            return None
+            
+        if action.action_type == "target_correction":
+            self.target_manager.undo_target_correction(action.reverse_data)
+        elif action.action_type == "gallery_remove":
+            self.identity_manager.undo_gallery_remove(action.reverse_data)
+            
+        return {"action_type": action.action_type}
+
+    def redo_last_action(self) -> Optional[dict]:
+        if not hasattr(self, "undo_stack") or not self.undo_stack:
+            return None
+        action = self.undo_stack.pop_redo()
+        if not action:
+            return None
+            
+        if action.action_type == "target_correction":
+            self.target_manager.redo_target_correction(action.forward_data)
+        elif action.action_type == "gallery_remove":
+            self.identity_manager.redo_gallery_remove(action.forward_data)
+            
+        return {"action_type": action.action_type}
 
     def step(self) -> Dict[str, Tuple[Optional[np.ndarray], Optional[TrackResult], Optional[Target]]]:
         """
@@ -697,6 +720,11 @@ class MultiCameraPipeline:
         """
         if not self._is_running or self._is_paused:
             return {}
+            
+        if getattr(self, "playback_controller", None) and not self.playback_controller.is_playing:
+            time.sleep(0.01)  # Throttle to prevent 100% CPU usage while paused
+            return {}
+
 
         self._frame_count += 1
         now = time.time()
