@@ -29,6 +29,51 @@ class PlaybackController:
         
         self._lock = threading.Lock()
         self._last_tick_time: float = 0.0
+        self.mode: str = "playback"  # "playback" or "fast_scan"
+        self.skip_zones = []  # List[Tuple[float, float]]
+        self.stats = {
+            "frames_processed": 0,
+            "auto_accepted": 0,
+            "human_interventions": 0,
+            "start_time": 0.0
+        }
+        self.config = None
+
+
+
+    def set_config(self, config):
+        self.config = config
+
+
+    def pause_for_human_review(self) -> None:
+        """Pauses fast scan and rewinds to allow human operator to intervene."""
+        if self.mode != "fast_scan":
+            return
+            
+        self.mode = "playback"
+        self.pause()
+        self.stats["human_interventions"] += 1
+        
+        rewind_ms = self.config.playback.fast_scan_rewind_s * 1000 if self.config else 5000.0
+        self.seek(self.current_time_ms - rewind_ms)
+        logger.info("Paused fast scan for human review.")
+        
+    def record_auto_accept(self) -> None:
+        if self.mode == "fast_scan":
+            self.stats["auto_accepted"] += 1
+
+
+    def start_fast_scan(self, skip_zones: List[Tuple[float, float]] = None):
+        with self._lock:
+            self.mode = "fast_scan"
+            self.skip_zones = skip_zones or []
+            self.is_playing = True
+            self.stats["frames_processed"] = 0
+            self.stats["auto_accepted"] = 0
+            self.stats["human_interventions"] = 0
+            self.stats["start_time"] = time.time()
+            self._last_tick_time = time.time()
+            logger.info("Fast scan started.")
 
     def add_camera(self, camera_id: str, camera: VideoFileCamera) -> None:
         """Adds a camera to be managed by the controller."""
@@ -90,14 +135,26 @@ class PlaybackController:
         with self._lock:
             if not self.is_playing:
                 return
+                
+            if self.mode == "fast_scan":
+                self.stats["frames_processed"] += 1
+                # Check skip zones
+                for start_ms, end_ms in self.skip_zones:
+                    if start_ms <= self.current_time_ms < end_ms:
+                        self.current_time_ms = end_ms
+                        for cam in self.cameras.values():
+                            cam.seek(self.current_time_ms)
+                        break
 
             now = time.time()
             delta_s = now - self._last_tick_time
             self._last_tick_time = now
 
             # Advance time according to speed
-            delta_ms = delta_s * 1000.0 * self.playback_speed
-            self.current_time_ms += delta_ms
+            # In fast_scan, time is advanced by the frame timestamps via runtime pipeline, not clock delta.
+            if self.mode == "playback":
+                delta_ms = delta_s * 1000.0 * self.playback_speed
+                self.current_time_ms += delta_ms
 
             if self.current_time_ms >= self.max_duration_ms:
                 self.current_time_ms = self.max_duration_ms

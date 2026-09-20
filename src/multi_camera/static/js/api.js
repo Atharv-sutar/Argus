@@ -408,6 +408,40 @@ const API = {
     }
   },
 
+
+  async startFastScan(skipZones = []) {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/playback/fast-scan/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skip_zones: skipZones })
+      });
+      return await res.json();
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  async pauseFastScan() {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/playback/fast-scan/pause`, {
+        method: 'POST'
+      });
+      return await res.json();
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  async getPlaybackStats() {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/playback/stats`);
+      return await res.json();
+    } catch (err) {
+      throw err;
+    }
+  },
+
   async quit() {
     try {
       const controller = new AbortController();

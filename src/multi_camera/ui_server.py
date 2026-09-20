@@ -527,6 +527,37 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     self._send_json({"success": False, "error": str(e)}, status=HTTPStatus.BAD_REQUEST)
             return
 
+
+        elif path == "/api/playback/fast-scan/start":
+            try:
+                data = self._read_json()
+                skip_zones = data.get("skip_zones", [])
+                if hasattr(self, 'pipeline') and self.runtime_pipeline and getattr(self.runtime_pipeline, 'playback_controller', None):
+                    self.runtime_pipeline.playback_controller.start_fast_scan(skip_zones)
+                    self._send_json({"success": True})
+                else:
+                    self._send_json({"success": False, "error": "Playback controller not found"}, status=400)
+            except Exception as e:
+                self._send_json({"success": False, "error": str(e)}, status=500)
+            return
+
+        elif path == "/api/playback/fast-scan/pause":
+            if hasattr(self, 'pipeline') and self.runtime_pipeline and getattr(self.runtime_pipeline, 'playback_controller', None):
+                self.runtime_pipeline.playback_controller.mode = "playback"
+                self.runtime_pipeline.playback_controller.pause()
+                self._send_json({"success": True})
+            else:
+                self._send_json({"success": False, "error": "Playback controller not found"}, status=400)
+            return
+
+        elif path == "/api/playback/stats":
+            if hasattr(self, 'pipeline') and self.runtime_pipeline and getattr(self.runtime_pipeline, 'playback_controller', None):
+                stats = self.runtime_pipeline.playback_controller.stats
+                self._send_json({"success": True, "stats": stats, "mode": self.runtime_pipeline.playback_controller.mode})
+            else:
+                self._send_json({"success": False, "error": "Playback controller not found"}, status=400)
+            return
+
         elif path.startswith("/api/cases/") and path.endswith("/export"):
             case_id = path.split("/")[3]
             if self.case_manager:
@@ -919,6 +950,37 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     self._send_json({"success": True, "case": case.to_dict()})
                 except Exception as e:
                     self._send_json({"success": False, "error": str(e)}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+
+        elif path == "/api/playback/fast-scan/start":
+            try:
+                data = self._read_json()
+                skip_zones = data.get("skip_zones", [])
+                if hasattr(self, 'pipeline') and self.runtime_pipeline and getattr(self.runtime_pipeline, 'playback_controller', None):
+                    self.runtime_pipeline.playback_controller.start_fast_scan(skip_zones)
+                    self._send_json({"success": True})
+                else:
+                    self._send_json({"success": False, "error": "Playback controller not found"}, status=400)
+            except Exception as e:
+                self._send_json({"success": False, "error": str(e)}, status=500)
+            return
+
+        elif path == "/api/playback/fast-scan/pause":
+            if hasattr(self, 'pipeline') and self.runtime_pipeline and getattr(self.runtime_pipeline, 'playback_controller', None):
+                self.runtime_pipeline.playback_controller.mode = "playback"
+                self.runtime_pipeline.playback_controller.pause()
+                self._send_json({"success": True})
+            else:
+                self._send_json({"success": False, "error": "Playback controller not found"}, status=400)
+            return
+
+        elif path == "/api/playback/stats":
+            if hasattr(self, 'pipeline') and self.runtime_pipeline and getattr(self.runtime_pipeline, 'playback_controller', None):
+                stats = self.runtime_pipeline.playback_controller.stats
+                self._send_json({"success": True, "stats": stats, "mode": self.runtime_pipeline.playback_controller.mode})
+            else:
+                self._send_json({"success": False, "error": "Playback controller not found"}, status=400)
             return
 
         elif path.startswith("/api/cases/") and path.endswith("/export"):

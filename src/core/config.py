@@ -111,6 +111,14 @@ class SearchConfig:
     handoff_confirm_delay_s: float = 2.0
 
 
+
+@dataclass
+class PlaybackConfig:
+    """Configuration for playback and fast-scan processing modes."""
+    fast_scan_auto_accept: float = 0.82
+    fast_scan_auto_reject: float = 0.78
+    fast_scan_rewind_s: float = 5.0
+
 @dataclass
 class StorageConfig:
     """Configuration for persistent storage of targets and embeddings."""
@@ -136,6 +144,7 @@ class AppConfig:
     visualization: VisualizationConfig = field(default_factory=VisualizationConfig)
     multi_camera: MultiCameraConfig = field(default_factory=MultiCameraConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
+    playback: PlaybackConfig = field(default_factory=PlaybackConfig)
 
     @classmethod
     def from_yaml(cls, path: Union[str, Path]) -> AppConfig:
@@ -164,6 +173,9 @@ class AppConfig:
         search_config = SearchConfig(**search_data) if search_data else SearchConfig()
         mc_config = MultiCameraConfig(**mc_data, search=search_config) if mc_data else MultiCameraConfig()
 
+        playback_data = data.get("playback", {})
+        playback_config = PlaybackConfig(**playback_data) if playback_data else PlaybackConfig()
+
         storage_data = data.get("storage", {})
         storage_config = StorageConfig(**storage_data) if storage_data else StorageConfig()
 
@@ -176,6 +188,7 @@ class AppConfig:
             visualization=VisualizationConfig(**vis_data),
             multi_camera=mc_config,
             storage=storage_config,
+            playback=playback_config,
         )
 
 

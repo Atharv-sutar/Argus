@@ -67,6 +67,17 @@ class SurveillanceApp {
     this.exportDownloadLink = document.getElementById('export-download-link');
     this.exportPollTimer = null;
 
+    // Fast Scan UI
+    this.btnFastScan = document.getElementById('btn-fast-scan');
+    this.fastScanOverlay = document.getElementById('fast-scan-overlay');
+    this.btnStopFastScan = document.getElementById('btn-stop-fast-scan');
+    this.fsProgressBar = document.getElementById('fast-scan-progress-bar');
+    this.fsFrames = document.getElementById('fast-scan-frames');
+    this.fsAccepted = document.getElementById('fast-scan-accepted');
+    this.fastScanTimer = null;
+    this.annoType = document.getElementById('anno-type');
+
+
     this.activeCaseId = null;
 
     this.annoOverlay = document.getElementById('annotation-overlay');

@@ -470,7 +470,10 @@ def run_multi_camera_app(
 
                 if all_cams:
                     canvas, current_tile_maps = _render_monitoring_grid(frames, all_cams)
+    
+                if not (getattr(pipeline, 'playback_controller', None) and pipeline.playback_controller.mode == "fast_scan"):
                     cv2.imshow(window_name, canvas)
+
                 else:
                     blank = np.zeros((400, 640, 3), dtype=np.uint8)
                     cv2.putText(blank, "No cameras configured", (120, 200),
@@ -520,7 +523,15 @@ def run_multi_camera_app(
                     cv2.rectangle(frame, (0, 0), (w, 32), (10, 14, 22), -1)
                     cv2.putText(frame, header_text, (12, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 215, 255), 1, cv2.LINE_AA)
                     cv2.line(frame, (0, 32), (w, 32), (0, 215, 255), 1)
-                    cv2.imshow(window_name, frame)
+
+                    if not (getattr(pipeline, 'playback_controller', None) and pipeline.playback_controller.mode == "fast_scan"):
+                        cv2.imshow(window_name, frame)
+
+
+                    # Fast scan check
+                    if getattr(pipeline, 'playback_controller', None) and pipeline.playback_controller.mode == "fast_scan":
+                        if target and target.state == TargetState.UNCERTAIN:
+                            pipeline.playback_controller.pause_for_human_review()
 
                     # Check for target loss → transition to SEARCH_VIEW only if adjacent search cameras exist
                     if target and target.state in (TargetState.LOST, TargetState.UNCERTAIN):
@@ -545,7 +556,10 @@ def run_multi_camera_app(
                 canvas, current_tile_maps = _render_search_grid(
                     results, active_id, search_cam_ids, progress.search_radius,
                 )
-                cv2.imshow(window_name, canvas)
+
+                if not (getattr(pipeline, 'playback_controller', None) and pipeline.playback_controller.mode == "fast_scan"):
+                    cv2.imshow(window_name, canvas)
+
 
                 # Check if handoff just happened
                 if pipeline.handoff_timestamp > 0:
@@ -573,7 +587,10 @@ def run_multi_camera_app(
                     results, active_id, search_cam_ids, progress.search_radius,
                     handoff_cam_id=handoff_new_cam_id,
                 )
-                cv2.imshow(window_name, canvas)
+
+                if not (getattr(pipeline, 'playback_controller', None) and pipeline.playback_controller.mode == "fast_scan"):
+                    cv2.imshow(window_name, canvas)
+
 
                 # After confirmation delay, transition to TARGET_TRACKING
                 elapsed = time.time() - pipeline.handoff_timestamp
@@ -583,7 +600,13 @@ def run_multi_camera_app(
                     logger.info(f"[UI] HANDOFF_CONFIRM → TARGET_TRACKING (confirmed on '{active_id}')")
 
             # === Handle keyboard ===
-            key = cv2.waitKey(1) & 0xFF
+            fast_scan = getattr(pipeline, 'playback_controller', None) and pipeline.playback_controller.mode == "fast_scan"
+            if fast_scan:
+                # Bypass waitKey to achieve max throughput, just check events occasionally or not at all
+                # But we need some way to pump events so the window doesn't freeze entirely
+                key = cv2.waitKey(1) & 0xFF if (int(time.time()*10) % 10 == 0) else 255
+            else:
+                key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
                 break
             elif key == 27:  # Esc
