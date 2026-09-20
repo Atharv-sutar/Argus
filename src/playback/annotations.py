@@ -116,6 +116,16 @@ class AnnotationStore:
         except sqlite3.Error as e:
             logger.error(f"Failed to clear annotations: {e}")
 
+
+    def export_as_json(self, output_path: str) -> None:
+        """Export all annotations to a JSON file."""
+        annos = self.get_all()
+        try:
+            with open(output_path, "w", encoding="utf-8") as f:
+                json.dump([a.to_dict() for a in annos], f, indent=4)
+        except Exception as e:
+            logger.error(f"Failed to export annotations: {e}")
+
     def _query(self, sql: str, params: tuple) -> List[Annotation]:
         results = []
         try:

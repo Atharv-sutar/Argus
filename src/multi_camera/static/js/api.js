@@ -384,6 +384,30 @@ const API = {
     }
   },
 
+
+  async startExport(caseId) {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/cases/${caseId}/export`, {
+        method: 'POST'
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to start export');
+      return data;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  async getExportStatus(caseId) {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/cases/${caseId}/export/status`);
+      if (!res.ok) throw new Error('Failed to fetch status');
+      return await res.json();
+    } catch (err) {
+      throw err;
+    }
+  },
+
   async quit() {
     try {
       const controller = new AbortController();

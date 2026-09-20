@@ -59,6 +59,14 @@ class SurveillanceApp {
     this.caseIdInput = document.getElementById('case-id-input');
     this.caseOpInput = document.getElementById('case-operator-input');
     this.btnCaseCreate = document.getElementById('btn-case-create');
+
+    // Export UI
+    this.exportContainer = document.getElementById('export-container');
+    this.exportStatus = document.getElementById('export-status');
+    this.exportProgressBar = document.getElementById('export-progress-bar');
+    this.exportDownloadLink = document.getElementById('export-download-link');
+    this.exportPollTimer = null;
+
     this.activeCaseId = null;
 
     this.annoOverlay = document.getElementById('annotation-overlay');
@@ -417,6 +425,7 @@ class SurveillanceApp {
                     <td style="padding: 8px;">
                         ${!isActive ? `<button class="btn btn-primary" onclick="window.appInstance.openCase('${c.case_id}')" style="padding: 2px 6px; font-size: 12px;">Open</button>` : ''}
                         <button class="btn btn-secondary" onclick="window.appInstance.deleteCase('${c.case_id}')" style="padding: 2px 6px; font-size: 12px;">Del</button>
+                        <button class="btn btn-secondary" onclick="window.appInstance.exportCase('${c.case_id}')" style="padding: 2px 6px; font-size: 12px; margin-left: 4px;">Export</button>
                     </td>
                 `;
                 this.caseTableBody.appendChild(tr);
@@ -439,6 +448,46 @@ class SurveillanceApp {
             this.pollGallery(); // immediate refresh
         } catch (err) {
             this.showToast(`Failed to open case: ${err.message}`, 'error');
+        }
+    };
+
+
+    this.exportCase = async (cid) => {
+        if (!this.exportContainer) return;
+        this.exportContainer.style.display = 'flex';
+        this.exportDownloadLink.style.display = 'none';
+        this.exportStatus.textContent = 'Starting export task...';
+        this.exportProgressBar.style.width = '10%';
+        
+        try {
+            await API.startExport(cid);
+            this.exportStatus.textContent = 'Packaging evidence... this may take a moment.';
+            this.exportProgressBar.style.width = '50%';
+            
+            // Start polling
+            if (this.exportPollTimer) clearInterval(this.exportPollTimer);
+            this.exportPollTimer = setInterval(async () => {
+                try {
+                    const status = await API.getExportStatus(cid);
+                    if (status.status === 'completed') {
+                        clearInterval(this.exportPollTimer);
+                        this.exportStatus.textContent = 'Package ready!';
+                        this.exportProgressBar.style.width = '100%';
+                        this.exportDownloadLink.style.display = 'block';
+                        this.exportDownloadLink.href = `${API.baseUrl}/api/cases/${cid}/export/download`;
+                    } else if (status.status === 'error') {
+                        clearInterval(this.exportPollTimer);
+                        this.exportStatus.textContent = 'Error: ' + status.error;
+                        this.exportProgressBar.style.backgroundColor = 'var(--text-danger)';
+                    }
+                } catch (e) {
+                    // Ignore poll errors
+                }
+            }, 2000);
+            
+        } catch (err) {
+            this.exportStatus.textContent = `Failed: ${err.message}`;
+            this.exportProgressBar.style.backgroundColor = 'var(--text-danger)';
         }
     };
 

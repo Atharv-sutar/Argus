@@ -166,3 +166,26 @@ class AuditLogger:
             except Exception as e:
                 logger.error(f"Failed to verify audit log: {e}")
                 return False, str(e)
+
+
+    def export_as_json(self, output_path: str) -> None:
+        """Export the audit log to a human-readable JSON format."""
+        with self._lock:
+            try:
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT id, timestamp_utc, event_type, camera_id, track_id, detail_json FROM audit_log ORDER BY id ASC")
+                    entries = []
+                    for row in cursor:
+                        entries.append({
+                            "id": row[0],
+                            "timestamp": row[1],
+                            "event": row[2],
+                            "camera_id": row[3],
+                            "track_id": row[4],
+                            "detail": json.loads(row[5])
+                        })
+                with open(output_path, "w", encoding="utf-8") as f:
+                    json.dump(entries, f, indent=4)
+            except Exception as e:
+                logger.error(f"Failed to export audit log: {e}")

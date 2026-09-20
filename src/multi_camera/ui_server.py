@@ -34,6 +34,9 @@ from src.core.multi_camera_types import (
 from src.multi_camera.camera_graph import CameraGraph
 from src.playback.annotations import Annotation, AnnotationStore
 from src.case.manager import CaseManager
+from src.case.evidence_exporter import EvidenceExporter
+import threading
+import os
 import uuid
 from datetime import datetime, timezone
 
@@ -167,6 +170,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
     graph_lock = threading.Lock()
     annotation_store = None
     case_manager = None
+    export_status = {}
 
     def log_message(self, format: str, *args: Any) -> None:
         # Route standard HTTP access logs to debug file log
@@ -430,12 +434,58 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     self._send_json({"can_undo": False, "can_redo": False, "last_action_name": None, "next_redo_name": None})
                 return
 
+            elif path.startswith("/api/cases/") and path.endswith("/export/status"):
+                case_id = path.split("/")[3]
+                status = self.export_status.get(case_id, {"status": "none"})
+                self._send_json(status)
+                return
+
+            elif path.startswith("/api/cases/") and path.endswith("/export/download"):
+                case_id = path.split("/")[3]
+                status = self.export_status.get(case_id, {})
+                if status.get("status") == "completed" and status.get("zip_path"):
+                    zip_path = status["zip_path"]
+                    if os.path.exists(zip_path):
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'application/zip')
+                        self.send_header('Content-Disposition', f'attachment; filename="EVIDENCE_{case_id}.zip"')
+                        self.send_header('Content-Length', str(os.path.getsize(zip_path)))
+                        self.end_headers()
+                        with open(zip_path, 'rb') as f:
+                            self.wfile.write(f.read())
+                        return
+                self.send_error(404, "Export not found or not ready")
+                return
+
             elif path == "/api/cases":
                 if self.case_manager:
                     cases = [c.to_dict() for c in self.case_manager.list_cases()]
                     self._send_json({"cases": cases, "active_case": self.case_manager.active_case.case_id if self.case_manager.active_case else None})
                 else:
                     self._send_json({"cases": []})
+                return
+
+            elif path.startswith("/api/cases/") and path.endswith("/export/status"):
+                case_id = path.split("/")[3]
+                status = self.export_status.get(case_id, {"status": "none"})
+                self._send_json(status)
+                return
+
+            elif path.startswith("/api/cases/") and path.endswith("/export/download"):
+                case_id = path.split("/")[3]
+                status = self.export_status.get(case_id, {})
+                if status.get("status") == "completed" and status.get("zip_path"):
+                    zip_path = status["zip_path"]
+                    if os.path.exists(zip_path):
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'application/zip')
+                        self.send_header('Content-Disposition', f'attachment; filename="EVIDENCE_{case_id}.zip"')
+                        self.send_header('Content-Length', str(os.path.getsize(zip_path)))
+                        self.end_headers()
+                        with open(zip_path, 'rb') as f:
+                            self.wfile.write(f.read())
+                        return
+                self.send_error(404, "Export not found or not ready")
                 return
 
             elif path == "/api/cases":
@@ -473,6 +523,27 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                             self.runtime_pipeline.identity_manager.set_db_path(str(case_dir / "gallery" / "entries.db"))
                             
                     self._send_json({"success": True, "case": case.to_dict()})
+                except Exception as e:
+                    self._send_json({"success": False, "error": str(e)}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        elif path.startswith("/api/cases/") and path.endswith("/export"):
+            case_id = path.split("/")[3]
+            if self.case_manager:
+                try:
+                    case = self.case_manager.open_case(case_id)  # just to get the metadata
+                    self.export_status[case_id] = {"status": "running"}
+                    
+                    def run_export():
+                        try:
+                            exporter = EvidenceExporter(self.case_manager.cases_dir, "exports")
+                            zip_path = exporter.export(case)
+                            self.export_status[case_id] = {"status": "completed", "zip_path": zip_path}
+                        except Exception as e:
+                            self.export_status[case_id] = {"status": "error", "error": str(e)}
+                            
+                    threading.Thread(target=run_export, daemon=True).start()
+                    self._send_json({"success": True, "status": "running"})
                 except Exception as e:
                     self._send_json({"success": False, "error": str(e)}, status=HTTPStatus.BAD_REQUEST)
             return
@@ -846,6 +917,27 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                             self.runtime_pipeline.identity_manager.set_db_path(str(case_dir / "gallery" / "entries.db"))
                             
                     self._send_json({"success": True, "case": case.to_dict()})
+                except Exception as e:
+                    self._send_json({"success": False, "error": str(e)}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        elif path.startswith("/api/cases/") and path.endswith("/export"):
+            case_id = path.split("/")[3]
+            if self.case_manager:
+                try:
+                    case = self.case_manager.open_case(case_id)  # just to get the metadata
+                    self.export_status[case_id] = {"status": "running"}
+                    
+                    def run_export():
+                        try:
+                            exporter = EvidenceExporter(self.case_manager.cases_dir, "exports")
+                            zip_path = exporter.export(case)
+                            self.export_status[case_id] = {"status": "completed", "zip_path": zip_path}
+                        except Exception as e:
+                            self.export_status[case_id] = {"status": "error", "error": str(e)}
+                            
+                    threading.Thread(target=run_export, daemon=True).start()
+                    self._send_json({"success": True, "status": "running"})
                 except Exception as e:
                     self._send_json({"success": False, "error": str(e)}, status=HTTPStatus.BAD_REQUEST)
             return
