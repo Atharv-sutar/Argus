@@ -923,7 +923,7 @@ When an undo is requested:
 
 ---
 
-## Phase 9 — Operator Annotations
+## Phase 9 — Operator Annotations (COMPLETED)
 
 > **Priority: MEDIUM.** Allows the operator to attach context to specific moments in the investigation.
 

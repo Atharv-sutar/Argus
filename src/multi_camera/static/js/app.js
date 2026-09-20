@@ -48,6 +48,18 @@ class SurveillanceApp {
 
     // Forensic & Radius Dock
     this.transitTrailEl = document.getElementById('transit-trail-display');
+
+    // Annotations
+    this.annoOverlay = document.getElementById('annotation-overlay');
+    this.annoCamId = document.getElementById('anno-cam-id');
+    this.annoTimeMs = document.getElementById('anno-time-ms');
+    this.annoInput = document.getElementById('anno-text-input');
+    this.btnAnnoCancel = document.getElementById('btn-anno-cancel');
+    this.btnAnnoSave = document.getElementById('btn-anno-save');
+    this.annotations = [];
+    this.annoPollTimer = null;
+    this.currentPlaybackMs = 0; // fallback tracking
+
   }
 
   initEvents() {
@@ -339,6 +351,53 @@ class SurveillanceApp {
       btnRefresh.addEventListener('click', refreshCamerasFn);
     }
 
+
+    if (this.btnAnnoCancel) {
+      this.btnAnnoCancel.addEventListener('click', () => {
+        this.annoOverlay.style.display = 'none';
+        this.annoInput.value = '';
+      });
+    }
+
+    if (this.btnAnnoSave) {
+      this.btnAnnoSave.addEventListener('click', async () => {
+        const text = this.annoInput.value.trim();
+        const camId = this.annoCamId.textContent;
+        const timeMs = parseFloat(this.annoTimeMs.dataset.ms || "0");
+        if (!text) {
+           this.showToast('Note cannot be empty', 'error');
+           return;
+        }
+        
+        try {
+          await API.createAnnotation(camId, timeMs, text, null, 'note');
+          this.showToast('Annotation saved', 'success');
+          this.annoOverlay.style.display = 'none';
+          this.annoInput.value = '';
+          this.pollAnnotations();
+        } catch (err) {
+          this.showToast(`Failed to save: ${err.message}`, 'error');
+        }
+      });
+    }
+    
+    this.openAnnotationModal = () => {
+        if (!this.activeCameraId || this.activeCameraId === 'None') {
+            this.showToast('No active camera selected for annotation', 'error');
+            return;
+        }
+        if (this.annoOverlay) {
+            this.annoCamId.textContent = this.activeCameraId;
+            // In live mode, use date.now relative to some start or just 0 for now.
+            // A more precise app would sync with pipeline timestamps.
+            const ms = this.currentPlaybackMs > 0 ? this.currentPlaybackMs : 0.0;
+            this.annoTimeMs.textContent = (ms / 1000).toFixed(1);
+            this.annoTimeMs.dataset.ms = ms;
+            this.annoOverlay.style.display = 'flex';
+            this.annoInput.focus();
+        }
+    };
+
     const btnQuit = document.getElementById('btn-quit-global');
     if (btnQuit) {
       btnQuit.addEventListener('click', () => this.safeQuit());
@@ -354,6 +413,9 @@ class SurveillanceApp {
       } else if (key === 'z' && e.ctrlKey) {
         e.preventDefault();
         undoFn();
+      } else if (key === 'n' && !e.ctrlKey) {
+        e.preventDefault();
+        this.openAnnotationModal();
       } else if (key === 'a') {
         e.preventDefault();
         addSampleFn();
@@ -445,6 +507,10 @@ class SurveillanceApp {
     if (this.galleryPollTimer) {
       clearInterval(this.galleryPollTimer);
       this.galleryPollTimer = null;
+    }
+    if (this.annoPollTimer) {
+      clearInterval(this.annoPollTimer);
+      this.annoPollTimer = null;
     }
     if (this.auditLogPollTimer) {
       clearInterval(this.auditLogPollTimer);
@@ -770,6 +836,13 @@ class SurveillanceApp {
      PERIODIC STATUS & GALLERY POLLING
      ========================================================================== */
 
+
+
+  async pollAnnotations() {
+    try {
+      this.annotations = await API.getAnnotations();
+    } catch(err) {}
+  }
 
   async pollUndoStack() {
     const stack = await API.getUndoStack();

@@ -32,6 +32,9 @@ from src.core.multi_camera_types import (
     SourceType,
 )
 from src.multi_camera.camera_graph import CameraGraph
+from src.playback.annotations import Annotation, AnnotationStore
+import uuid
+from datetime import datetime, timezone
 
 logger = logging.getLogger("argus.ui_server")
 
@@ -161,6 +164,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
     graph_file: Path = Path("configs/camera_graph.json")
     runtime_pipeline = None  # Optional MultiCameraPipeline reference
     graph_lock = threading.Lock()
+    annotation_store = None
 
     def log_message(self, format: str, *args: Any) -> None:
         # Route standard HTTP access logs to debug file log
@@ -424,6 +428,18 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     self._send_json({"can_undo": False, "can_redo": False, "last_action_name": None, "next_redo_name": None})
                 return
 
+            elif path == "/api/annotations":
+                if self.annotation_store:
+                    cam_id = query.get("camera_id", [None])[0]
+                    if cam_id:
+                        annos = self.annotation_store.get_by_camera(cam_id)
+                    else:
+                        annos = self.annotation_store.get_all()
+                    self._send_json([a.to_dict() for a in annos])
+                else:
+                    self._send_json([])
+                return
+
             elif path == "/api/target/gallery":
                 if self.runtime_pipeline is not None:
                     gallery = self.runtime_pipeline.gallery
@@ -536,6 +552,43 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
             return
+
+
+    def do_PUT(self) -> None:
+        if not self._is_authorized():
+            self.send_error(HTTPStatus.FORBIDDEN, "Unauthorized")
+            return
+        parsed_url = urllib.parse.urlparse(self.path)
+        path = parsed_url.path
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length)
+        payload = json.loads(body.decode("utf-8")) if body else {}
+
+        if path.startswith("/api/annotations/"):
+            anno_id = path.split("/")[-1]
+            if self.annotation_store:
+                ok = self.annotation_store.update(anno_id, payload.get("text", ""), payload.get("annotation_type"))
+                self._send_json({"success": ok})
+            else:
+                self._send_json({"success": False}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        self.send_error(HTTPStatus.NOT_FOUND)
+
+    def do_DELETE(self) -> None:
+        if not self._is_authorized():
+            self.send_error(HTTPStatus.FORBIDDEN, "Unauthorized")
+            return
+        parsed_url = urllib.parse.urlparse(self.path)
+        path = parsed_url.path
+        if path.startswith("/api/annotations/"):
+            anno_id = path.split("/")[-1]
+            if self.annotation_store:
+                ok = self.annotation_store.remove(anno_id)
+                self._send_json({"success": ok})
+            else:
+                self._send_json({"success": False}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        self.send_error(HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:
         if not self._is_authorized():
@@ -688,6 +741,30 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             else:
                 self._send_json({"success": False, "error": "Pipeline not active"}, status=HTTPStatus.BAD_REQUEST)
             return
+
+        elif path == "/api/annotations":
+            if self.annotation_store:
+                try:
+                    anno = Annotation(
+                        annotation_id=str(uuid.uuid4()),
+                        timestamp_ms=float(payload.get("timestamp_ms", 0.0)),
+                        camera_id=payload.get("camera_id", ""),
+                        text=payload.get("text", ""),
+                        created_at=datetime.now(timezone.utc).isoformat(),
+                        bbox=tuple(payload.get("bbox")) if payload.get("bbox") else None,
+                        annotation_type=payload.get("annotation_type", "note")
+                    )
+                    self.annotation_store.add(anno)
+                    self._send_json({"success": True, "annotation_id": anno.annotation_id})
+                except Exception as e:
+                    self._send_json({"success": False, "error": str(e)}, status=HTTPStatus.BAD_REQUEST)
+            else:
+                self._send_json({"success": False}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        elif path.startswith("/api/annotations/") and self.command == "PUT":
+            # Note: Do PUT logic in do_PUT typically, but if routing from POST or handling via PUT
+            pass
 
         elif path == "/api/target/select":
             cam_id = payload.get("camera_id")
@@ -874,6 +951,7 @@ def run_ui_server(
     """Starts the Camera Mapping UI server."""
     MappingAPIHandler.graph_file = Path(graph_file)
     MappingAPIHandler.runtime_pipeline = pipeline
+    MappingAPIHandler.annotation_store = AnnotationStore()
 
     server = ArgusHTTPServer(("127.0.0.1", port), MappingAPIHandler)
     logger.info(f"Camera Mapping UI server running at http://127.0.0.1:{port}")

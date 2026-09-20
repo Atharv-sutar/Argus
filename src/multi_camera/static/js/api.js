@@ -247,6 +247,73 @@ const API = {
     }
   },
 
+
+  async getAnnotations(cameraId = null) {
+    let url = `${this.baseUrl}/api/annotations`;
+    if (cameraId) {
+      url += `?camera_id=${encodeURIComponent(cameraId)}`;
+    }
+    try {
+      const res = await fetch(url);
+      if (!res.ok) return [];
+      return await res.json();
+    } catch (err) {
+      return [];
+    }
+  },
+
+  async createAnnotation(cameraId, timestampMs, text, bbox = null, annotationType = 'note') {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/annotations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          camera_id: cameraId,
+          timestamp_ms: timestampMs,
+          text: text,
+          bbox: bbox,
+          annotation_type: annotationType
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to create annotation');
+      return data;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  async updateAnnotation(annotationId, text, annotationType = null) {
+    try {
+      const payload = { text };
+      if (annotationType) payload.annotation_type = annotationType;
+      
+      const res = await fetch(`${this.baseUrl}/api/annotations/${annotationId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to update annotation');
+      return data;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  async deleteAnnotation(annotationId) {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/annotations/${annotationId}`, {
+        method: 'DELETE'
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to delete annotation');
+      return data;
+    } catch (err) {
+      throw err;
+    }
+  },
+
   async quit() {
     try {
       const controller = new AbortController();

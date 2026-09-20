@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 
 from src.playback.route_recorder import RouteEvent
+from src.playback.annotations import AnnotationStore
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,8 @@ def stitch_journey(case_id: str,
                    events: List[RouteEvent],
                    output_path: str,
                    fps: float = 30.0,
-                   resolution: tuple = (1280, 720)) -> bool:
+                   resolution: tuple = (1280, 720),
+                   annotation_store: AnnotationStore = None) -> bool:
     """
     Generates a continuous journey video from the route events.
     """
@@ -66,6 +68,7 @@ def stitch_journey(case_id: str,
             if start_ms > last_end_ms + 1000 and last_end_ms > 0:
                 _write_transit_frames(out, last_end_ms, start_ms, resolution, fps)
             
+            cam_annos = annotation_store.get_by_camera(cam_id) if annotation_store else []
             _write_camera_segment(
                 cam_id=cam_id,
                 footage_dir=footage_dir,
@@ -74,7 +77,8 @@ def stitch_journey(case_id: str,
                 corrected=corrected,
                 out_writer=out,
                 resolution=resolution,
-                fps=fps
+                fps=fps,
+                annotations=cam_annos
             )
             last_end_ms = end_ms
 
@@ -105,7 +109,8 @@ def _write_transit_frames(out: cv2.VideoWriter, start_ms: float, end_ms: float, 
 
 
 def _write_camera_segment(cam_id: str, footage_dir: str, start_ms: float, end_ms: float,
-                          corrected: bool, out_writer: cv2.VideoWriter, resolution: tuple, target_fps: float) -> None:
+                          corrected: bool, out_writer: cv2.VideoWriter, resolution: tuple, target_fps: float,
+                          annotations: list = None) -> None:
     
     # Try different extensions
     video_path = ""
@@ -155,6 +160,15 @@ def _write_camera_segment(cam_id: str, footage_dir: str, start_ms: float, end_ms
 
             cv2.putText(frame, f"CAM: {cam_id} | TIME: {ts_str} | {tag}", (20, 40),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+
+            if annotations:
+                # Find if any annotation is active (within 3 seconds of pos_ms)
+                for a in annotations:
+                    if a.timestamp_ms <= pos_ms <= a.timestamp_ms + 3000:
+                        cv2.rectangle(frame, (0, resolution[1]-60), (resolution[0], resolution[1]), (0, 0, 0), -1)
+                        cv2.putText(frame, f"Note: {a.text}", (20, resolution[1]-20),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+                        break
 
             out_writer.write(frame)
     finally:

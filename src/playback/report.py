@@ -6,9 +6,10 @@ import datetime
 from typing import List
 
 from src.playback.route_recorder import RouteEvent
+from src.playback.annotations import AnnotationStore
 
 
-def generate_route_report(case_id: str, events: List[RouteEvent]) -> str:
+def generate_route_report(case_id: str, events: List[RouteEvent], annotation_store: AnnotationStore = None) -> str:
     """
     Generates a human-readable markdown report of the target's route.
     """
@@ -53,6 +54,11 @@ def generate_route_report(case_id: str, events: List[RouteEvent]) -> str:
                 duration = e.timestamp_ms - start_ms
                 total_tracked_ms += duration
                 lines.append(_format_segment(active_cam, start_ms, e.timestamp_ms, was_corrected))
+                if annotation_store:
+                    annos = annotation_store.get_in_range(start_ms, e.timestamp_ms)
+                    for a in annos:
+                        if a.camera_id == active_cam:
+                            lines.append(f"      📝 {_format_ms(a.timestamp_ms)} \"{a.text}\"")
                 
                 active_cam = e.camera_id
                 start_ms = e.timestamp_ms
@@ -63,6 +69,11 @@ def generate_route_report(case_id: str, events: List[RouteEvent]) -> str:
                 duration = e.timestamp_ms - start_ms
                 total_tracked_ms += duration
                 lines.append(_format_segment(active_cam, start_ms, e.timestamp_ms, was_corrected))
+                if annotation_store:
+                    annos = annotation_store.get_in_range(start_ms, e.timestamp_ms)
+                    for a in annos:
+                        if a.camera_id == active_cam:
+                            lines.append(f"      📝 {_format_ms(a.timestamp_ms)} \"{a.text}\"")
                 active_cam = None
 
     if active_cam is not None:
@@ -71,6 +82,11 @@ def generate_route_report(case_id: str, events: List[RouteEvent]) -> str:
             duration = last_ms - start_ms
             total_tracked_ms += duration
             lines.append(_format_segment(active_cam, start_ms, last_ms, was_corrected))
+            if annotation_store:
+                annos = annotation_store.get_in_range(start_ms, last_ms)
+                for a in annos:
+                    if a.camera_id == active_cam:
+                        lines.append(f"      📝 {_format_ms(a.timestamp_ms)} \"{a.text}\"")
 
     lines.append("")
     lines.append(f"Total tracked time: {_format_duration(total_tracked_ms)}")

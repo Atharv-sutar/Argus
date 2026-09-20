@@ -55,6 +55,7 @@
             <li style="margin-bottom: 8px;"><strong>Ctrl+Shift+z</strong> - Redo action</li>
             <li style="margin-bottom: 8px;"><strong>s</strong> - Open Settings</li>
             <li style="margin-bottom: 8px;"><strong>q</strong> - Shutdown server</li>
+            <li style="margin-bottom: 8px;"><strong>n</strong> - Add Annotation note</li>
             <li style="margin-bottom: 8px;"><strong>?</strong> - Toggle Shortcuts</li>
         </ul>
         <div style="display: flex; justify-content: flex-end;">
@@ -72,6 +73,20 @@
         <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 15px;">
           <button id="btn-bulk-import-cancel" class="btn btn-secondary">Cancel</button>
           <button id="btn-bulk-import-submit" class="btn btn-primary">Import Cameras</button>
+        </div>
+      </div>
+    </div>
+
+    
+    <!-- Annotation Overlay -->
+    <div id="annotation-overlay" class="overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1100; align-items: center; justify-content: center;">
+      <div class="handoff-modal" style="background: var(--bg-panel); padding: 20px; border-radius: 8px; border: 1px solid var(--border-color); width: 500px; max-width: 90%;">
+        <h3 style="margin-top: 0; color: var(--cyan-bright);">Add Annotation</h3>
+        <p style="margin: 0 0 10px 0; color: var(--text-muted); font-size: 12px;">Anchored to <span id="anno-cam-id" style="color:var(--text-main); font-weight:bold;"></span> at <span id="anno-time-ms" style="color:var(--text-main); font-weight:bold;"></span>s</p>
+        <textarea id="anno-text-input" rows="4" style="width: 100%; background: var(--bg-dark); color: #fff; border: 1px solid var(--border-color); padding: 10px; border-radius: 4px; resize: vertical;" placeholder="Type observation note..."></textarea>
+        <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 15px;">
+            <button type="button" id="btn-anno-cancel" class="btn btn-secondary">Cancel</button>
+            <button type="button" id="btn-anno-save" class="btn btn-primary">Save Note</button>
         </div>
       </div>
     </div>
