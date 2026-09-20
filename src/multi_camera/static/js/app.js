@@ -50,6 +50,17 @@ class SurveillanceApp {
     this.transitTrailEl = document.getElementById('transit-trail-display');
 
     // Annotations
+
+    // Cases
+    this.caseOverlay = document.getElementById('case-overlay');
+    this.activeCaseDisplay = document.getElementById('active-case-display');
+    this.btnCaseClose = document.getElementById('btn-case-close');
+    this.caseTableBody = document.getElementById('case-table-body');
+    this.caseIdInput = document.getElementById('case-id-input');
+    this.caseOpInput = document.getElementById('case-operator-input');
+    this.btnCaseCreate = document.getElementById('btn-case-create');
+    this.activeCaseId = null;
+
     this.annoOverlay = document.getElementById('annotation-overlay');
     this.annoCamId = document.getElementById('anno-cam-id');
     this.annoTimeMs = document.getElementById('anno-time-ms');
@@ -351,6 +362,96 @@ class SurveillanceApp {
       btnRefresh.addEventListener('click', refreshCamerasFn);
     }
 
+
+
+    if (this.activeCaseDisplay) {
+        this.activeCaseDisplay.addEventListener('click', () => this.showCaseManager());
+    }
+    if (this.btnCaseClose) {
+        this.btnCaseClose.addEventListener('click', () => this.caseOverlay.style.display = 'none');
+    }
+    if (this.btnCaseCreate) {
+        this.btnCaseCreate.addEventListener('click', async () => {
+            const cid = this.caseIdInput.value.trim();
+            const op = this.caseOpInput.value.trim();
+            if (!cid) {
+                this.showToast('Case ID is required', 'error');
+                return;
+            }
+            try {
+                await API.createCase(cid, 'live', op, '');
+                await this.openCase(cid);
+                this.caseIdInput.value = '';
+                this.caseOpInput.value = '';
+                this.caseOverlay.style.display = 'none';
+            } catch (err) {
+                this.showToast(`Failed to create case: ${err.message}`, 'error');
+            }
+        });
+    }
+
+    this.showCaseManager = async () => {
+        this.caseOverlay.style.display = 'flex';
+        await this.loadCaseList();
+    };
+
+    this.loadCaseList = async () => {
+        if (!this.caseTableBody) return;
+        try {
+            const data = await API.getCases();
+            this.activeCaseId = data.active_case;
+            if (this.activeCaseDisplay) {
+                this.activeCaseDisplay.textContent = this.activeCaseId || '[No Active Case]';
+            }
+            
+            this.caseTableBody.innerHTML = '';
+            data.cases.forEach(c => {
+                const tr = document.createElement('tr');
+                tr.style.borderBottom = '1px solid var(--border-color)';
+                const isActive = (c.case_id === this.activeCaseId);
+                
+                tr.innerHTML = `
+                    <td style="padding: 8px;">${c.case_id} ${isActive ? '<span style="color:var(--cyan-bright)">(Active)</span>' : ''}</td>
+                    <td style="padding: 8px;">${c.status}</td>
+                    <td style="padding: 8px;">${new Date(c.created_at).toLocaleString()}</td>
+                    <td style="padding: 8px;">
+                        ${!isActive ? `<button class="btn btn-primary" onclick="window.appInstance.openCase('${c.case_id}')" style="padding: 2px 6px; font-size: 12px;">Open</button>` : ''}
+                        <button class="btn btn-secondary" onclick="window.appInstance.deleteCase('${c.case_id}')" style="padding: 2px 6px; font-size: 12px;">Del</button>
+                    </td>
+                `;
+                this.caseTableBody.appendChild(tr);
+            });
+        } catch (err) {
+            console.error('Failed to load cases', err);
+        }
+    };
+
+    this.openCase = async (cid) => {
+        try {
+            await API.openCase(cid);
+            this.showToast(`Opened case ${cid}`, 'success');
+            if (this.caseOverlay) this.caseOverlay.style.display = 'none';
+            // Clear current state and refresh UI
+            this.galleryItems = [];
+            this.annotations = [];
+            this.renderGallery();
+            this.loadCaseList();
+            this.pollGallery(); // immediate refresh
+        } catch (err) {
+            this.showToast(`Failed to open case: ${err.message}`, 'error');
+        }
+    };
+
+    this.deleteCase = async (cid) => {
+        if (!confirm(`Are you sure you want to delete case ${cid}?`)) return;
+        try {
+            await API.deleteCase(cid);
+            this.showToast(`Deleted case ${cid}`, 'success');
+            await this.loadCaseList();
+        } catch (err) {
+            this.showToast(`Failed to delete case: ${err.message}`, 'error');
+        }
+    };
 
     if (this.btnAnnoCancel) {
       this.btnAnnoCancel.addEventListener('click', () => {

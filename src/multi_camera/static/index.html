@@ -78,6 +78,46 @@
     </div>
 
     
+    
+    <!-- Case Management Overlay -->
+    <div id="case-overlay" class="overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1200; align-items: center; justify-content: center;">
+      <div class="handoff-modal" style="background: var(--bg-panel); padding: 20px; border-radius: 8px; border: 1px solid var(--border-color); width: 600px; max-width: 90%;">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 10px; margin-bottom: 15px;">
+            <h3 style="margin: 0; color: var(--cyan-bright);">Case Management</h3>
+            <button id="btn-case-close" class="btn btn-secondary" style="padding: 4px 8px;">✕</button>
+        </div>
+        
+        <!-- Case List -->
+        <div id="case-list-container" style="max-height: 200px; overflow-y: auto; margin-bottom: 15px;">
+            <table style="width: 100%; border-collapse: collapse; color: var(--text-main); font-size: 14px;">
+                <thead>
+                    <tr style="border-bottom: 1px solid var(--border-color); text-align: left;">
+                        <th style="padding: 8px;">Case ID</th>
+                        <th style="padding: 8px;">Status</th>
+                        <th style="padding: 8px;">Date</th>
+                        <th style="padding: 8px;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="case-table-body">
+                    <!-- Dynamic rows -->
+                </tbody>
+            </table>
+        </div>
+
+        <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 15px 0;">
+
+        <!-- Create Case Form -->
+        <h4 style="margin: 0 0 10px 0; color: var(--text-main);">Create New Case</h4>
+        <div style="display: flex; gap: 10px; flex-direction: column;">
+            <input type="text" id="case-id-input" placeholder="Case ID (e.g., CASE-2026-001)" style="background: var(--bg-dark); color: #fff; border: 1px solid var(--border-color); padding: 8px; border-radius: 4px;">
+            <input type="text" id="case-operator-input" placeholder="Operator Name" style="background: var(--bg-dark); color: #fff; border: 1px solid var(--border-color); padding: 8px; border-radius: 4px;">
+            <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 10px;">
+                <button type="button" id="btn-case-create" class="btn btn-primary">Create & Open</button>
+            </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Annotation Overlay -->
     <div id="annotation-overlay" class="overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1100; align-items: center; justify-content: center;">
       <div class="handoff-modal" style="background: var(--bg-panel); padding: 20px; border-radius: 8px; border: 1px solid var(--border-color); width: 500px; max-width: 90%;">

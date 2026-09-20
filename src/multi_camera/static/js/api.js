@@ -314,6 +314,76 @@ const API = {
     }
   },
 
+
+  async getCases() {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/cases`);
+      if (!res.ok) return {cases: [], active_case: null};
+      return await res.json();
+    } catch (err) {
+      return {cases: [], active_case: null};
+    }
+  },
+
+  async createCase(caseId, mode, operator, notes) {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/cases`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          case_id: caseId,
+          mode: mode,
+          operator: operator,
+          notes: notes
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to create case');
+      return data;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  async openCase(caseId) {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/cases/${caseId}/open`, {
+        method: 'POST'
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to open case');
+      return data;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  async closeCase(caseId) {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/cases/${caseId}/close`, {
+        method: 'POST'
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to close case');
+      return data;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  async deleteCase(caseId) {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/cases/${caseId}`, {
+        method: 'DELETE'
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to delete case');
+      return data;
+    } catch (err) {
+      throw err;
+    }
+  },
+
   async quit() {
     try {
       const controller = new AbortController();

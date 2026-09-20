@@ -33,6 +33,7 @@ from src.core.multi_camera_types import (
 )
 from src.multi_camera.camera_graph import CameraGraph
 from src.playback.annotations import Annotation, AnnotationStore
+from src.case.manager import CaseManager
 import uuid
 from datetime import datetime, timezone
 
@@ -165,6 +166,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
     runtime_pipeline = None  # Optional MultiCameraPipeline reference
     graph_lock = threading.Lock()
     annotation_store = None
+    case_manager = None
 
     def log_message(self, format: str, *args: Any) -> None:
         # Route standard HTTP access logs to debug file log
@@ -428,7 +430,60 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     self._send_json({"can_undo": False, "can_redo": False, "last_action_name": None, "next_redo_name": None})
                 return
 
-            elif path == "/api/annotations":
+            elif path == "/api/cases":
+                if self.case_manager:
+                    cases = [c.to_dict() for c in self.case_manager.list_cases()]
+                    self._send_json({"cases": cases, "active_case": self.case_manager.active_case.case_id if self.case_manager.active_case else None})
+                else:
+                    self._send_json({"cases": []})
+                return
+
+            elif path == "/api/cases":
+            if self.case_manager:
+                try:
+                    case_id = payload.get("case_id")
+                    if not case_id:
+                        self._send_json({"success": False, "error": "case_id required"}, status=HTTPStatus.BAD_REQUEST)
+                        return
+                    case = self.case_manager.create_case(
+                        case_id=case_id,
+                        mode=payload.get("mode", "live"),
+                        operator=payload.get("operator", ""),
+                        notes=payload.get("notes", "")
+                    )
+                    self._send_json({"success": True, "case": case.to_dict()})
+                except Exception as e:
+                    self._send_json({"success": False, "error": str(e)}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        elif path.startswith("/api/cases/") and path.endswith("/open"):
+            if self.case_manager:
+                case_id = path.split("/")[-2]
+                try:
+                    # Switch cases
+                    case = self.case_manager.open_case(case_id)
+                    case_dir = self.case_manager.get_active_case_dir()
+                    
+                    # Update active paths
+                    if self.annotation_store:
+                        self.annotation_store.set_db_path(str(case_dir / "annotations.db"))
+                        
+                    if self.runtime_pipeline:
+                        if hasattr(self.runtime_pipeline.identity_manager, "set_db_path"):
+                            self.runtime_pipeline.identity_manager.set_db_path(str(case_dir / "gallery" / "entries.db"))
+                            
+                    self._send_json({"success": True, "case": case.to_dict()})
+                except Exception as e:
+                    self._send_json({"success": False, "error": str(e)}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        elif path.startswith("/api/cases/") and path.endswith("/close"):
+            if self.case_manager:
+                self.case_manager.close_case()
+                self._send_json({"success": True})
+            return
+
+        elif path == "/api/annotations":
                 if self.annotation_store:
                     cam_id = query.get("camera_id", [None])[0]
                     if cam_id:
@@ -564,7 +619,14 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(content_length)
         payload = json.loads(body.decode("utf-8")) if body else {}
 
-        if path.startswith("/api/annotations/"):
+        if path.startswith("/api/cases/"):
+            case_id = path.split("/")[-1]
+            if self.case_manager:
+                self.case_manager.delete_case(case_id)
+                self._send_json({"success": True})
+            return
+            
+        elif path.startswith("/api/annotations/"):
             anno_id = path.split("/")[-1]
             if self.annotation_store:
                 ok = self.annotation_store.update(anno_id, payload.get("text", ""), payload.get("annotation_type"))
@@ -580,7 +642,14 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             return
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
-        if path.startswith("/api/annotations/"):
+        if path.startswith("/api/cases/"):
+            case_id = path.split("/")[-1]
+            if self.case_manager:
+                self.case_manager.delete_case(case_id)
+                self._send_json({"success": True})
+            return
+            
+        elif path.startswith("/api/annotations/"):
             anno_id = path.split("/")[-1]
             if self.annotation_store:
                 ok = self.annotation_store.remove(anno_id)
@@ -740,6 +809,51 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     self._send_json({"success": False, "error": "Nothing to redo"}, status=HTTPStatus.BAD_REQUEST)
             else:
                 self._send_json({"success": False, "error": "Pipeline not active"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        elif path == "/api/cases":
+            if self.case_manager:
+                try:
+                    case_id = payload.get("case_id")
+                    if not case_id:
+                        self._send_json({"success": False, "error": "case_id required"}, status=HTTPStatus.BAD_REQUEST)
+                        return
+                    case = self.case_manager.create_case(
+                        case_id=case_id,
+                        mode=payload.get("mode", "live"),
+                        operator=payload.get("operator", ""),
+                        notes=payload.get("notes", "")
+                    )
+                    self._send_json({"success": True, "case": case.to_dict()})
+                except Exception as e:
+                    self._send_json({"success": False, "error": str(e)}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        elif path.startswith("/api/cases/") and path.endswith("/open"):
+            if self.case_manager:
+                case_id = path.split("/")[-2]
+                try:
+                    # Switch cases
+                    case = self.case_manager.open_case(case_id)
+                    case_dir = self.case_manager.get_active_case_dir()
+                    
+                    # Update active paths
+                    if self.annotation_store:
+                        self.annotation_store.set_db_path(str(case_dir / "annotations.db"))
+                        
+                    if self.runtime_pipeline:
+                        if hasattr(self.runtime_pipeline.identity_manager, "set_db_path"):
+                            self.runtime_pipeline.identity_manager.set_db_path(str(case_dir / "gallery" / "entries.db"))
+                            
+                    self._send_json({"success": True, "case": case.to_dict()})
+                except Exception as e:
+                    self._send_json({"success": False, "error": str(e)}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        elif path.startswith("/api/cases/") and path.endswith("/close"):
+            if self.case_manager:
+                self.case_manager.close_case()
+                self._send_json({"success": True})
             return
 
         elif path == "/api/annotations":
@@ -952,6 +1066,7 @@ def run_ui_server(
     MappingAPIHandler.graph_file = Path(graph_file)
     MappingAPIHandler.runtime_pipeline = pipeline
     MappingAPIHandler.annotation_store = AnnotationStore()
+    MappingAPIHandler.case_manager = CaseManager("cases")
 
     server = ArgusHTTPServer(("127.0.0.1", port), MappingAPIHandler)
     logger.info(f"Camera Mapping UI server running at http://127.0.0.1:{port}")

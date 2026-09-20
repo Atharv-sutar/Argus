@@ -1021,7 +1021,7 @@ Two methods:
 
 ---
 
-## Phase 10 — Session / Case Management
+## Phase 10 — Session / Case Management (COMPLETED)
 
 > **Priority: MEDIUM.** Each forensic investigation must be a self-contained, portable unit.
 

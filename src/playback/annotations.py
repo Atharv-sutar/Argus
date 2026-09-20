@@ -29,6 +29,11 @@ class AnnotationStore:
         self.db_path = db_path
         self._init_db()
 
+
+    def set_db_path(self, db_path: str):
+        self.db_path = db_path
+        self._init_db()
+
     def _init_db(self):
         try:
             with sqlite3.connect(self.db_path) as conn:

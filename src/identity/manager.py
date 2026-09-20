@@ -7,6 +7,8 @@ import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
+import sqlite3
+import pickle
 
 from src.core.interfaces import BaseReID, BaseVectorStore
 from src.core.types import (
@@ -75,9 +77,11 @@ class IdentityManager:
         auto_add_threshold: Optional[float] = None,
         audit_logger: Optional[AuditLogger] = None,
         undo_stack: Optional[UndoStack] = None,
+        db_path: Optional[str] = None,
     ) -> None:
         self.reid = reid_extractor
         self.undo_stack = undo_stack
+        self.db_path = db_path
         self.vector_store = vector_store or InMemoryVectorStore()
         self.similarity_threshold = similarity_threshold
         self.reacquisition_threshold = reacquisition_threshold
@@ -249,6 +253,7 @@ class IdentityManager:
             self.vector_store.remove_identity("target_0")
             for emb in ident.trusted_gallery:
                 self.vector_store.add(emb, "target_0")
+            if hasattr(self, "save"): self.save()
             for emb in ident.provisional_gallery:
                 self.vector_store.add(emb[0] if isinstance(emb, tuple) else emb, "target_0")
             self.save_target_gallery()
