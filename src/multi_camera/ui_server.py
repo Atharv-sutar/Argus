@@ -648,7 +648,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
 
     def _audit(self, event_type: AuditEventType, details: str):
         if hasattr(self, 'audit_logger') and self.audit_logger:
-            self.audit_logger.log(event_type=event_type, details=details, user_id="operator")
+            self.audit_logger.log(event_type=event_type, detail={"message": details, "user_id": "operator"})
 
     def do_POST(self) -> None:
         if not self._is_authorized():
