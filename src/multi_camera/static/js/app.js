@@ -316,6 +316,22 @@ class SurveillanceApp {
     };
     this.redoFn = redoFn;
 
+    const handleSwitchSource = async (mode) => {
+      try {
+        const camId = this.activeCameraId || "cam_0";
+        this.showToast(`Switching source to ${mode}...`, 'info');
+        const res = await API.switchSource(camId, mode);
+        if (res.success) {
+          this.showToast(`Source successfully switched to ${mode}.`, 'success');
+          setTimeout(() => window.location.reload(), 1000); // Reload to re-initialize UI state
+        }
+      } catch (err) {
+        this.showToast(`Failed to switch source: ${err.message}`, 'error');
+      }
+    };
+
+    document.getElementById('btn-source-live')?.addEventListener('click', () => handleSwitchSource('live'));
+    document.getElementById('btn-source-video')?.addEventListener('click', () => handleSwitchSource('video'));
     document.getElementById('btn-undo-global')?.addEventListener('click', undoFn);
     document.getElementById('btn-redo-global')?.addEventListener('click', redoFn);
 

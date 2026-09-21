@@ -1037,6 +1037,74 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             else:
                 self._send_json({"success": False, "error": "Runtime pipeline not active"}, status=HTTPStatus.BAD_REQUEST)
             return
+        elif path == "/api/system/switch_source":
+            if self.runtime_pipeline is None:
+                self._send_json({"success": False, "error": "Runtime pipeline not active"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            
+            mode = payload.get("mode", "live")
+            cam_id = payload.get("camera_id", "cam_0")
+            
+            source_val = 0
+            source_type = "webcam"
+            
+            if mode == "video":
+                try:
+                    import tkinter as tk
+                    from tkinter import filedialog
+                    import sys
+                    
+                    # Create a hidden root window
+                    root = tk.Tk()
+                    root.withdraw()
+                    root.attributes('-topmost', True)
+                    
+                    file_path = filedialog.askopenfilename(
+                        title="Select Pre-recorded Video File",
+                        filetypes=[("Video Files", "*.mp4 *.avi *.mkv *.mov"), ("All Files", "*.*")]
+                    )
+                    root.destroy()
+                    
+                    if not file_path:
+                        self._send_json({"success": False, "error": "No file selected"})
+                        return
+                        
+                    source_val = file_path
+                    source_type = "video_file"
+                except Exception as e:
+                    logger.exception(f"[SERVER] Failed to open file dialog: {e}")
+                    self._send_json({"success": False, "error": f"File dialog failed: {e}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                    return
+            
+            try:
+                with self.graph_lock:
+                    if not self.graph_file.is_file():
+                        self._send_json({"success": False, "error": "No graph file found"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                        return
+                    
+                    graph_dict = CameraGraph.load(self.graph_file).to_dict()
+                    updated = False
+                    for cam in graph_dict.get("cameras", []):
+                        if cam.get("camera_id") == cam_id:
+                            cam["source"] = source_val
+                            cam["source_type"] = source_type
+                            updated = True
+                            break
+                    
+                    if not updated:
+                        self._send_json({"success": False, "error": f"Camera '{cam_id}' not found in graph"}, status=HTTPStatus.BAD_REQUEST)
+                        return
+                        
+                    new_graph = CameraGraph.from_dict(graph_dict)
+                    new_graph.save(self.graph_file)
+                    self.runtime_pipeline.update_topology(new_graph)
+                    
+                    logger.info(f"[SERVER] Switched '{cam_id}' source to {mode} ({source_val})")
+                    self._send_json({"success": True, "mode": mode, "source": source_val})
+                    
+            except Exception as e:
+                logger.exception(f"[SERVER] Failed to switch source: {e}")
+                self._send_json({"success": False, "error": str(e)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 
         elif path == "/api/system/quit":
             logger.info(f"[SERVER] Safe shutdown requested via /api/system/quit endpoint from {self.address_string()}")

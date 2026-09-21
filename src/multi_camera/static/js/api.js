@@ -442,6 +442,22 @@ const API = {
     }
   },
 
+  async switchSource(cameraId, mode) {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/system/switch_source`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ camera_id: cameraId, mode: mode })
+      });
+      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+      return await res.json();
+    } catch (err) {
+      console.error('[API] switchSource error:', err);
+      throw err;
+    }
+  },
+
+
   async quit() {
     try {
       const controller = new AbortController();
