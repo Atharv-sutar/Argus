@@ -215,38 +215,6 @@ const API = {
   },
 
 
-  async getUndoStack() {
-    try {
-      const res = await fetch(`${this.baseUrl}/api/undo/stack`);
-      if (!res.ok) return { can_undo: false, can_redo: false };
-      return await res.json();
-    } catch (err) {
-      return { can_undo: false, can_redo: false };
-    }
-  },
-
-  async undoAction() {
-    try {
-      const res = await fetch(`${this.baseUrl}/api/undo`, { method: 'POST' });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'Undo failed');
-      return data;
-    } catch (err) {
-      throw err;
-    }
-  },
-
-  async redoAction() {
-    try {
-      const res = await fetch(`${this.baseUrl}/api/redo`, { method: 'POST' });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'Redo failed');
-      return data;
-    } catch (err) {
-      throw err;
-    }
-  },
-
 
   async getAnnotations(cameraId = null) {
     let url = `${this.baseUrl}/api/annotations`;

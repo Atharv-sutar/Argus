@@ -583,3 +583,6 @@ Before completion:
 - check performance impact when relevant
 - check GPU impact when relevant
 - mention known limitations
+## Git Push Rule
+
+After every major step or change is completed, you MUST automatically push the code to GitHub. Do not wait for the user to ask you to push. Execute git add -A, git commit -m '<message>', and git push.

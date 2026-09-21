@@ -3,35 +3,44 @@
    ========================================================================== */
 
 :root {
-  --bg-app: #07090e;
-  --bg-panel: #0d121d;
-  --bg-card: #121929;
-  --bg-card-hover: #192338;
-  --bg-elevated: #1a233a;
+  --bg-neo: #1e222b;
+  --neo-shadow-light: #282d38;
+  --neo-shadow-dark: #14171e;
+  
+  --bg-app: var(--bg-neo);
+  --bg-panel: var(--bg-neo);
+  --bg-card: var(--bg-neo);
+  --bg-card-hover: var(--bg-neo);
+  --bg-elevated: var(--bg-neo);
 
-  --border-subtle: rgba(255, 255, 255, 0.07);
+  --neo-outset: 5px 5px 10px var(--neo-shadow-dark), -5px -5px 10px var(--neo-shadow-light);
+  --neo-inset: inset 4px 4px 8px var(--neo-shadow-dark), inset -4px -4px 8px var(--neo-shadow-light);
+  --neo-outset-sm: 3px 3px 6px var(--neo-shadow-dark), -3px -3px 6px var(--neo-shadow-light);
+  --neo-inset-sm: inset 2px 2px 5px var(--neo-shadow-dark), inset -2px -2px 5px var(--neo-shadow-light);
+  
+  --border-subtle: transparent;
   --border-active: #00f2fe;
   --border-amber: #f59e0b;
   --border-danger: #ef4444;
 
-  --text-primary: #f8fafc;
+  --text-primary: #e2e8f0;
   --text-secondary: #94a3b8;
   --text-muted: #64748b;
 
   --cyan-bright: #00f2fe;
-  --cyan-glow: rgba(0, 242, 254, 0.25);
+  --cyan-glow: rgba(0, 242, 254, 0.4);
   --teal-bright: #059669;
   --emerald-bright: #10b981;
   --amber-bright: #f59e0b;
-  --amber-glow: rgba(245, 158, 11, 0.25);
+  --amber-glow: rgba(245, 158, 11, 0.4);
   --rose-bright: #f43f5e;
   --purple-bright: #a855f7;
 
   --font-main: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
 
-  --header-height: 58px;
-  --gallery-width: 340px;
+  --header-height: 64px;
+  --gallery-width: 380px;
   --dock-height: 54px;
 }
 
@@ -65,7 +74,7 @@ body.theme-dark {
 .app-header {
   height: var(--header-height);
   background: var(--bg-panel);
-  border-bottom: 1px solid var(--border-subtle);
+  box-shadow: var(--neo-outset-sm); border-bottom: none; z-index: 10;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -122,10 +131,11 @@ body.theme-dark {
   display: flex;
   align-items: center;
   gap: 8px;
-  background: rgba(18, 25, 41, 0.85);
-  border: 1px solid var(--border-subtle);
-  padding: 4px 10px;
-  border-radius: 6px;
+  background: var(--bg-neo);
+  box-shadow: var(--neo-inset-sm);
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: none;
 }
 
 .chip-label {
@@ -200,10 +210,10 @@ body.theme-dark {
 
 .view-switch {
   display: flex;
-  background: var(--bg-app);
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  padding: 2px;
+  background: var(--bg-neo);
+  box-shadow: var(--neo-inset);
+  border-radius: 8px;
+  padding: 4px;
 }
 
 .mode-btn {
@@ -226,9 +236,10 @@ body.theme-dark {
 }
 
 .mode-btn.active {
-  background: var(--bg-card);
+  background: var(--bg-neo);
   color: var(--cyan-bright);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--neo-outset-sm);
+  border-radius: 6px;
 }
 
 /* Common Buttons */
@@ -240,11 +251,14 @@ body.theme-dark {
   font-family: var(--font-main);
   font-weight: 600;
   font-size: 12px;
-  padding: 7px 14px;
-  border-radius: 6px;
-  border: 1px solid transparent;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: none;
   cursor: pointer;
   transition: all 0.2s ease;
+  background: var(--bg-neo);
+  box-shadow: var(--neo-outset-sm);
+  color: var(--text-primary);
 }
 
 .btn-sm {
@@ -257,36 +271,32 @@ body.theme-dark {
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, #0ea5e9, #0284c7);
-  color: #fff;
-  border-color: rgba(14, 165, 233, 0.4);
+  color: var(--cyan-bright);
 }
 
 .btn-primary:hover {
-  background: linear-gradient(135deg, #38bdf8, #0ea5e9);
-  box-shadow: 0 0 12px var(--cyan-glow);
+  box-shadow: var(--neo-inset-sm);
+  color: #fff;
+  text-shadow: 0 0 8px var(--cyan-glow);
 }
 
 .btn-secondary {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
 }
 
 .btn-secondary:hover {
-  background: var(--bg-card-hover);
-  border-color: var(--cyan-bright);
+  box-shadow: var(--neo-inset-sm);
+  color: var(--cyan-bright);
 }
 
 .btn-danger {
-  background: rgba(239, 68, 68, 0.15);
-  color: #f87171;
-  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: var(--rose-bright);
 }
 
 .btn-danger:hover {
-  background: rgba(239, 68, 68, 0.3);
+  box-shadow: var(--neo-inset-sm);
   color: #fff;
+  text-shadow: 0 0 8px var(--rose-bright);
 }
 
 .btn-outline-danger {
@@ -346,7 +356,7 @@ body.theme-dark {
   height: 40px;
   padding: 0 16px;
   background: var(--bg-panel);
-  border-bottom: 1px solid var(--border-subtle);
+  box-shadow: var(--neo-outset-sm); border-bottom: none; z-index: 10;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -386,20 +396,21 @@ body.theme-dark {
 }
 
 .grid-btn {
-  background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
+  background: var(--bg-neo);
+  box-shadow: var(--neo-outset-sm);
   color: var(--text-secondary);
   font-size: 11px;
   font-family: var(--font-mono);
-  padding: 3px 8px;
-  border-radius: 4px;
+  padding: 4px 10px;
+  border-radius: 6px;
   cursor: pointer;
+  border: none;
+  transition: all 0.2s;
 }
 
 .grid-btn.active, .grid-btn:hover {
-  background: var(--bg-elevated);
+  box-shadow: var(--neo-inset-sm);
   color: var(--cyan-bright);
-  border-color: var(--cyan-bright);
 }
 
 /* Camera Video Grid */
@@ -460,7 +471,7 @@ body.theme-dark {
 /* Camera Feed Tile */
 .camera-tile {
   background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
+  box-shadow: var(--neo-outset); border: none;
   border-radius: 8px;
   display: flex;
   flex-direction: column;
@@ -495,7 +506,7 @@ body.theme-dark {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid var(--border-subtle);
+  box-shadow: var(--neo-outset-sm); border-bottom: none; z-index: 10;
   z-index: 2;
 }
 
@@ -599,7 +610,7 @@ body.theme-dark {
   background: rgba(13, 18, 29, 0.85);
   backdrop-filter: blur(6px);
   border-radius: 6px;
-  border: 1px solid var(--border-subtle);
+  box-shadow: var(--neo-outset); border: none;
   opacity: 0;
   transform: translateY(6px);
   transition: all 0.2s ease;
@@ -613,7 +624,7 @@ body.theme-dark {
 
 .tile-overlay-btn {
   background: rgba(255, 255, 255, 0.08);
-  border: 1px solid var(--border-subtle);
+  box-shadow: var(--neo-outset); border: none;
   color: var(--text-primary);
   font-size: 10.5px;
   font-weight: 600;
@@ -636,7 +647,7 @@ body.theme-dark {
   height: 42px;
   padding: 0 16px;
   background: var(--bg-panel);
-  border-bottom: 1px solid var(--border-subtle);
+  box-shadow: var(--neo-outset-sm); border-bottom: none; z-index: 10;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -646,7 +657,7 @@ body.theme-dark {
 .tool-group {
   display: flex;
   background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
+  box-shadow: var(--neo-outset); border: none;
   border-radius: 6px;
   padding: 2px;
 }
@@ -723,7 +734,7 @@ body.theme-dark {
 
 .topo-card {
   background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
+  box-shadow: var(--neo-outset); border: none;
   border-radius: 6px;
   padding: 10px;
 }
@@ -766,7 +777,7 @@ body.theme-dark {
 
 .form-row input, .form-row select {
   background: var(--bg-app);
-  border: 1px solid var(--border-subtle);
+  box-shadow: var(--neo-outset); border: none;
   border-radius: 4px;
   color: var(--text-primary);
   font-size: 11px;
@@ -820,7 +831,7 @@ body.theme-dark {
   justify-content: space-between;
   padding: 6px 8px;
   background: var(--bg-app);
-  border: 1px solid var(--border-subtle);
+  box-shadow: var(--neo-outset); border: none;
   border-radius: 4px;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -864,7 +875,7 @@ body.theme-dark {
 
 .preview-box {
   background: #000;
-  border: 1px solid var(--border-subtle);
+  box-shadow: var(--neo-outset); border: none;
   border-radius: 4px;
   min-height: 60px;
   display: flex;
@@ -999,7 +1010,7 @@ body.theme-dark {
 .gallery-column-panel {
   width: var(--gallery-width);
   background: var(--bg-panel);
-  border-left: 1px solid var(--border-subtle);
+  box-shadow: var(--neo-outset-sm); border-left: none; z-index: 10;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -1013,7 +1024,7 @@ body.theme-dark {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid var(--border-subtle);
+  box-shadow: var(--neo-outset-sm); border-bottom: none; z-index: 10;
   background: rgba(18, 25, 41, 0.6);
 }
 
@@ -1033,14 +1044,15 @@ body.theme-dark {
 
 /* Target Summary Card */
 .target-summary-card {
-  margin: 12px;
-  padding: 12px;
-  background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
+  margin: 16px;
+  padding: 16px;
+  background: var(--bg-neo);
+  box-shadow: var(--neo-inset);
+  border-radius: 12px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
+  border: none;
 }
 
 .target-summary-row {
@@ -1133,20 +1145,21 @@ body.theme-dark {
 
 /* Gallery Crop Card */
 .gallery-crop-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
+  background: var(--bg-neo);
+  box-shadow: var(--neo-outset);
+  border-radius: 12px;
   display: flex;
-  gap: 10px;
-  padding: 8px;
+  gap: 12px;
+  padding: 12px;
   position: relative;
   transition: all 0.2s ease;
+  border: none;
+  margin-bottom: 8px;
 }
 
 .gallery-crop-card:hover {
-  background: var(--bg-card-hover);
-  border-color: rgba(0, 242, 254, 0.4);
-  transform: translateY(-2px);
+  box-shadow: var(--neo-inset-sm), 0 0 10px var(--cyan-glow);
+  transform: translateY(-1px);
 }
 
 .crop-thumb-box {

@@ -290,32 +290,6 @@ class SurveillanceApp {
     this.clearTargetFn = clearTargetFn;
     window.clearTargetFn = clearTargetFn;
 
-    const undoFn = async () => {
-      try {
-        const res = await API.undoAction();
-        this.showToast(`Undid action: ${res.action.action_type}`, 'success');
-        await this.refreshStatus();
-        await this.refreshGallery();
-        this.pollUndoStack();
-      } catch (err) {
-        this.showToast(err.message, 'error');
-      }
-    };
-    this.undoFn = undoFn;
-
-    const redoFn = async () => {
-      try {
-        const res = await API.redoAction();
-        this.showToast(`Redid action: ${res.action.action_type}`, 'success');
-        await this.refreshStatus();
-        await this.refreshGallery();
-        this.pollUndoStack();
-      } catch (err) {
-        this.showToast(err.message, 'error');
-      }
-    };
-    this.redoFn = redoFn;
-
     const handleSwitchSource = async (mode) => {
       try {
         const camId = this.activeCameraId || "cam_0";
@@ -332,8 +306,6 @@ class SurveillanceApp {
 
     document.getElementById('btn-source-live')?.addEventListener('click', () => handleSwitchSource('live'));
     document.getElementById('btn-source-video')?.addEventListener('click', () => handleSwitchSource('video'));
-    document.getElementById('btn-undo-global')?.addEventListener('click', undoFn);
-    document.getElementById('btn-redo-global')?.addEventListener('click', redoFn);
 
 
     document.getElementById('btn-add-sample-global').addEventListener('click', addSampleFn);
@@ -682,13 +654,7 @@ class SurveillanceApp {
     window.addEventListener('keydown', (e) => {
       if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
       const key = e.key.toLowerCase();
-      if (key === 'z' && e.ctrlKey && e.shiftKey) {
-        e.preventDefault();
-        redoFn();
-      } else if (key === 'z' && e.ctrlKey) {
-        e.preventDefault();
-        undoFn();
-      } else if (key === 'n' && !e.ctrlKey) {
+      if (key === 'n' && !e.ctrlKey) {
         e.preventDefault();
         this.openAnnotationModal();
       } else if (key === 'a') {
@@ -1142,12 +1108,6 @@ class SurveillanceApp {
     } catch(err) {}
   }
 
-  async pollUndoStack() {
-    const stack = await API.getUndoStack();
-    const btnUndo = document.getElementById('btn-undo-global');
-    const btnRedo = document.getElementById('btn-redo-global');
-    if (btnUndo) btnUndo.disabled = !stack.can_undo;
-    if (btnRedo) btnRedo.disabled = !stack.can_redo;
   }
 
   startPolling() {

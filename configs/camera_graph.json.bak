@@ -1,6 +1,20 @@
 {
   "schema_version": 2,
-  "cameras": [],
+  "cameras": [
+    {
+      "camera_id": "cam_0",
+      "name": "Webcam 0 (In Use)",
+      "source": "E:/MAJOR_PROJECT/Project/diagnostics/generate_a_security_camera_foo.mp4",
+      "source_type": "video_file",
+      "enabled": true,
+      "position_x": 230.41761780059613,
+      "position_y": 176.4613969034267,
+      "floor": null,
+      "zone": null,
+      "group": null,
+      "description": null
+    }
+  ],
   "edges": [],
   "background_map": null
 }
