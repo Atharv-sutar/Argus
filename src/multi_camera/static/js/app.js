@@ -1108,8 +1108,6 @@ class SurveillanceApp {
     } catch(err) {}
   }
 
-  }
-
   startPolling() {
     console.log('[SSE] Initializing Server-Sent Events for unified telemetry...');
     if (this.telemetrySource) {
