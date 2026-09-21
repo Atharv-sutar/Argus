@@ -2,11 +2,13 @@
 
 import base64
 import numpy as np
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 
 from src.core.types import Embedding, Identity, TargetIdentityAnchor, ViewCluster
 
-def _serialize_emb(emb: Embedding) -> Dict[str, Any]:
+def _serialize_emb(emb: Embedding | Tuple[Embedding, Any]) -> Dict[str, Any]:
+    if isinstance(emb, tuple):
+        emb = emb[0]
     return {
         "vector_b64": base64.b64encode(emb.vector.tobytes()).decode("ascii"),
         "dim": emb.dim,

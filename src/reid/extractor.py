@@ -13,7 +13,7 @@ except ImportError:
 
 from src.core.interfaces import BaseReID
 from src.core.types import Embedding
-from src.reid.color_normalizer import ColorNormalizer
+
 from src.inference.device import resolve_inference_device
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ class PyTorchReIDExtractor(BaseReID):
         self._model = None
         self._osnet_model = None
         self._device = None
-        self.color_normalizer = ColorNormalizer(apply_gray_world=False, apply_clahe=False)
+
         self._init_model()
 
     def _init_model(self) -> None:
