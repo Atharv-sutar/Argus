@@ -181,6 +181,17 @@ class OpenCVCamera(BaseCamera):
                 self._has_new_frame = True
                 self._frame_seq += 1
 
+            # Throttle if reading from a file so we don't consume it at max speed
+            if isinstance(self.source, str) and not self.source.startswith(("rtsp://", "http://", "https://")):
+                fps = self.fps or 30.0
+                if self._cap is not None and not self.fps:
+                    try:
+                        fps = self._cap.get(cv2.CAP_PROP_FPS) or 30.0
+                    except Exception:
+                        pass
+                sleep_time = 1.0 / float(fps)
+                time.sleep(sleep_time)
+
     def _reopen_stream(self) -> None:
         """Attempts to reopen the VideoCapture device on failure."""
         if cv2 is None or not self._running or self._is_closed:

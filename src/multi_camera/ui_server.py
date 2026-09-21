@@ -1097,7 +1097,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                         
                     new_graph = CameraGraph.from_dict(graph_dict)
                     new_graph.save(self.graph_file)
-                    self.runtime_pipeline.update_topology(new_graph)
+                    self.runtime_pipeline.update_graph(new_graph)
                     
                     logger.info(f"[SERVER] Switched '{cam_id}' source to {mode} ({source_val})")
                     self._send_json({"success": True, "mode": mode, "source": source_val})
