@@ -684,6 +684,9 @@ class MultiCameraPipeline:
         if getattr(self, "playback_controller", None):
             self.playback_controller.is_playing = True
             
+        with self._frame_lock:
+            self._latest_jpegs.clear()
+            
         logger.info("[MULTI-CAM] Target cleared and gallery purged. Playback resumed if paused.")
 
     def undo_last_action(self) -> Optional[dict]:
@@ -1121,7 +1124,8 @@ class MultiCameraPipeline:
                 current_track = track
                 break
 
-        should_reid = (self._frame_count % self.reid_interval == 0) or (target.state == TargetState.LOST)
+        # Throttle ReID even when LOST to prevent total pipeline stall (e.g. 100% GPU usage on every frame)
+        should_reid = (self._frame_count % self.reid_interval == 0)
         match_thresh = self.config.reid.match_threshold
         switch_margin = getattr(self.config.reid, "lock_switch_margin", 0.08)
         auto_thresh = self.config.reid.auto_add_threshold

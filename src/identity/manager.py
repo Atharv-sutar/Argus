@@ -200,6 +200,26 @@ class IdentityManager:
             thumbnails.append(entry)
         return thumbnails
 
+    def _shift_entry_crops(self, identity_id: str, prefix: str, removed_idx: int, old_len: int) -> None:
+        """Shifts crop indices down by 1 after an element is removed to maintain index alignment."""
+        for i in range(removed_idx + 1, old_len):
+            old_key = f"{identity_id}_{prefix}_{i}"
+            new_key = f"{identity_id}_{prefix}_{i-1}"
+            if old_key in self._entry_crops:
+                self._entry_crops[new_key] = self._entry_crops.pop(old_key)
+            else:
+                self._entry_crops.pop(new_key, None)
+
+    def _shift_entry_crops_up(self, identity_id: str, prefix: str, inserted_idx: int, old_len: int) -> None:
+        """Shifts crop indices up by 1 before an element is inserted to maintain index alignment."""
+        for i in range(old_len - 1, inserted_idx - 1, -1):
+            old_key = f"{identity_id}_{prefix}_{i}"
+            new_key = f"{identity_id}_{prefix}_{i+1}"
+            if old_key in self._entry_crops:
+                self._entry_crops[new_key] = self._entry_crops.pop(old_key)
+            else:
+                self._entry_crops.pop(new_key, None)
+
     def remove_entry(self, entry_id: str) -> bool:
         """
         Shim for TargetGallery.remove_entry.
@@ -219,6 +239,7 @@ class IdentityManager:
                     up = ident.trusted_upper_gallery.pop(idx) if 0 <= idx < len(ident.trusted_upper_gallery) else None
                     lo = ident.trusted_lower_gallery.pop(idx) if 0 <= idx < len(ident.trusted_lower_gallery) else None
                     crop = self._entry_crops.pop(f"{ident.identity_id}_{entry_id}", None)
+                    self._shift_entry_crops(ident.identity_id, "trusted", idx, old_len)
                     removed_data = {"emb": emb, "up": up, "lo": lo, "crop": crop, "idx": idx, "type": "trusted"}
                     removed = True
             except (ValueError, IndexError):
@@ -226,9 +247,11 @@ class IdentityManager:
         elif entry_id.startswith("provisional_"):
             try:
                 idx = int(entry_id.split("_", 1)[1])
-                if 0 <= idx < len(ident.provisional_gallery):
+                old_len = len(ident.provisional_gallery)
+                if 0 <= idx < old_len:
                     emb = ident.provisional_gallery.pop(idx)
                     crop = self._entry_crops.pop(f"{ident.identity_id}_{entry_id}", None)
+                    self._shift_entry_crops(ident.identity_id, "provisional", idx, old_len)
                     removed_data = {"emb": emb, "crop": crop, "idx": idx, "type": "provisional"}
                     removed = True
             except (ValueError, IndexError):
@@ -270,13 +293,17 @@ class IdentityManager:
         idx = data["idx"]
         crop = data.get("crop")
         if data["type"] == "trusted":
+            old_len = len(ident.trusted_gallery)
+            self._shift_entry_crops_up(ident.identity_id, "trusted", idx, old_len)
             ident.trusted_gallery.insert(idx, data["emb"])
             if data["up"]: ident.trusted_upper_gallery.insert(idx, data["up"])
             if data["lo"]: ident.trusted_lower_gallery.insert(idx, data["lo"])
-            if crop is not None: self._entry_crops[f"{ident.identity_id}_{entry_id}"] = crop
+            if crop is not None: self._entry_crops[f"{ident.identity_id}_trusted_{idx}"] = crop
         else:
+            old_len = len(ident.provisional_gallery)
+            self._shift_entry_crops_up(ident.identity_id, "provisional", idx, old_len)
             ident.provisional_gallery.insert(idx, data["emb"])
-            if crop is not None: self._entry_crops[f"{ident.identity_id}_{entry_id}"] = crop
+            if crop is not None: self._entry_crops[f"{ident.identity_id}_provisional_{idx}"] = crop
         
         self.vector_store.remove_identity("target_0")
         for emb in ident.trusted_gallery: self.vector_store.add(emb, "target_0")
@@ -428,7 +455,7 @@ class IdentityManager:
                 
         # Only add if it passes
         idx = len(ident.provisional_gallery)
-        ident.provisional_gallery.append((embedding, track_id))
+        ident.provisional_gallery.append(embedding)
         self._last_auto_add_ts = timestamp_ms if timestamp_ms > 0 else time.time() * 1000.0
         if crop is not None and crop.size > 0:
             self._entry_crops[f"{ident.identity_id}_provisional_{idx}"] = self._encode_crop_thumbnail(crop)
@@ -436,6 +463,7 @@ class IdentityManager:
         # Enforce max provisional capacity
         while len(ident.provisional_gallery) > self.max_gallery_size:
             ident.provisional_gallery.pop(0)
+            self._shift_entry_crops(ident.identity_id, "provisional", 0, self.max_gallery_size + 1)
 
         self.save_target_gallery()
         return True
@@ -530,9 +558,11 @@ class IdentityManager:
             
             # Enforce max reference samples
             if len(ident.trusted_gallery) >= self.max_reference_samples:
+                old_len = len(ident.trusted_gallery)
                 ident.trusted_gallery.pop(0)
                 if ident.trusted_upper_gallery: ident.trusted_upper_gallery.pop(0)
                 if ident.trusted_lower_gallery: ident.trusted_lower_gallery.pop(0)
+                self._shift_entry_crops(identity_id, "trusted", 0, old_len)
 
             idx = len(ident.trusted_gallery)
             ident.trusted_gallery.append(fused)
@@ -581,7 +611,9 @@ class IdentityManager:
             self.vector_store.add(emb, identity_id)
         else:
             if ident.provisional_gallery:
+                old_len = len(ident.provisional_gallery)
                 ident.provisional_gallery.pop(0)
+                self._shift_entry_crops(identity_id, "provisional", 0, old_len)
             idx = len(ident.provisional_gallery)
             ident.provisional_gallery.append(emb)
             if crop is not None and crop.size > 0:
@@ -615,11 +647,13 @@ class IdentityManager:
 
         # If trusted gallery is full, remove oldest to make room
         while len(ident.trusted_gallery) >= self.max_reference_samples:
+            old_len = len(ident.trusted_gallery)
             ident.trusted_gallery.pop(0)
             if ident.trusted_upper_gallery:
                 ident.trusted_upper_gallery.pop(0)
             if ident.trusted_lower_gallery:
                 ident.trusted_lower_gallery.pop(0)
+            self._shift_entry_crops(identity_id, "trusted", 0, old_len)
 
         if not force:
             # Diversity check against existing trusted samples
@@ -800,7 +834,9 @@ class IdentityManager:
         if len(ident.provisional_gallery) < self.max_gallery_size:
             ident.provisional_gallery.append(fused_emb)
         else:
+            old_len = len(ident.provisional_gallery)
             ident.provisional_gallery.pop(0)
+            self._shift_entry_crops(ident.identity_id, "provisional", 0, old_len)
             ident.provisional_gallery.append(fused_emb)
 
         # Re-sync vector store with prototype + references + provisional galleries
