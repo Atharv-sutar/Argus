@@ -253,10 +253,17 @@ class MultiCameraPipeline:
                 fps=self.config.camera.fps,
             )
         if node_cfg.source_type == SourceType.VIDEO_FILE or str(node_cfg.source).lower().endswith(('.mp4', '.avi', '.mkv')):
-            cam = VideoFileCamera(file_path=str(node_cfg.source))
             if self.playback_controller is not None:
+                cam = VideoFileCamera(file_path=str(node_cfg.source))
                 self.playback_controller.add_camera(node_cfg.camera_id, cam)
-            return cam
+                return cam
+            # Fall back to OpenCVCamera for live loops (which handles its own throttling and looping)
+            return OpenCVCamera(
+                source=str(node_cfg.source),
+                width=self.config.camera.width,
+                height=self.config.camera.height,
+                fps=self.config.camera.fps,
+            )
         return OpenCVCamera(
             source=node_cfg.source,
             width=self.config.camera.width,
