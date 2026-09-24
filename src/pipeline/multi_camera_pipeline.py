@@ -153,6 +153,7 @@ class MultiCameraPipeline:
         self.reid_interval: int = config.reid.extract_interval_frames
         self._frame_lock: threading.Lock = threading.Lock()
         self._latest_jpegs: Dict[str, bytes] = {}
+        self._frame_seqs: Dict[str, int] = {}
         self._last_candidate_scores: Dict[int, float] = {}
         self._switch_consensus: Dict[int, int] = {}
         self._current_track_misses: int = 0
@@ -1052,7 +1053,15 @@ class MultiCameraPipeline:
             
             jpeg_buf = None
             try:
-                ret, buf = cv2.imencode(".jpg", ann_frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                # Resize for UI streaming to save CPU and network bandwidth (matrix view is small anyway)
+                h, w = ann_frame.shape[:2]
+                if w > 800:
+                    scale = 800.0 / w
+                    stream_frame = cv2.resize(ann_frame, (int(w * scale), int(h * scale)))
+                else:
+                    stream_frame = ann_frame
+
+                ret, buf = cv2.imencode(".jpg", stream_frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
                 if ret:
                     jpeg_buf = buf.tobytes()
             except Exception:
@@ -1083,6 +1092,7 @@ class MultiCameraPipeline:
                 if jpeg_buf:
                     with self._frame_lock:
                         self._latest_jpegs[cid] = jpeg_buf
+                        self._frame_seqs[cid] = self._frame_seqs.get(cid, 0) + 1
             except Exception as e:
                 logger.error(f"[MULTI-CAM] Annotation/Encoding error: {e}")
 
@@ -1654,6 +1664,10 @@ class MultiCameraPipeline:
             logger.info(f"[MULTI-CAM] Active camera manually switched to '{camera_id}'")
             return True
         return False
+
+    def get_camera_frame_seq(self, camera_id: str) -> Optional[int]:
+        with self._frame_lock:
+            return self._frame_seqs.get(camera_id)
 
     def get_camera_frame_jpeg(self, camera_id: str, quality: int = 75) -> Optional[bytes]:
         """Returns the latest frame-locked JPEG bytes for a camera feed under thread-safe lock."""

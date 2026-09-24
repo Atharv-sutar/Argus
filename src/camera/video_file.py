@@ -72,6 +72,18 @@ class VideoFileCamera(BaseCamera):
             if self._cap is None:
                 return False, None, 0.0
             
+            # Simple throttle to prevent processing video at max CPU speed
+            import time
+            now = time.time()
+            if not hasattr(self, '_last_read_time'):
+                self._last_read_time = now
+            else:
+                elapsed = now - self._last_read_time
+                target_interval = 1.0 / (self.fps or 30.0)
+                if elapsed < target_interval:
+                    time.sleep(target_interval - elapsed)
+            self._last_read_time = time.time()
+            
             try:
                 pos_msec = self._cap.get(cv2.CAP_PROP_POS_MSEC)
             except Exception:
@@ -102,6 +114,25 @@ class VideoFileCamera(BaseCamera):
             except Exception as e:
                 logger.debug(f"Seek failed for {self.file_path}: {e}")
                 return False
+
+    def catch_up(self, target_ms: float) -> None:
+        """Fast-forwards sequentially until the camera reaches the target timestamp, safely under lock."""
+        if not self.is_opened():
+            return
+        with self._lock:
+            if self._cap is None or self.fps <= 0:
+                return
+            try:
+                pos_msec = self._cap.get(cv2.CAP_PROP_POS_MSEC)
+                frame_duration = 1000.0 / self.fps
+                while target_ms - pos_msec > frame_duration * 1.5:
+                    self._cap.grab()
+                    new_pos = self._cap.get(cv2.CAP_PROP_POS_MSEC)
+                    if new_pos == pos_msec or new_pos == 0.0:
+                        break
+                    pos_msec = new_pos
+            except Exception:
+                pass
 
     def read_at(self, timestamp_ms: float) -> Tuple[bool, Optional[np.ndarray], float]:
         """

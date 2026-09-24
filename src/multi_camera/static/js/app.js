@@ -296,8 +296,19 @@ class SurveillanceApp {
         this.showToast(`Switching source to ${mode}...`, 'info');
         const res = await API.switchSource(camId, mode);
         if (res.success) {
-          this.showToast(`Source successfully switched to ${mode}.`, 'success');
-          setTimeout(() => window.location.reload(), 1000); // Reload to re-initialize UI state
+          this.showToast(`Source successfully switched to ${mode}. Restarting feeds...`, 'success');
+          setTimeout(() => {
+            document.querySelectorAll('.camera-feed-img').forEach(img => {
+              img.onerror = null;
+              img.src = '';
+            });
+            this.loadLiveMatrix().then(() => {
+              document.querySelectorAll('.camera-feed-img').forEach(img => {
+                const id = img.id.replace('img-', '');
+                if(id) img.src = `${API.getCameraStreamUrl(id)}?t=${Date.now()}`;
+              });
+            });
+          }, 300);
         }
       } catch (err) {
         this.showToast(`Failed to switch source: ${err.message}`, 'error');

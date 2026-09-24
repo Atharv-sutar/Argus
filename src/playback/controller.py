@@ -155,6 +155,11 @@ class PlaybackController:
             if self.mode == "playback":
                 delta_ms = delta_s * 1000.0 * self.playback_speed
                 self.current_time_ms += delta_ms
+                
+                # Catch-up logic: if a camera is lagging behind the global clock, skip frames.
+                for cam in self.cameras.values():
+                    if hasattr(cam, 'catch_up'):
+                        cam.catch_up(self.current_time_ms)
 
             if self.current_time_ms >= self.max_duration_ms:
                 self.current_time_ms = self.max_duration_ms

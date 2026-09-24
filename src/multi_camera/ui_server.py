@@ -300,6 +300,13 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                             frame_bytes = None
                             if self.runtime_pipeline is not None:
                                 frame_seq = getattr(self.runtime_pipeline, "get_camera_frame_seq", lambda c: None)(cam_id)
+                            
+                            # Skip encoding and streaming if the frame hasn't changed
+                            if frame_seq is not None and last_frame_id == frame_seq:
+                                time.sleep(0.01)
+                                continue
+
+                            if self.runtime_pipeline is not None:
                                 frame_bytes = self.runtime_pipeline.get_camera_frame_jpeg(cam_id, quality=75)
 
                             if frame_bytes is None:
@@ -331,17 +338,8 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                                 self.wfile.write(header + frame_bytes + b"\r\n")
                                 self.wfile.flush()
                             
-                            sleep_time = 0.033
-                            if self.runtime_pipeline is not None:
-                                is_active = (cam_id == self.runtime_pipeline.active_camera_id)
-                                status = self.runtime_pipeline.get_camera_status(cam_id)
-                                if is_active:
-                                    sleep_time = 0.033
-                                elif status == CameraStatus.SEARCHING:
-                                    sleep_time = 0.10
-                                else:
-                                    sleep_time = 0.50
-                            time.sleep(sleep_time)
+                            # Minimal sleep to avoid CPU spinning if frame_seq isn't implemented
+                            time.sleep(0.005)
 
                     except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError, OSError):
                         pass
