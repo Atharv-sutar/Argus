@@ -577,6 +577,14 @@ class MultiCameraPipeline:
                 "event": "TARGET_SELECTED",
                 "track_id": track_id,
             })
+            if self.route_recorder and worker._last_track_result:
+                b = (0,0,0,0)
+                for tr in worker._last_track_result.tracks:
+                    if tr.track_id == track_id:
+                        bx = tr.box
+                        b = (int(bx.x1), int(bx.y1), int(bx.width), int(bx.height))
+                        break
+                self.route_recorder.log_event(camera_id, track_id, worker._last_track_result.timestamp_ms, "enter", b, 1.0, False)
             logger.info(
                 f"[MULTI-CAM] Target selected by ID on camera '{camera_id}' | Tracker={track_id} | Gallery seeded."
             )
@@ -1134,6 +1142,9 @@ class MultiCameraPipeline:
             self._current_track_misses = 0
             return
 
+        # Capture state to detect transitions
+        prev_target_state = target.state
+
         # 1. Identify currently locked track
         current_track: Optional[Track] = None
         for track in track_res.tracks:
@@ -1480,6 +1491,9 @@ class MultiCameraPipeline:
                             timestamp_ms=timestamp_ms,
                             decision=evidence_dec.verified_token,
                         )
+                        if self.route_recorder and self._active_camera_id:
+                            b = (int(confirmed_track.box.x1), int(confirmed_track.box.y1), int(confirmed_track.box.width), int(confirmed_track.box.height))
+                            self.route_recorder.log_event(self._active_camera_id, confirmed_track.track_id, timestamp_ms, "enter", b, evidence_dec.best_score, False)
                         if confirmed_crop is not None and confirmed_emb is not None and confirmed_sim >= auto_thresh:
                             self.identity.add_auto(
                                 crop=confirmed_crop,
@@ -1492,6 +1506,11 @@ class MultiCameraPipeline:
                             )
                 elif evidence_dec.diagnostic_log:
                     logger.debug(evidence_dec.diagnostic_log)
+
+        new_target_state = target.state
+        if prev_target_state in (TargetState.TRACKING, TargetState.LOCKED) and new_target_state == TargetState.LOST:
+            if self.route_recorder and self._active_camera_id:
+                self.route_recorder.log_event(self._active_camera_id, target.track_id, timestamp_ms, "exit", (0,0,0,0), 1.0, False)
 
     def _match_candidates_against_gallery(
         self,
@@ -1599,6 +1618,15 @@ class MultiCameraPipeline:
             "event": "HANDOFF",
             "track_id": recovered_track.track_id,
         })
+        
+        if self.route_recorder:
+            b = (int(recovered_track.box.x1), int(recovered_track.box.y1), int(recovered_track.box.width), int(recovered_track.box.height))
+            # First log exit from old camera
+            if old_camera_id:
+                # Approximate timestamp since we don't have the exact old frame's ts here
+                self.route_recorder.log_event(old_camera_id, recovered_track.track_id, time.time() * 1000.0, "exit", (0,0,0,0), 1.0, False)
+            # Log handoff to new camera
+            self.route_recorder.log_event(new_camera_id, recovered_track.track_id, time.time() * 1000.0, "handoff", b, 1.0, False)
 
         self.search_manager.reset()
         self._deactivate_search_cameras()

@@ -69,3 +69,21 @@ class RouteRecorder:
         self._current_camera = ""
         self._current_track = -1
         logger.info("[ROUTE] Cleared route history.")
+        
+    def save_json(self, path: str) -> None:
+        """Saves the route log to a JSON file."""
+        import json
+        out = []
+        for e in self.events:
+            out.append({
+                "camera_id": e.camera_id,
+                "track_id": e.track_id,
+                "timestamp_ms": e.timestamp_ms,
+                "event_type": e.event_type,
+                "bbox": e.bbox,
+                "confidence": e.confidence,
+                "was_human_corrected": e.was_human_corrected
+            })
+        with open(path, "w") as f:
+            json.dump(out, f, indent=2)
+        logger.info(f"[ROUTE] Saved {len(out)} events to {path}")

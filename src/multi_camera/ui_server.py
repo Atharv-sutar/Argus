@@ -884,10 +884,36 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     
                     def run_export():
                         try:
+                            case_dir = Path(cm.cases_dir) / case_id
+                            
+                            # 1. Save route.json
+                            if hasattr(self, 'runtime_pipeline') and self.runtime_pipeline and self.runtime_pipeline.route_recorder:
+                                self.runtime_pipeline.route_recorder.save_json(str(case_dir / "route.json"))
+                                
+                                # 2. Stitch journey video
+                                from src.playback.journey_stitcher import JourneyStitcher
+                                video_sources = {}
+                                for cid, node in self.runtime_pipeline._nodes.items():
+                                    if node.config.source_type == "video":
+                                        video_sources[cid] = node.config.source
+                                
+                                if video_sources:
+                                    events = self.runtime_pipeline.route_recorder.get_events()
+                                    out_path = str(case_dir / f"journey_{case_id}.mp4")
+                                    stitcher = JourneyStitcher(video_sources, output_path=out_path)
+                                    stitcher.stitch_journey(events)
+                                
+                                # 3. Generate Report
+                                from src.playback.report import RouteReporter
+                                reporter = RouteReporter(output_path=str(case_dir / "report.txt"))
+                                reporter.generate_report(events)
+                            
+                            # 4. Export
                             exporter = EvidenceExporter(cm.cases_dir, "exports")
                             zip_path = exporter.export(case)
                             self.export_status[case_id] = {"status": "completed", "zip_path": zip_path}
                         except Exception as e:
+                            logger.error(f"Export failed: {e}")
                             self.export_status[case_id] = {"status": "error", "error": str(e)}
                             
                     threading.Thread(target=run_export, daemon=True).start()
