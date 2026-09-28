@@ -300,9 +300,10 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                             frame_bytes = None
                             if self.runtime_pipeline is not None:
                                 frame_seq = getattr(self.runtime_pipeline, "get_camera_frame_seq", lambda c: None)(cam_id)
+                            is_stale = (time.time() - last_changed_time > 2.0)
                             
-                            # Skip encoding and streaming if the frame hasn't changed
-                            if frame_seq is not None and last_frame_id == frame_seq:
+                            # Skip encoding and streaming if the frame hasn't changed and is not stale
+                            if frame_seq is not None and last_frame_id == frame_seq and not is_stale:
                                 time.sleep(0.01)
                                 continue
 

@@ -975,9 +975,7 @@ class MultiCameraPipeline:
                     logger.warning("[MULTI-CAM] Multi-camera search timed out without recovery. Target LOST_PERMANENTLY.")
                     self.target_manager.target.state = TargetState.LOST_PERMANENTLY
                     self._deactivate_search_cameras()
-                    if self.playback_controller:
-                        self.playback_controller.pause()
-
+                    
         # 5. Process Search Cameras Main-Thread Logic
         candidate_recovered_cam = None
         candidate_recovered_track = None
@@ -1035,10 +1033,6 @@ class MultiCameraPipeline:
                             self._pending_handoff_crop = rec_crop
                             self._pending_handoff_emb = rec_emb
                             self._pending_handoff_sim = rec_sim
-                            
-                            # Pause playback if recorded mode
-                            if self.playback_controller:
-                                self.playback_controller.pause()
                             break
                         else:
                             logger.debug(f"[MULTI-CAM RECOVERY] Candidate sighting on '{cid}' (Track={rec_track.track_id}, sim={rec_sim:.3f}), WAITING for more frames...")
