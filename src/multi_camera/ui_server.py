@@ -323,8 +323,8 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                                 if current_id != last_frame_id:
                                     last_frame_id = current_id
                                     last_changed_time = time.time()
-                                elif time.time() - last_changed_time > 2.0:
-                                    # Render STALE overlay
+                                elif frame_seq is not None and (time.time() - last_changed_time > 2.0):
+                                    # Render STALE overlay only if we actually had a stream
                                     if cv2 is not None and np is not None:
                                         blank = np.zeros((360, 640, 3), dtype=np.uint8)
                                         cv2.putText(blank, f"STALE - RECONNECTING [{cam_id}]", (120, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA)

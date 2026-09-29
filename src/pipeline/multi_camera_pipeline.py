@@ -404,13 +404,6 @@ class MultiCameraPipeline:
     def get_search_progress(self) -> SearchProgress:
         return self.search_manager.get_progress()
 
-    def get_camera_frame_seq(self, camera_id: str) -> int:
-        """Returns the monotonic frame sequence number for the specified camera."""
-        worker = self._workers.get(camera_id)
-        if worker and hasattr(worker.camera, "frame_seq"):
-            return worker.camera.frame_seq
-        return 0
-
     def select_target_on_camera(
         self, camera_id: str, x: float, y: float
     ) -> Optional[int]:
@@ -848,7 +841,11 @@ class MultiCameraPipeline:
             except Exception as e:
                 logger.error(f"[MULTI-CAM] Tracking error on {cid}: {e}")
                 _, role, _, _ = acquired_results[cid]
-                phase1_results[cid] = (cid, role, None, 0.0, None)
+
+        # Fix: Ensure standby cameras get their unannotated frames encoded in Phase 2
+        for cid, (_, role, frame, ts_ms) in acquired_results.items():
+            if role == "standby" and frame is not None:
+                phase1_results[cid] = (cid, role, frame, ts_ms, None)
 
         # Add standby cameras to phase1_results to match old format
         for cid, (_, role, frame, ts_ms) in acquired_results.items():
@@ -1769,6 +1766,9 @@ class MultiCameraPipeline:
         try:
             while self._is_running:
                 results = self.step()
+                # Yield to background threads (capture loops, UI handlers)
+                # to prevent thread starvation under heavy inference loads
+                time.sleep(0.005)
                 yield results
         finally:
             self.stop()
