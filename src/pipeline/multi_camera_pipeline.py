@@ -887,7 +887,6 @@ class MultiCameraPipeline:
                         for track in track_res.tracks:
                             c_crop = worker.extract_crop(frame, track.box)
                             if c_crop is not None and c_crop.size > 0 and c_crop.shape[0] >= 12 and c_crop.shape[1] >= 12:
-                                import cv2
                                 blur_score = 100.0
                                 try:
                                     # Simple Tracklet Quality Gate (Blur Filter)
