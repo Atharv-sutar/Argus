@@ -323,9 +323,11 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                                 if current_id != last_frame_id:
                                     last_frame_id = current_id
                                     last_changed_time = time.time()
-                                elif frame_seq is not None and (time.time() - last_changed_time > 2.0):
+                                elif frame_seq is not None and (time.time() - last_changed_time > 5.0):
                                     # Render STALE overlay only if we actually had a stream
-                                    if cv2 is not None and np is not None:
+                                    # AND pipeline is not running or genuinely stalling for > 5s
+                                    pipeline_running = getattr(self.runtime_pipeline, "is_running", True) if self.runtime_pipeline else True
+                                    if cv2 is not None and np is not None and not pipeline_running:
                                         blank = np.zeros((360, 640, 3), dtype=np.uint8)
                                         cv2.putText(blank, f"STALE - RECONNECTING [{cam_id}]", (120, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
                                         _, buf = cv2.imencode(".jpg", blank, [cv2.IMWRITE_JPEG_QUALITY, 50])

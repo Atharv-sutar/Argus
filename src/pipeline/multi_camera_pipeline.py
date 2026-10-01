@@ -1369,23 +1369,8 @@ class MultiCameraPipeline:
                     self.target_manager.mark_uncertain(timestamp_ms)
             else:
                 # Current track dropped out of view
-                if best_other_track is not None and best_other_sim >= self._reacquisition_threshold:
-                    other_tid = best_other_track.track_id
-                    self._switch_consensus[other_tid] = self._switch_consensus.get(other_tid, 0) + 1
-                    if self._switch_consensus[other_tid] >= 3:
-                        logger.info(
-                            f"[TARGET REASSOCIATED] Track switched to #{best_other_track.track_id} "
-                            f"(sim={best_other_sim:.3f}, reacq_thresh={self._reacquisition_threshold:.3f})"
-                        )
-                        self._switch_consensus.clear()
-                        self._current_track_misses = 0
-                        self.target_manager.reassociate_target(
-                            track=best_other_track,
-                            frame_id=track_res.frame_id,
-                            timestamp_ms=timestamp_ms,
-                        )
-                        self.target_manager.mark_confirmed(best_other_track, track_res.frame_id, timestamp_ms)
-                        return
+                # Reacquisition is handled exclusively by Scenario 2 (evidence-gated)
+                # to prevent false latching onto bystanders.
                 self.target_manager.mark_lost(timestamp_ms)
                 self.target_manager.mark_searching(timestamp_ms)
 
