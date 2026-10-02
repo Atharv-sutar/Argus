@@ -1331,3 +1331,85 @@ body.theme-dark {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+/* ==========================================================================
+   FORENSIC RECORDING INDICATOR & EXPORT BUTTON
+   ========================================================================== */
+
+.forensic-rec-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 6px;
+  animation: forensic-rec-pulse-border 1.5s ease-in-out infinite;
+}
+
+.forensic-rec-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ef4444;
+  animation: forensic-rec-pulse 1s ease-in-out infinite;
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.8);
+}
+
+.forensic-rec-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: #fca5a5;
+  letter-spacing: 1px;
+}
+
+.forensic-rec-time {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  color: #fca5a5;
+}
+
+.forensic-rec-frames {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.btn-forensic {
+  background: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  transition: all 0.2s ease;
+}
+
+.btn-forensic:hover {
+  background: rgba(239, 68, 68, 0.3);
+  color: #fff;
+  border-color: #ef4444;
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.4);
+}
+
+.btn-forensic:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-forensic.exporting {
+  background: rgba(245, 158, 11, 0.2);
+  color: var(--amber-bright);
+  border-color: rgba(245, 158, 11, 0.4);
+  animation: forensic-rec-pulse-border 1s ease-in-out infinite;
+  cursor: wait;
+}
+
+@keyframes forensic-rec-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+}
+
+@keyframes forensic-rec-pulse-border {
+  0%, 100% { border-color: rgba(239, 68, 68, 0.4); }
+  50% { border-color: rgba(239, 68, 68, 0.15); }
+}

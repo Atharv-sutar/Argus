@@ -200,6 +200,26 @@ const API = {
     }
   },
 
+  async exportForensicClip() {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/forensic/export`, { method: 'POST' });
+      return await res.json();
+    } catch (err) {
+      console.error('[API] exportForensicClip error:', err);
+      throw err;
+    }
+  },
+
+  async checkForensicExportStatus() {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/forensic/export/status`, { method: 'POST' });
+      return await res.json();
+    } catch (err) {
+      console.error('[API] checkForensicExportStatus error:', err);
+      throw err;
+    }
+  },
+
   async deleteGalleryEntry(entryId) {
     try {
       const res = await fetch(`${this.baseUrl}/api/target/gallery/delete`, {

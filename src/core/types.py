@@ -542,3 +542,6 @@ class PipelineTelemetry:
     candidate_scores: Dict[str, float]
     transit_history: List[Any]
     uptime_s: float
+    forensic_recording: bool = False
+    forensic_duration_s: float = 0.0
+    forensic_frames: int = 0

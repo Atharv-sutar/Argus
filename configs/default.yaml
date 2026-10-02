@@ -67,3 +67,8 @@ multi_camera:
 
   ui_port: 8765
 
+forensic:
+  target_fps: 15.0
+  resolution: [1280, 720]
+  max_memory_frames: 9000
+  export_dir: "exports"

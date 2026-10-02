@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
@@ -38,6 +39,7 @@ from src.target.manager import TargetManager
 from src.tracking.byte_tracker import ByteTracker
 from src.visualization.annotator import FrameAnnotator
 from src.core.undo_stack import UndoStack
+from src.forensic.clip_recorder import ForensicClipRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +181,14 @@ class MultiCameraPipeline:
             reacquisition_min_frames=3,
             min_margin_threshold=config.reid.min_margin,
             min_consistency_ratio=0.70,
+        )
+
+        # 9. Forensic clip recorder
+        fcfg = self.config.forensic
+        self.forensic_recorder = ForensicClipRecorder(
+            target_fps=fcfg.target_fps,
+            resolution=fcfg.resolution,
+            max_memory_frames=fcfg.max_memory_frames
         )
 
         # Sync nodes from graph
@@ -394,7 +404,10 @@ class MultiCameraPipeline:
             gpu_memory_mb=round(gpu_mb, 1),
             candidate_scores={str(k): v for k, v in self.last_candidate_scores.items()},
             transit_history=self.transit_history,
-            uptime_s=round(now - self._pipeline_start_time, 1)
+            uptime_s=round(now - self._pipeline_start_time, 1),
+            forensic_recording=self.forensic_recorder.is_recording,
+            forensic_duration_s=round(self.forensic_recorder.duration_seconds, 1),
+            forensic_frames=self.forensic_recorder.frame_count,
         )
 
     def get_camera_status(self, camera_id: str) -> Optional[CameraStatus]:
@@ -465,6 +478,7 @@ class MultiCameraPipeline:
                 "event": "TARGET_SELECTED",
                 "track_id": selected_id,
             })
+            self.forensic_recorder.start_recording(selected_id, camera_id)
             logger.info(
                 f"[MULTI-CAM] Target selected on camera '{camera_id}' | Tracker={selected_id} | Gallery seeded."
             )
@@ -570,6 +584,7 @@ class MultiCameraPipeline:
                 "event": "TARGET_SELECTED",
                 "track_id": track_id,
             })
+            self.forensic_recorder.start_recording(track_id, camera_id)
             if self.route_recorder and worker._last_track_result:
                 b = (0,0,0,0)
                 for tr in worker._last_track_result.tracks:
@@ -695,7 +710,9 @@ class MultiCameraPipeline:
             
         with self._frame_lock:
             self._latest_jpegs.clear()
-            
+
+        self.forensic_recorder.discard()
+
         logger.info("[MULTI-CAM] Target cleared and gallery purged. Playback resumed if paused.")
 
     def undo_last_action(self) -> Optional[dict]:
@@ -1094,6 +1111,18 @@ class MultiCameraPipeline:
             except Exception as e:
                 logger.error(f"[MULTI-CAM] Annotation/Encoding error: {e}")
 
+        # 9. Feed forensic clip recorder with the active camera's annotated frame
+        if self.forensic_recorder.is_recording and active_cam_id:
+            active_result = results.get(active_cam_id)
+            if active_result and active_result[0] is not None:
+                target = self.target_manager.target
+                self.forensic_recorder.feed_frame(
+                    active_result[0],
+                    active_cam_id,
+                    time.time() * 1000.0,
+                    target.state.value if target else "UNKNOWN",
+                )
+
         return results
 
     def _is_occluded(self, track: Track, all_tracks: List[Track], iou_threshold: float = 0.25) -> bool:
@@ -1486,6 +1515,9 @@ class MultiCameraPipeline:
         if prev_target_state in (TargetState.TRACKING, TargetState.LOCKED) and new_target_state == TargetState.LOST:
             if self.route_recorder and self._active_camera_id:
                 self.route_recorder.log_event(self._active_camera_id, target.track_id, timestamp_ms, "exit", (0,0,0,0), 1.0, False)
+            self.forensic_recorder.on_target_state_changed(prev_target_state.value, new_target_state.value, self._active_camera_id or "")
+        elif prev_target_state in (TargetState.LOST, TargetState.SEARCHING, TargetState.RECOVERING) and new_target_state in (TargetState.TRACKING, TargetState.LOCKED):
+            self.forensic_recorder.on_target_state_changed(prev_target_state.value, "TRACKING", self._active_camera_id or "")
 
     def _match_candidates_against_gallery(
         self,
@@ -1584,6 +1616,11 @@ class MultiCameraPipeline:
             
         if self.playback_controller:
             self.playback_controller.record_auto_accept()
+
+        # Notify forensic recorder of camera transit
+        self.forensic_recorder.on_target_state_changed(
+            "TRACKING", "TRANSIT", new_camera_id
+        )
 
         self._handoff_timestamp = time.time()
         self._transit_history.append({
@@ -1940,10 +1977,25 @@ class MultiCameraPipeline:
             return True
         return False
 
+    def export_forensic_clip(self, output_dir: Optional[str] = None) -> Optional[str]:
+        """Exports the current forensic recording as an MP4. Returns the file path."""
+        if not self.forensic_recorder.is_recording:
+            return None
+        out_dir = output_dir or self.config.forensic.export_dir
+        os.makedirs(out_dir, exist_ok=True)
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        output_path = os.path.join(out_dir, f"forensic_clip_{timestamp}.mp4")
+        return self.forensic_recorder.stop_and_export(output_path)
+
     def stop(self) -> None:
         """Stop all camera workers and release resources."""
         self._is_running = False
         self._is_paused = False
+
+        # Discard any in-progress forensic recording
+        if self.forensic_recorder.is_recording:
+            self.forensic_recorder.discard()
+
         with self._pipeline_lock:
             for worker in list(self._workers.values()):
                 try:

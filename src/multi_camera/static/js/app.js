@@ -67,6 +67,12 @@ class SurveillanceApp {
     this.exportDownloadLink = document.getElementById('export-download-link');
     this.exportPollTimer = null;
 
+    // Forensic Evidence UI
+    this.forensicIndicator = document.getElementById('forensic-indicator');
+    this.forensicDuration = document.getElementById('forensic-rec-duration');
+    this.forensicFrames = document.getElementById('forensic-rec-frames');
+    this.btnForensicExport = document.getElementById('btn-forensic-export');
+
     // Fast Scan UI
     this.btnFastScan = document.getElementById('btn-fast-scan');
     this.fastScanOverlay = document.getElementById('fast-scan-overlay');
@@ -381,6 +387,28 @@ class SurveillanceApp {
       btnRefresh.addEventListener('click', refreshCamerasFn);
     }
 
+    // Forensic Export
+    if (this.btnForensicExport) {
+      this.btnForensicExport.addEventListener('click', async () => {
+        try {
+          this.btnForensicExport.disabled = true;
+          this.btnForensicExport.classList.add('exporting');
+          this.btnForensicExport.innerHTML = '🔄 Exporting...';
+          this.showToast('Starting forensic clip export. This may take a moment...', 'info');
+          
+          const res = await API.exportForensicClip();
+          if (res.success) {
+            this.pollForensicExportStatus();
+          } else {
+            throw new Error(res.error || 'Failed to start export');
+          }
+        } catch (err) {
+          this.showToast(`Forensic export error: ${err.message}`, 'error');
+          this.resetForensicBtn();
+        }
+      });
+    }
+
 
 
     if (this.activeCaseDisplay) {
@@ -408,6 +436,47 @@ class SurveillanceApp {
             }
         });
     }
+
+    this.resetForensicBtn = () => {
+      if (this.btnForensicExport) {
+        this.btnForensicExport.disabled = false;
+        this.btnForensicExport.classList.remove('exporting');
+        this.btnForensicExport.innerHTML = '📹 Export Clip';
+      }
+    };
+
+    this.pollForensicExportStatus = async () => {
+      try {
+        const res = await API.checkForensicExportStatus();
+        if (res && res.status === 'completed') {
+          this.resetForensicBtn();
+          this.showToast('Forensic clip exported successfully!', 'success');
+          
+          // Show download link
+          if (res.path) {
+            const dlUrl = `/api/forensic/download?path=${encodeURIComponent(res.path)}`;
+            
+            // Create temporary link and click it to trigger download
+            const a = document.createElement('a');
+            a.href = dlUrl;
+            a.download = res.path.split('/').pop() || 'forensic_clip.mp4';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          }
+        } else if (res && res.status === 'error') {
+          this.resetForensicBtn();
+          this.showToast(`Export failed: ${res.error}`, 'error');
+        } else if (res && res.status === 'running') {
+          setTimeout(() => this.pollForensicExportStatus(), 1000);
+        } else {
+          this.resetForensicBtn();
+        }
+      } catch (err) {
+        this.resetForensicBtn();
+        this.showToast('Error checking export status', 'error');
+      }
+    };
 
     this.showCaseManager = async () => {
         this.caseOverlay.style.display = 'flex';
@@ -1286,6 +1355,21 @@ class SurveillanceApp {
           <span class="step-pill step-active">${t.camera_id || t}</span>
           ${idx < trail.length - 1 ? '<span class="step-arrow">&rarr;</span>' : ''}
         `).join('');
+      }
+
+      // Update Forensic Indicator
+      if (st.forensic_recording) {
+        this.forensicIndicator.style.display = 'inline-flex';
+        this.btnForensicExport.style.display = 'inline-flex';
+        
+        const dur = st.forensic_duration_s || 0;
+        const mins = Math.floor(dur / 60).toString().padStart(2, '0');
+        const secs = Math.floor(dur % 60).toString().padStart(2, '0');
+        this.forensicDuration.textContent = `${mins}:${secs}`;
+        this.forensicFrames.textContent = `${st.forensic_frames || 0}f`;
+      } else {
+        this.forensicIndicator.style.display = 'none';
+        this.btnForensicExport.style.display = 'none';
       }
 
       // Update Active/Searching tile indicators in the grid

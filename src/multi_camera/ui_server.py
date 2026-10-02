@@ -580,6 +580,40 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     self.send_error(HTTPStatus.SERVICE_UNAVAILABLE, "Could not capture preview from source")
                 return
 
+            elif path == "/api/forensic/status":
+                if self.runtime_pipeline is not None and hasattr(self.runtime_pipeline, 'forensic_recorder'):
+                    self._send_json(self.runtime_pipeline.forensic_recorder.status)
+                else:
+                    self._send_json({"recording": False, "duration_s": 0, "frames": 0, "camera_id": ""})
+                return
+
+            elif path == "/api/forensic/download":
+                file_path_str = query.get("path", [""])[0]
+                if not file_path_str:
+                    self.send_error(HTTPStatus.BAD_REQUEST, "Missing 'path' query parameter")
+                    return
+                download_path = Path(file_path_str)
+                if not download_path.is_file():
+                    self.send_error(HTTPStatus.NOT_FOUND, "Forensic clip file not found")
+                    return
+                try:
+                    file_size = download_path.stat().st_size
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header("Content-Type", "video/mp4")
+                    self.send_header("Content-Length", str(file_size))
+                    self.send_header("Content-Disposition", f'attachment; filename="{download_path.name}"')
+                    self.send_header("Cache-Control", "no-cache")
+                    self.end_headers()
+                    with open(download_path, "rb") as f:
+                        while True:
+                            chunk = f.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                except Exception as e:
+                    logger.error(f"[FORENSIC] Download error: {e}")
+                return
+
             # --- Static File Serving ---
             if path == "/" or path == "":
                 file_path = STATIC_DIR / "index.html"
@@ -678,6 +712,38 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": ok, "active_camera": self.runtime_pipeline.active_camera_id})
             else:
                 self._send_json({"success": False, "error": "Pipeline not active or invalid camera_id"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        elif path == "/api/forensic/export":
+            if self.runtime_pipeline is not None and hasattr(self.runtime_pipeline, 'forensic_recorder'):
+                if not self.runtime_pipeline.forensic_recorder.is_recording:
+                    self._send_json({"success": False, "error": "No forensic recording in progress"}, status=HTTPStatus.BAD_REQUEST)
+                    return
+                
+                export_status_key = "forensic_export"
+                self.export_status[export_status_key] = {"status": "running"}
+
+                def run_forensic_export():
+                    try:
+                        result_path = self.runtime_pipeline.export_forensic_clip()
+                        if result_path:
+                            self.export_status[export_status_key] = {"status": "completed", "path": result_path}
+                        else:
+                            self.export_status[export_status_key] = {"status": "error", "error": "Export returned no path"}
+                    except Exception as e:
+                        logger.error(f"[FORENSIC] Export failed: {e}")
+                        self.export_status[export_status_key] = {"status": "error", "error": str(e)}
+
+                threading.Thread(target=run_forensic_export, daemon=True).start()
+                self._send_json({"success": True, "status": "running"})
+            else:
+                self._send_json({"success": False, "error": "Pipeline not active"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        elif path == "/api/forensic/export/status":
+            export_status_key = "forensic_export"
+            status = self.export_status.get(export_status_key, {"status": "idle"})
+            self._send_json(status)
             return
 
         elif path == "/api/cameras/restart":

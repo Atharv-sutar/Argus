@@ -135,6 +135,14 @@ class MultiCameraConfig:
 
 
 @dataclass
+class ForensicConfig:
+    """Configuration for forensic clip recording."""
+    target_fps: float = 15.0
+    resolution: Tuple[int, int] = (1280, 720)
+    max_memory_frames: int = 9000
+    export_dir: str = "exports"
+
+@dataclass
 class AppConfig:
     camera: CameraConfig = field(default_factory=CameraConfig)
     inference: InferenceConfig = field(default_factory=InferenceConfig)
@@ -145,6 +153,7 @@ class AppConfig:
     multi_camera: MultiCameraConfig = field(default_factory=MultiCameraConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     playback: PlaybackConfig = field(default_factory=PlaybackConfig)
+    forensic: ForensicConfig = field(default_factory=ForensicConfig)
 
     @classmethod
     def from_yaml(cls, path: Union[str, Path]) -> AppConfig:
@@ -179,6 +188,14 @@ class AppConfig:
         storage_data = data.get("storage", {})
         storage_config = StorageConfig(**storage_data) if storage_data else StorageConfig()
 
+        forensic_data = data.get("forensic", {})
+        
+        # Handle tuple conversion for resolution
+        if "resolution" in forensic_data and isinstance(forensic_data["resolution"], list):
+            forensic_data["resolution"] = tuple(forensic_data["resolution"])
+            
+        forensic_config = ForensicConfig(**forensic_data) if forensic_data else ForensicConfig()
+
         return cls(
             camera=CameraConfig(**camera_data),
             inference=InferenceConfig(**inference_data),
@@ -189,6 +206,7 @@ class AppConfig:
             multi_camera=mc_config,
             storage=storage_config,
             playback=playback_config,
+            forensic=forensic_config,
         )
 
 
