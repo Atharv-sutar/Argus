@@ -85,8 +85,13 @@ class MultiCameraPipeline:
         elif identity_manager is not None and hasattr(identity_manager, "reid_extractor"):
             self.reid_extractor = identity_manager.reid_extractor
         else:
+            actual_model_name = config.reid.model_name
+            if actual_model_name == "auto":
+                actual_model_name = self.profile_hardware()
+                config.reid.model_name = actual_model_name
+            
             self.reid_extractor = PyTorchReIDExtractor(
-                model_name=config.reid.model_name,
+                model_name=actual_model_name,
                 device=config.inference.device,
             )
 
@@ -2021,3 +2026,97 @@ class MultiCameraPipeline:
                 
         logger.info("[MULTI-CAM] Pipeline stopped.")
 
+    def profile_hardware(self) -> str:
+        """Profiles the system hardware to determine the recommended ReID model."""
+        import torch
+        recommended = "osnet_x0_25"
+        try:
+            if torch.cuda.is_available():
+                props = torch.cuda.get_device_properties(0)
+                vram_gb = props.total_memory / (1024**3)
+                if vram_gb >= 6.0:
+                    recommended = "osnet_x1_0"
+        except Exception as e:
+            pass
+        return recommended
+
+    def set_reid_model(self, model_name: str, auto_rollback: bool = True) -> bool:
+        """Dynamically switches the ReID model at runtime."""
+        if model_name == "auto":
+            model_name = self.profile_hardware()
+
+        if model_name not in ["osnet_x0_25", "osnet_x1_0"]:
+            logger.warning(f"Unsupported ReID model: {model_name}")
+            return False
+
+        if self.config.reid.model_name == model_name:
+            return True
+
+        old_model = self.config.reid.model_name
+        
+        self.pause_processing()
+        try:
+            logger.info(f"Switching ReID model from {old_model} to {model_name}")
+            
+            # 1. Clear target & gallery (embeddings are incompatible between models)
+            self.clear_target()
+            
+            # 2. Re-initialize extractor
+            from src.reid.extractor import PyTorchReIDExtractor
+            new_extractor = PyTorchReIDExtractor(
+                model_name=model_name,
+                device=self.config.inference.device,
+            )
+            
+            # 3. Apply to pipeline
+            self.reid_extractor = new_extractor
+            self.config.reid.model_name = model_name
+            
+            # 4. Apply to IdentityManager
+            if self.target_manager and self.target_manager.identity_manager:
+                self.target_manager.identity_manager.reid_extractor = new_extractor
+            
+            # 5. Apply to all existing ByteTrackers
+            for worker in self._workers.values():
+                if hasattr(worker, "tracker") and worker.tracker:
+                    worker.tracker.reid_extractor = new_extractor
+                    
+            logger.info("Successfully switched ReID model.")
+            
+        except Exception as e:
+            logger.error(f"Failed to switch ReID model: {e}")
+            self.config.reid.model_name = old_model
+        finally:
+            self.resume_processing()
+
+        if auto_rollback:
+            self._start_rollback_monitor(old_model, model_name)
+            
+        return True
+
+    def _start_rollback_monitor(self, old_model: str, new_model: str) -> None:
+        """Starts a background thread to monitor FPS and rollback if performance degrades severely."""
+        def monitor_loop():
+            import time
+            time.sleep(2)  # Give pipeline time to stabilize after unpause
+            start_fps = self._current_fps
+            logger.info(f"[ROLLBACK MONITOR] Starting FPS after switch: {start_fps:.1f}")
+            
+            check_duration = 10
+            fps_samples = []
+            
+            for _ in range(check_duration):
+                time.sleep(1)
+                fps_samples.append(self._current_fps)
+                
+            avg_fps = sum(fps_samples) / len(fps_samples)
+            logger.info(f"[ROLLBACK MONITOR] Avg FPS over {check_duration}s: {avg_fps:.1f}")
+            
+            # Trigger rollback if FPS is abysmally low (<10) OR drops by more than 50%
+            if avg_fps < 10.0 or (start_fps > 10.0 and avg_fps < start_fps * 0.5):
+                logger.warning(f"[ROLLBACK MONITOR] Severe lag detected (Avg: {avg_fps:.1f} FPS). Rolling back ReID model to {old_model}...")
+                self.set_reid_model(old_model, auto_rollback=False)
+
+        import threading
+        t = threading.Thread(target=monitor_loop, daemon=True)
+        t.start()

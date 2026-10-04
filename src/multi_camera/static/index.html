@@ -48,10 +48,11 @@
       <div class="handoff-modal" style="background: var(--bg-panel); padding: 20px; border-radius: 8px; border: 1px solid var(--border-color); width: 400px; max-width: 90%;">
         <h3 style="margin-top: 0; color: var(--amber-glow);">Keyboard Shortcuts</h3>
         <ul style="list-style: none; padding: 0; margin-bottom: 20px;">
-            <li style="margin-bottom: 8px;"><strong>Ctrl + Z</strong> - Undo</li>
-            <li style="margin-bottom: 8px;"><strong>Ctrl + Shift + Z</strong> - Redo</li>
-            <li style="margin-bottom: 8px;"><strong>a</strong> - Add Angle</li>
+            <li style="margin-bottom: 8px;"><strong>n</strong> - Add Note / Annotation</li>
+            <li style="margin-bottom: 8px;"><strong>a</strong> - Add Angle (Capture)</li>
             <li style="margin-bottom: 8px;"><strong>c</strong> - Clear Target</li>
+            <li style="margin-bottom: 8px;"><strong>r</strong> - Restart / Refresh Cameras</li>
+            <li style="margin-bottom: 8px;"><strong>q</strong> - Shutdown / Quit</li>
             <li style="margin-bottom: 8px;"><strong>s</strong> - Open Settings</li>
             <li style="margin-bottom: 8px;"><strong>?</strong> - Toggle Shortcuts</li>
         </ul>
@@ -99,6 +100,17 @@
                     <!-- Dynamic rows -->
                 </tbody>
             </table>
+        </div>
+
+        <!-- Export UI Container -->
+        <div id="export-container" style="display: none; flex-direction: column; gap: 10px; margin-bottom: 15px; padding: 10px; background: var(--bg-dark); border-radius: 4px; border: 1px solid var(--border-color);">
+            <div style="display: flex; justify-content: space-between;">
+                <span id="export-status" style="font-size: 12px; color: var(--text-main);">Starting export...</span>
+            </div>
+            <div style="height: 4px; background: var(--bg-panel); border-radius: 2px; overflow: hidden;">
+                <div id="export-progress-bar" style="height: 100%; width: 0%; background: var(--cyan-bright); transition: width 0.3s;"></div>
+            </div>
+            <a id="export-download-link" href="#" style="display: none; font-size: 12px; color: var(--cyan-bright); text-decoration: none;">⬇️ Download Package</a>
         </div>
 
         <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 15px 0;">
@@ -231,6 +243,17 @@
         </div>
 
         <div style="width: 1px; height: 24px; background: var(--border-color); margin: 0 10px;"></div>
+
+        <button id="btn-advanced-settings" class="mode-btn" title="Advanced System Settings">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            <circle cx="12" cy="12" r="3"></circle>
+          </svg>
+          Settings
+        </button>
+
+
+        <div style="width: 1px; height: 24px; background: var(--border-color); margin: 0 10px;"></div>
         
         <button id="btn-source-live" class="btn btn-secondary btn-sm" title="Switch active camera to Live Webcam">
           🎥 Live
@@ -260,6 +283,9 @@
 
         <button id="btn-audit-global" class="btn btn-secondary btn-sm" title="View Audit Trail">
           📜 Audit
+        </button>
+        <button id="btn-fast-scan" class="btn btn-secondary btn-sm" title="Fast Scan Footage">
+          ⏩ Fast Scan
         </button>
         <button id="btn-settings-global" class="btn btn-secondary btn-sm" title="Advanced Settings (Shortcut: 's')">
           ⚙️
@@ -669,6 +695,7 @@
         <div><span style="color: var(--text-dim);">UPTIME:</span> <span id="status-uptime">0s</span></div>
         <div><span style="color: var(--text-dim);">FPS:</span> <span id="status-fps">0.0</span></div>
         <div><span style="color: var(--text-dim);">GPU MEM:</span> <span id="status-gpu">0.0 MB</span></div>
+        <div><span style="color: var(--text-dim);">CASE:</span> <span id="active-case-display" style="cursor: pointer; color: var(--cyan-bright); text-decoration: underline; transition: color 0.2s;">[No Active Case]</span></div>
         <div style="margin-left: auto; color: var(--cyan-bright);"><span id="status-mode">LIVE SURVEILLANCE</span></div>
     </div>
   </div>
@@ -692,6 +719,32 @@
   </div>
 
   <!-- Scripts -->
+  <!-- Advanced Settings Modal -->
+  <div id="settings-overlay" class="overlay" style="display: none; align-items: center; justify-content: center; z-index: 9999;">
+    <div class="modal-dialog glass-panel" style="width: 500px;">
+      <div class="modal-header">
+        <h3>ADVANCED SETTINGS</h3>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <label>ReID Extraction Model</label>
+          <select id="settings-reid-model" class="w-100" style="padding: 8px; margin-top: 5px; background: rgba(0,0,0,0.5); color: #fff; border: 1px solid var(--border-color);">
+            <!-- Options populated dynamically -->
+          </select>
+          <p style="font-size: 11px; color: #a1a1aa; margin-top: 8px; line-height: 1.4;">
+            <strong>OSNet x0.25:</strong> Optimized for low VRAM and fast processing. Recommended for older GPUs.<br>
+            <strong>OSNet x1.0:</strong> Highest accuracy. Requires higher compute and VRAM. Increases ReID certainty.<br><br>
+            <em>Note: Changing this will clear the current active target. If your system lags significantly (FPS drops below 10), it will automatically roll back to the previous model to protect stability.</em>
+          </p>
+        </div>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px;">
+        <button id="btn-settings-cancel" class="btn btn-secondary">Cancel</button>
+        <button id="btn-settings-save" class="btn btn-primary">Save & Restart Pipeline</button>
+      </div>
+    </div>
+  </div>
+
   <script src="js/api.js"></script>
   <script src="js/inspector.js"></script>
   <script src="js/camera.js"></script>

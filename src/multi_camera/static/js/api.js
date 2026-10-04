@@ -37,6 +37,32 @@ const API = {
     }
   },
 
+  async getReidSettings() {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/settings/reid`);
+      if (!res.ok) throw new Error('Failed to fetch settings');
+      return await res.json();
+    } catch (err) {
+      console.error('[API] getReidSettings error:', err);
+      throw err;
+    }
+  },
+
+  async setReidSettings(modelName) {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/settings/reid`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model_name: modelName }),
+      });
+      if (!res.ok) throw new Error('Failed to save settings');
+      return await res.json();
+    } catch (err) {
+      console.error('[API] setReidSettings error:', err);
+      throw err;
+    }
+  },
+
   async saveGraph(graphData) {
     try {
       const res = await fetch(`${this.baseUrl}/api/graph`, {

@@ -42,7 +42,7 @@ class TrackingConfig:
 
 @dataclass
 class ReIDConfig:
-    model_name: str = "osnet_x0_25"
+    model_name: str = "auto"
     match_threshold: float = 0.65
     reacquisition_threshold: float = 0.75
     auto_add_threshold: float = 0.80

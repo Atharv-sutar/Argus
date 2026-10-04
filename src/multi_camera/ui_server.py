@@ -242,6 +242,22 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 self._send_json({"cameras": webcams})
                 return
 
+            elif path == "/api/settings/reid":
+                if self.runtime_pipeline is not None:
+                    current_model = self.runtime_pipeline.config.reid.model_name
+                    recommended = self.runtime_pipeline.profile_hardware()
+                    self._send_json({
+                        "current_model": current_model,
+                        "recommended": recommended,
+                        "options": [
+                            {"id": "osnet_x0_25", "name": "OSNet x0.25 (Fast/Low VRAM)", "recommended": recommended == "osnet_x0_25"},
+                            {"id": "osnet_x1_0", "name": "OSNet x1.0 (High Compute/Best Accuracy)", "recommended": recommended == "osnet_x1_0"}
+                        ]
+                    })
+                else:
+                    self.send_error(503, "Pipeline not ready")
+                return
+
             elif path == "/api/cameras/live":
                 if self.runtime_pipeline is not None:
                     cards = self.runtime_pipeline.get_all_camera_cards()
@@ -703,7 +719,20 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             logger.warning(f"[HTTP POST] Could not parse JSON body from {self.address_string()}: {e}")
             payload = {}
 
-        if path == "/api/camera/select_active":
+        if path == "/api/settings/reid":
+            model_name = payload.get("model_name")
+            logger.info(f"[SETTINGS] [POST /api/settings/reid] Changing ReID model to '{model_name}' requested from {self.address_string()}")
+            if self.runtime_pipeline is not None and model_name:
+                success = self.runtime_pipeline.set_reid_model(model_name=model_name, auto_rollback=True)
+                if success:
+                    self._send_json({"status": "success", "model": self.runtime_pipeline.config.reid.model_name})
+                else:
+                    self.send_error(500, "Failed to switch model")
+            else:
+                self.send_error(400, "Invalid request or pipeline not ready")
+            return
+
+        elif path == "/api/camera/select_active":
             cam_id = payload.get("camera_id")
             logger.info(f"[LIVE MATRIX] [POST /api/camera/select_active] Switching active camera to '{cam_id}' requested from {self.address_string()}")
             if self.runtime_pipeline is not None and cam_id:

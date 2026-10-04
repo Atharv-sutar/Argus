@@ -126,6 +126,62 @@ class SurveillanceApp {
     document.getElementById('btn-mode-matrix').addEventListener('click', () => this.setMode('matrix'));
     document.getElementById('btn-mode-topology').addEventListener('click', () => this.setMode('topology'));
 
+    // Advanced Settings Modal
+    const btnAdvSettings = document.getElementById('btn-advanced-settings');
+    const settingsOverlay = document.getElementById('settings-overlay');
+    const btnSetCancel = document.getElementById('btn-settings-cancel');
+    const btnSetSave = document.getElementById('btn-settings-save');
+    const reidSelect = document.getElementById('settings-reid-model');
+
+    if (btnAdvSettings) {
+      btnAdvSettings.addEventListener('click', async () => {
+        if (settingsOverlay) settingsOverlay.style.display = 'flex';
+        try {
+          const settings = await API.getReidSettings();
+          reidSelect.innerHTML = '';
+          
+          const autoOpt = document.createElement('option');
+          autoOpt.value = 'auto';
+          autoOpt.textContent = `Auto-Detect (Recommended: ${settings.recommended})`;
+          reidSelect.appendChild(autoOpt);
+
+          settings.options.forEach(opt => {
+            const el = document.createElement('option');
+            el.value = opt.id;
+            el.textContent = opt.name + (opt.recommended ? ' (Recommended for your PC)' : '');
+            reidSelect.appendChild(el);
+          });
+          
+          reidSelect.value = settings.current_model;
+        } catch (e) {
+          console.error("Failed to load settings", e);
+        }
+      });
+    }
+
+    if (btnSetCancel) {
+      btnSetCancel.addEventListener('click', () => {
+        if (settingsOverlay) settingsOverlay.style.display = 'none';
+      });
+    }
+
+    if (btnSetSave) {
+      btnSetSave.addEventListener('click', async () => {
+        btnSetSave.disabled = true;
+        btnSetSave.textContent = "Applying...";
+        try {
+          const res = await API.setReidSettings(reidSelect.value);
+          if (settingsOverlay) settingsOverlay.style.display = 'none';
+          this.showToast(`ReID Model successfully changed to ${res.model}`, 'success');
+        } catch (err) {
+          this.showToast('Failed to change ReID model', 'error');
+        } finally {
+          btnSetSave.disabled = false;
+          btnSetSave.textContent = "Save & Restart Pipeline";
+        }
+      });
+    }
+
     // Bulk Import RTSP
     const btnBulkImportOpen = document.getElementById('btn-bulk-import-open');
     const bulkImportOverlay = document.getElementById('bulk-import-overlay');
