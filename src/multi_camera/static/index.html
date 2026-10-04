@@ -20,6 +20,17 @@
         <h3 style="margin-top: 0; color: var(--cyan-bright);">Advanced Settings</h3>
         <form id="form-settings" class="topo-form">
             <div class="form-row">
+                <label>ReID Extraction Model</label>
+                <select id="settings-reid-model" class="w-100" style="padding: 8px; margin-top: 5px; background: rgba(0,0,0,0.5); color: #fff; border: 1px solid var(--border-color);">
+                  <option value="">Loading...</option>
+                </select>
+                <p style="font-size: 11px; color: #a1a1aa; margin-top: 8px; line-height: 1.4;">
+                  <strong>OSNet x0.25:</strong> Optimized for low VRAM and fast processing. Recommended for older GPUs.<br>
+                  <strong>OSNet x1.0:</strong> Highest accuracy. Requires higher compute and VRAM. Increases ReID certainty.<br>
+                  <em style="color: var(--amber-glow)">Note: Changing this will clear the current active target. If your system lags significantly (FPS drops below 10), it will automatically roll back to the previous model to protect stability.</em>
+                </p>
+            </div>
+            <div class="form-row">
                 <label>Max Search Radius</label>
                 <input type="number" id="set-max-radius" min="1" max="5">
             </div>
@@ -241,17 +252,6 @@
             Topology Map
           </button>
         </div>
-
-        <div style="width: 1px; height: 24px; background: var(--border-color); margin: 0 10px;"></div>
-
-        <button id="btn-advanced-settings" class="mode-btn" title="Advanced System Settings">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-            <circle cx="12" cy="12" r="3"></circle>
-          </svg>
-          Settings
-        </button>
-
 
         <div style="width: 1px; height: 24px; background: var(--border-color); margin: 0 10px;"></div>
         
@@ -714,37 +714,9 @@
       </div>
     </div>
 
-    <!-- Toast Notification Container -->
-    <div id="toast-container" class="toast-container"></div>
   </div>
 
   <!-- Scripts -->
-  <!-- Advanced Settings Modal -->
-  <div id="settings-overlay" class="overlay" style="display: none; align-items: center; justify-content: center; z-index: 9999;">
-    <div class="modal-dialog glass-panel" style="width: 500px;">
-      <div class="modal-header">
-        <h3>ADVANCED SETTINGS</h3>
-      </div>
-      <div class="modal-body">
-        <div class="form-row">
-          <label>ReID Extraction Model</label>
-          <select id="settings-reid-model" class="w-100" style="padding: 8px; margin-top: 5px; background: rgba(0,0,0,0.5); color: #fff; border: 1px solid var(--border-color);">
-            <!-- Options populated dynamically -->
-          </select>
-          <p style="font-size: 11px; color: #a1a1aa; margin-top: 8px; line-height: 1.4;">
-            <strong>OSNet x0.25:</strong> Optimized for low VRAM and fast processing. Recommended for older GPUs.<br>
-            <strong>OSNet x1.0:</strong> Highest accuracy. Requires higher compute and VRAM. Increases ReID certainty.<br><br>
-            <em>Note: Changing this will clear the current active target. If your system lags significantly (FPS drops below 10), it will automatically roll back to the previous model to protect stability.</em>
-          </p>
-        </div>
-      </div>
-      <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px;">
-        <button id="btn-settings-cancel" class="btn btn-secondary">Cancel</button>
-        <button id="btn-settings-save" class="btn btn-primary">Save & Restart Pipeline</button>
-      </div>
-    </div>
-  </div>
-
   <script src="js/api.js"></script>
   <script src="js/inspector.js"></script>
   <script src="js/camera.js"></script>

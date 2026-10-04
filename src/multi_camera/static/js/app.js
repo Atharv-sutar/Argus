@@ -126,61 +126,6 @@ class SurveillanceApp {
     document.getElementById('btn-mode-matrix').addEventListener('click', () => this.setMode('matrix'));
     document.getElementById('btn-mode-topology').addEventListener('click', () => this.setMode('topology'));
 
-    // Advanced Settings Modal
-    const btnAdvSettings = document.getElementById('btn-advanced-settings');
-    const settingsOverlay = document.getElementById('settings-overlay');
-    const btnSetCancel = document.getElementById('btn-settings-cancel');
-    const btnSetSave = document.getElementById('btn-settings-save');
-    const reidSelect = document.getElementById('settings-reid-model');
-
-    if (btnAdvSettings) {
-      btnAdvSettings.addEventListener('click', async () => {
-        if (settingsOverlay) settingsOverlay.style.display = 'flex';
-        try {
-          const settings = await API.getReidSettings();
-          reidSelect.innerHTML = '';
-          
-          const autoOpt = document.createElement('option');
-          autoOpt.value = 'auto';
-          autoOpt.textContent = `Auto-Detect (Recommended: ${settings.recommended})`;
-          reidSelect.appendChild(autoOpt);
-
-          settings.options.forEach(opt => {
-            const el = document.createElement('option');
-            el.value = opt.id;
-            el.textContent = opt.name + (opt.recommended ? ' (Recommended for your PC)' : '');
-            reidSelect.appendChild(el);
-          });
-          
-          reidSelect.value = settings.current_model;
-        } catch (e) {
-          console.error("Failed to load settings", e);
-        }
-      });
-    }
-
-    if (btnSetCancel) {
-      btnSetCancel.addEventListener('click', () => {
-        if (settingsOverlay) settingsOverlay.style.display = 'none';
-      });
-    }
-
-    if (btnSetSave) {
-      btnSetSave.addEventListener('click', async () => {
-        btnSetSave.disabled = true;
-        btnSetSave.textContent = "Applying...";
-        try {
-          const res = await API.setReidSettings(reidSelect.value);
-          if (settingsOverlay) settingsOverlay.style.display = 'none';
-          this.showToast(`ReID Model successfully changed to ${res.model}`, 'success');
-        } catch (err) {
-          this.showToast('Failed to change ReID model', 'error');
-        } finally {
-          btnSetSave.disabled = false;
-          btnSetSave.textContent = "Save & Restart Pipeline";
-        }
-      });
-    }
 
     // Bulk Import RTSP
     const btnBulkImportOpen = document.getElementById('btn-bulk-import-open');
@@ -699,11 +644,34 @@ class SurveillanceApp {
       btnSettings.addEventListener('click', async () => {
         try {
           const settings = await API.getSettings();
+          const reidSettings = await API.getReidSettings().catch(() => null);
+          
           if (settings) {
             document.getElementById('set-max-radius').value = settings.multi_camera.max_search_radius;
             document.getElementById('set-recovery-timeout').value = settings.multi_camera.total_recovery_timeout;
             document.getElementById('set-match-threshold').value = settings.reid.match_threshold;
             document.getElementById('set-track-buffer').value = settings.tracking.track_buffer;
+            
+            if (reidSettings) {
+              const reidSelect = document.getElementById('settings-reid-model');
+              if (reidSelect) {
+                reidSelect.innerHTML = '';
+                const autoOpt = document.createElement('option');
+                autoOpt.value = 'auto';
+                autoOpt.textContent = `Auto-Detect (Recommended: ${reidSettings.recommended})`;
+                reidSelect.appendChild(autoOpt);
+
+                reidSettings.options.forEach(opt => {
+                  const el = document.createElement('option');
+                  el.value = opt.id;
+                  el.textContent = opt.name + (opt.recommended ? ' (Recommended for your PC)' : '');
+                  reidSelect.appendChild(el);
+                });
+                
+                reidSelect.value = reidSettings.current_model;
+              }
+            }
+            
             settingsOverlay.style.display = 'flex';
           }
         } catch(e) {
@@ -717,6 +685,14 @@ class SurveillanceApp {
 
       formSettings.addEventListener('submit', async (e) => {
         e.preventDefault();
+        
+        const reidSelect = document.getElementById('settings-reid-model');
+        const submitBtn = formSettings.querySelector('button[type="submit"]');
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Applying...';
+        }
+        
         const configUpdates = {
           multi_camera: {
             max_search_radius: parseInt(document.getElementById('set-max-radius').value),
@@ -731,10 +707,18 @@ class SurveillanceApp {
         };
         try {
           await API.updateSettings(configUpdates);
+          if (reidSelect && reidSelect.value) {
+              await API.setReidSettings(reidSelect.value);
+          }
           this.showToast('Settings applied successfully', 'success');
           settingsOverlay.style.display = 'none';
         } catch(err) {
           this.showToast(`Failed to apply settings: ${err.message}`, 'error');
+        } finally {
+          if (submitBtn) {
+              submitBtn.disabled = false;
+              submitBtn.textContent = 'Save Changes';
+          }
         }
       });
     }
