@@ -361,11 +361,26 @@ class IdentityManager:
         ident = self.get_identity("target_0")
         if ident:
             initial_count = len(ident.provisional_gallery)
-            ident.provisional_gallery = [
-                e for e in ident.provisional_gallery 
-                if not (isinstance(e, tuple) and e[1] == for_track_id)
-            ]
+            # Find indices to remove (in reverse order to safely shift crops)
+            indices_to_remove = []
+            for i, e in enumerate(ident.provisional_gallery):
+                if isinstance(e, tuple) and e[1] == for_track_id:
+                    indices_to_remove.append(i)
+            
+            for idx in reversed(indices_to_remove):
+                ident.provisional_gallery.pop(idx)
+                old_len = initial_count - (initial_count - len(ident.provisional_gallery)) + 1
+                self._entry_crops.pop(f"{ident.identity_id}_provisional_{idx}", None)
+                self._shift_entry_crops(ident.identity_id, "provisional", idx, old_len)
+                
             count_removed = initial_count - len(ident.provisional_gallery)
+            if count_removed > 0:
+                self.vector_store.remove_identity("target_0")
+                for emb in ident.trusted_gallery:
+                    self.vector_store.add(emb, "target_0")
+                for emb in ident.provisional_gallery:
+                    self.vector_store.add(emb[0] if isinstance(emb, tuple) else emb, "target_0")
+                self.save_target_gallery()
             return count_removed
         return 0
 
@@ -455,7 +470,7 @@ class IdentityManager:
                 
         # Only add if it passes
         idx = len(ident.provisional_gallery)
-        ident.provisional_gallery.append(embedding)
+        ident.provisional_gallery.append((embedding, track_id))
         self._last_auto_add_ts = timestamp_ms if timestamp_ms > 0 else time.time() * 1000.0
         if crop is not None and crop.size > 0:
             self._entry_crops[f"{ident.identity_id}_provisional_{idx}"] = self._encode_crop_thumbnail(crop)
