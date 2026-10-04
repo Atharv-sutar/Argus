@@ -281,22 +281,19 @@
           📹 Export Clip
         </button>
 
-        <button id="btn-audit-global" class="btn btn-secondary btn-sm" title="View Audit Trail">
-          📜 Audit
-        </button>
-        <button id="btn-fast-scan" class="btn btn-secondary btn-sm" title="Fast Scan Footage">
-          ⏩ Fast Scan
-        </button>
-        <button id="btn-settings-global" class="btn btn-secondary btn-sm" title="Advanced Settings (Shortcut: 's')">
-          ⚙️
-        </button>
-        <button id="btn-shortcuts-global" class="btn btn-secondary btn-sm" title="Keyboard Shortcuts (Shortcut: '?')">
-          ❓
-        </button>
-        <button id="btn-quit-global" class="btn btn-quit btn-sm" title="Safely shutdown all camera pipelines and server (Shortcut: 'q')">
-
-          Shutdown
-        </button>
+        <div class="header-dropdown">
+          <button class="btn btn-secondary btn-sm dropbtn" title="System Settings & Actions">
+            ⚙️ System ▼
+          </button>
+          <div class="dropdown-content">
+            <button id="btn-fast-scan" class="dropdown-item" title="Fast Scan Footage">⏩ Fast Scan</button>
+            <button id="btn-audit-global" class="dropdown-item" title="View Audit Trail">📜 Audit Trail</button>
+            <button id="btn-settings-global" class="dropdown-item" title="Advanced Settings (Shortcut: 's')">⚙️ Settings</button>
+            <button id="btn-shortcuts-global" class="dropdown-item" title="Keyboard Shortcuts (Shortcut: '?')">❓ Shortcuts</button>
+            <div class="dropdown-divider"></div>
+            <button id="btn-quit-global" class="dropdown-item item-danger" title="Safely shutdown all camera pipelines and server (Shortcut: 'q')">⏻ Shutdown</button>
+          </div>
+        </div>
       </div>
     </header>
 
