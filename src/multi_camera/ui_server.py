@@ -1186,24 +1186,40 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                         return
                     
                     graph_dict = CameraGraph.load(self.graph_file).to_dict()
-                    updated = False
-                    for cam in graph_dict.get("cameras", []):
-                        if cam.get("camera_id") == cam_id:
-                            cam["source"] = source_val
-                            cam["source_type"] = source_type
-                            updated = True
-                            break
+                    updated_cameras = []
                     
-                    if not updated:
-                        self._send_json({"success": False, "error": f"Camera '{cam_id}' not found in graph"}, status=HTTPStatus.BAD_REQUEST)
-                        return
+                    if mode == "video" and Path(file_path).is_dir():
+                        dir_path = Path(file_path)
+                        for cam in graph_dict.get("cameras", []):
+                            cid = cam.get("camera_id")
+                            # Try to find a matching video file for this camera
+                            matching_files = list(dir_path.glob(f"{cid}.*"))
+                            if matching_files:
+                                cam["source"] = str(matching_files[0])
+                                cam["source_type"] = "video_file"
+                                updated_cameras.append(cid)
+                                
+                        if not updated_cameras:
+                            self._send_json({"success": False, "error": f"No video files named cam_*.mp4 found in directory {file_path}"}, status=HTTPStatus.BAD_REQUEST)
+                            return
+                    else:
+                        for cam in graph_dict.get("cameras", []):
+                            if cam.get("camera_id") == cam_id:
+                                cam["source"] = source_val
+                                cam["source_type"] = source_type
+                                updated_cameras.append(cam_id)
+                                break
+                        
+                        if not updated_cameras:
+                            self._send_json({"success": False, "error": f"Camera '{cam_id}' not found in graph"}, status=HTTPStatus.BAD_REQUEST)
+                            return
                         
                     new_graph = CameraGraph.from_dict(graph_dict)
                     new_graph.save(self.graph_file)
                     self.runtime_pipeline.update_graph(new_graph)
                     
-                    logger.info(f"[SERVER] Switched '{cam_id}' source to {mode} ({source_val})")
-                    self._send_json({"success": True, "mode": mode, "source": source_val})
+                    logger.info(f"[SERVER] Switched sources for {updated_cameras} to {mode}")
+                    self._send_json({"success": True, "mode": mode, "updated": updated_cameras})
                     
             except Exception as e:
                 logger.exception(f"[SERVER] Failed to switch source: {e}")

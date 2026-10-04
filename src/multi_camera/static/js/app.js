@@ -302,7 +302,7 @@ class SurveillanceApp {
         const camId = this.activeCameraId || "cam_0";
         let sourceVal = null;
         if (mode === 'video') {
-            sourceVal = prompt("Enter the absolute path to the video file or an RTSP URL:", "");
+            sourceVal = prompt("Enter absolute path to a video file, OR a directory containing cam_X.mp4 files for multi-camera playback:", "");
             if (!sourceVal) {
                 this.showToast('Source switch cancelled.', 'info');
                 return;
