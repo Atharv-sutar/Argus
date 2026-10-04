@@ -1112,16 +1112,18 @@ class MultiCameraPipeline:
                 logger.error(f"[MULTI-CAM] Annotation/Encoding error: {e}")
 
         # 9. Feed forensic clip recorder with the active camera's annotated frame
+        # Fix A2: Only record when target is actually visible to avoid useless LOST frames
         if self.forensic_recorder.is_recording and active_cam_id:
             active_result = results.get(active_cam_id)
             if active_result and active_result[0] is not None:
                 target = self.target_manager.target
-                self.forensic_recorder.feed_frame(
-                    active_result[0],
-                    active_cam_id,
-                    time.time() * 1000.0,
-                    target.state.value if target else "UNKNOWN",
-                )
+                if target and target.state in (TargetState.TRACKING, TargetState.LOCKED, TargetState.OCCLUDED, TargetState.CONFIRMED):
+                    self.forensic_recorder.feed_frame(
+                        active_result[0],
+                        active_cam_id,
+                        time.time() * 1000.0,
+                        target.state.value if target else "UNKNOWN",
+                    )
 
         return results
 
@@ -1185,6 +1187,8 @@ class MultiCameraPipeline:
 
         # Case A: On frames where ReID is NOT evaluated
         if not should_reid or self.identity.is_empty:
+            # Fix B2: Clear stale candidate scores so sim values don't persist from old ReID frames
+            self._last_candidate_scores.clear()
             if current_track is not None:
                 if is_occluded:
                     self.target_manager.mark_tracking(current_track, track_res.frame_id, timestamp_ms)
@@ -1487,6 +1491,10 @@ class MultiCameraPipeline:
                             f"evidence_score={evidence_dec.best_score:.3f}, "
                             f"reason={evidence_dec.decision_reason})"
                         )
+                        # Fix B1: Purge old track's auto-entries to prevent gallery contamination
+                        old_track_id = target.track_id
+                        if old_track_id is not None:
+                            self.identity.rollback_auto_entries(for_track_id=old_track_id)
                         self._switch_consensus.clear()
                         self._current_track_misses = 0
                         self.target_manager.reassociate_target(
@@ -1498,16 +1506,10 @@ class MultiCameraPipeline:
                         if self.route_recorder and self._active_camera_id:
                             b = (int(confirmed_track.box.x1), int(confirmed_track.box.y1), int(confirmed_track.box.width), int(confirmed_track.box.height))
                             self.route_recorder.log_event(self._active_camera_id, confirmed_track.track_id, timestamp_ms, "enter", b, evidence_dec.best_score, False)
-                        if confirmed_crop is not None and confirmed_emb is not None and confirmed_sim >= auto_thresh:
-                            self.identity.add_auto(
-                                crop=confirmed_crop,
-                                embedding=confirmed_emb,
-                                candidate_similarity=confirmed_sim,
-                                camera_id=self._active_camera_id or "camera_0",
-                                timestamp_ms=timestamp_ms,
-                                frame_id=track_res.frame_id,
-                                track_id=confirmed_track.track_id,
-                            )
+                        # Fix B3: Do NOT auto-enroll immediately on reacquisition.
+                        # Let Scenario 1 (mark_confirmed path) handle auto-enrollment
+                        # after the reacquired track passes match_thresh for several frames.
+                        # This prevents gallery contamination from false reacquisitions.
                 elif evidence_dec.diagnostic_log:
                     logger.debug(evidence_dec.diagnostic_log)
 
@@ -1601,19 +1603,11 @@ class MultiCameraPipeline:
             timestamp_ms=time.time() * 1000.0,
         )
 
-        # Auto-enroll cross-camera viewpoint (use actual measured similarity, NOT hardcoded)
-        if crop is not None and embedding is not None:
-            # Compute actual similarity against gallery for honest enrollment
-            actual_sim, _ = self.identity.match(embedding)
-            self.identity.add_auto(
-                crop=crop,
-                embedding=embedding,
-                candidate_similarity=actual_sim,
-                camera_id=new_camera_id,
-                timestamp_ms=time.time() * 1000.0,
-                track_id=recovered_track.track_id,
-            )
-            
+        # Fix B4: Do NOT auto-enroll immediately on cross-camera handoff.
+        # Let Scenario 1 (mark_confirmed path) handle auto-enrollment
+        # after the recovered track proves consistent for several frames.
+        # This prevents gallery contamination from false handoffs.
+
         if self.playback_controller:
             self.playback_controller.record_auto_accept()
 
@@ -1621,6 +1615,17 @@ class MultiCameraPipeline:
         self.forensic_recorder.on_target_state_changed(
             "TRACKING", "TRANSIT", new_camera_id
         )
+
+        # Fix A1: Feed search camera's frame to clip recorder right after handoff
+        # so there's no visual gap in the forensic recording
+        search_worker = self._workers.get(new_camera_id)
+        if search_worker and search_worker._last_frame is not None:
+            self.forensic_recorder.feed_frame(
+                search_worker._last_frame,
+                new_camera_id,
+                time.time() * 1000.0,
+                "TRACKING",
+            )
 
         self._handoff_timestamp = time.time()
         self._transit_history.append({

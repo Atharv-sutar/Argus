@@ -231,7 +231,7 @@ class ForensicClipRecorder:
             cards = self._render_state_card(
                 "IN TRANSIT",
                 f"{self._current_camera_id}  →  {camera_id}",
-                duration_frames=int(self._target_fps * 2.0),
+                duration_frames=int(self._target_fps * 1.0),
             )
 
         if cards:
