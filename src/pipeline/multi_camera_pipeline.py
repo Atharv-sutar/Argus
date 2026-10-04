@@ -150,7 +150,8 @@ class MultiCameraPipeline:
         self._is_running: bool = True
         self._is_paused: bool = False
         self._pipeline_lock: threading.RLock = threading.RLock()
-        self._transit_history: List[Dict[str, Any]] = []
+        import collections
+        self._transit_history: collections.deque = collections.deque(maxlen=500)
         self._frame_count: int = 0
         self.reid_interval: int = config.reid.extract_interval_frames
         self._frame_lock: threading.Lock = threading.Lock()
