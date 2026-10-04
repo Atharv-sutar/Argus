@@ -300,8 +300,16 @@ class SurveillanceApp {
     const handleSwitchSource = async (mode) => {
       try {
         const camId = this.activeCameraId || "cam_0";
+        let sourceVal = null;
+        if (mode === 'video') {
+            sourceVal = prompt("Enter the absolute path to the video file or an RTSP URL:", "");
+            if (!sourceVal) {
+                this.showToast('Source switch cancelled.', 'info');
+                return;
+            }
+        }
         this.showToast(`Switching source to ${mode}...`, 'info');
-        const res = await API.switchSource(camId, mode);
+        const res = await API.switchSource(camId, mode, sourceVal);
         if (res.success) {
           this.showToast(`Source successfully switched to ${mode}. Restarting feeds...`, 'success');
           setTimeout(() => {
@@ -743,17 +751,19 @@ class SurveillanceApp {
               return;
             }
             const logHtml = res.logs.map(log => {
-              const timeStr = new Date(log.timestamp).toLocaleString();
+              const timeStr = new Date(log.timestamp_utc + 'Z').toLocaleString();
               let color = '#94a3b8'; // default
               if (log.event_type.includes('START') || log.event_type.includes('MATCH')) color = '#00f2fe';
               if (log.event_type.includes('LOST') || log.event_type.includes('REJECT') || log.event_type.includes('REMOVE') || log.event_type.includes('CLEAR')) color = 'var(--red-glow)';
               if (log.event_type.includes('ADD') || log.event_type.includes('ACCEPT') || log.event_type.includes('LOCKED')) color = '#10b981';
               if (log.event_type.includes('CORRECTION') || log.event_type.includes('EXPAND')) color = '#f59e0b';
               
+              const detailStr = (typeof log.detail === 'object') ? JSON.stringify(log.detail) : log.detail;
+              
               return `<div style="margin-bottom: 6px; display: flex; gap: 12px; border-bottom: 1px solid var(--border-color); padding-bottom: 4px;">
                 <span style="color: #64748b; min-width: 150px;">[${timeStr}]</span>
                 <span style="color: ${color}; min-width: 150px; font-weight: 600;">${log.event_type}</span>
-                <span style="color: #cbd5e1;">${log.details}</span>
+                <span style="color: #cbd5e1; word-break: break-all;">${detailStr}</span>
               </div>`;
             }).join('');
             auditModalContainer.innerHTML = logHtml;

@@ -1171,32 +1171,13 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             source_type = "webcam"
             
             if mode == "video":
-                try:
-                    import tkinter as tk
-                    from tkinter import filedialog
-                    import sys
-                    
-                    # Create a hidden root window
-                    root = tk.Tk()
-                    root.withdraw()
-                    root.attributes('-topmost', True)
-                    
-                    file_path = filedialog.askopenfilename(
-                        title="Select Pre-recorded Video File",
-                        filetypes=[("Video Files", "*.mp4 *.avi *.mkv *.mov"), ("All Files", "*.*")]
-                    )
-                    root.destroy()
-                    
-                    if not file_path:
-                        self._send_json({"success": False, "error": "No file selected"})
-                        return
-                        
-                    source_val = file_path
-                    source_type = "video_file"
-                except Exception as e:
-                    logger.exception(f"[SERVER] Failed to open file dialog: {e}")
-                    self._send_json({"success": False, "error": f"File dialog failed: {e}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                file_path = payload.get("source")
+                if not file_path:
+                    self._send_json({"success": False, "error": "No file path provided"})
                     return
+                    
+                source_val = file_path
+                source_type = "video_file" if not str(file_path).startswith(("rtsp://", "http://")) else "rtsp"
             
             try:
                 with self.graph_lock:
