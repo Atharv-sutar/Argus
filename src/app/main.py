@@ -372,6 +372,9 @@ def run_multi_camera_app(
     config_file = Path(config_path)
     config = AppConfig.from_yaml(config_file) if config_file.is_file() else AppConfig()
 
+    from src.core.dependencies import ensure_technologies
+    ensure_technologies(config)
+
     pipeline = build_multi_camera_pipeline(config, graph_path=graph_path)
 
     server = None
@@ -684,6 +687,9 @@ def run_app(
     else:
         logger.warning(f"Config file '{config_path}' not found. Using defaults.")
         config = AppConfig()
+
+    from src.core.dependencies import ensure_technologies
+    ensure_technologies(config)
 
     # Prompt for source if not provided
     if source is None and not synthetic:
