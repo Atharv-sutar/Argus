@@ -66,14 +66,8 @@ class PyTorchReIDExtractor(BaseReID):
 
             logger.info(f"ReID model '{self.model_name}' (dim={self.feature_dim}) initialized successfully on {self._device}.")
         except Exception as e:
-            logger.warning(f"Could not load Person-ReID model ({e}). Attempting fallback...")
-            try:
-                from src.reid.backbones.osnet import build_osnet
-                self._model = build_osnet("osnet_x0_25", pretrained=True).to(self._device).eval()
-                self.feature_dim = 512
-            except Exception as e2:
-                logger.error(f"Fallback ReID initialization failed: {e2}")
-                self._model = None
+            logger.error(f"Could not load Person-ReID model '{self.model_name}': {e}")
+            raise RuntimeError(f"Failed to initialize ReID model '{self.model_name}'") from e
 
     def _preprocess(self, crop: np.ndarray, target_size: Optional[Tuple[int, int]] = None) -> Optional[np.ndarray]:
         """Preprocesses crop into (C, H, W) normalized float32 tensor with aspect-ratio preservation."""

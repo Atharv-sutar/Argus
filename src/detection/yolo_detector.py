@@ -46,12 +46,12 @@ class YOLODetector(BaseDetector):
             if hasattr(self._model, "to"):
                 self._model.to(self.device)
             logger.info("YOLO model loaded successfully.")
-        except ImportError:
-            logger.warning("ultralytics package not installed. YOLODetector running in fallback mode.")
-            self._model = None
+        except ImportError as e:
+            logger.error("ultralytics package not installed. YOLODetector cannot run.")
+            raise RuntimeError("ultralytics package not installed") from e
         except Exception as e:
-            logger.error(f"Failed to load YOLO model: {e}")
-            self._model = None
+            logger.error(f"Failed to load YOLO model '{self.model_name}': {e}")
+            raise RuntimeError(f"Failed to load YOLO model '{self.model_name}'") from e
 
     def detect(
         self,
