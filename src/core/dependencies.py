@@ -45,7 +45,7 @@ def ensure_technologies(config: AppConfig) -> None:
     
     # 1. Object Detection Dependencies
     det_model = config.detection.model_name.lower()
-    if "yolov11" in det_model:
+    if "yolo11" in det_model:
         _ensure_package("ultralytics", "8.3.0")
     elif "yolo" in det_model:
         _ensure_package("ultralytics", "8.0.0")

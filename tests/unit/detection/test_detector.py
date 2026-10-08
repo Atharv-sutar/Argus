@@ -8,7 +8,7 @@ from src.detection.yolo_detector import YOLODetector
 
 def test_yolo_detector_initialization():
     detector = YOLODetector(
-        model_name="yolov11n.pt",
+        model_name="yolo11n.pt",
         confidence_threshold=0.4,
         iou_threshold=0.45,
         device="cpu"
