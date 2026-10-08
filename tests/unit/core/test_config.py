@@ -7,7 +7,7 @@ from src.core.config import AppConfig
 def test_default_config():
     config = AppConfig()
     assert config.camera.name == "camera_0"
-    assert config.detection.model_name == "yolov8n.pt"
+    assert config.detection.model_name == "yolov11n.pt"
     assert config.detection.confidence_threshold == 0.4
     assert config.tracking.track_thresh == 0.4
     assert config.visualization.show_window is True

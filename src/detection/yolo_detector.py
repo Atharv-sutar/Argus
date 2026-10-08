@@ -21,7 +21,7 @@ class YOLODetector(BaseDetector):
 
     def __init__(
         self,
-        model_name: str = "yolov8n.pt",
+        model_name: str = "yolov11n.pt",
         confidence_threshold: float = 0.4,
         iou_threshold: float = 0.45,
         target_classes: Optional[List[int]] = None,

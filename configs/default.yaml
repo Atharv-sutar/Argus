@@ -1,34 +1,27 @@
-# Argus Surveillance System - Default Configuration
-
 camera:
-  source: 0  # 0 for default webcam, or path/URL to video file or RTSP stream
-  name: "camera_0"
+  source: 0
+  name: camera_0
   width: 1280
   height: 720
   fps: 30
-
 inference:
-  device: "auto"  # "auto", "cuda", or "cpu"
+  device: auto
   half_precision: false
-
 detection:
-  model_name: "yolov8n.pt"
+  model_name: yolov11n.pt
   confidence_threshold: 0.4
   iou_threshold: 0.45
-  target_classes: [0]  # 0 = person in standard COCO models
+  target_classes:
+  - 0
   image_size: 640
-
 tracking:
   track_thresh: 0.4
   match_thresh: 0.8
   track_buffer: 30
   min_box_area: 100.0
-
 reid:
-  model_name: "osnet_x1_0"
-  match_threshold: 0.78
-  uncertain_band_min: 0.73
-  uncertain_band_max: 0.78
+  model_name: osnet_x1_0
+  match_threshold: 0.75
   reacquisition_threshold: 0.78
   auto_add_threshold: 0.82
   auto_add_min_consecutive: 3
@@ -39,23 +32,21 @@ reid:
   extract_interval_frames: 3
   min_crop_width: 32
   min_crop_height: 64
-  
-  # PROVISIONAL / INITIAL thresholds pending calibration against real camera footage
-  # (resolution, lighting, and noise vary significantly per camera)
   min_sharpness: 60.0
-
+  tracklet_cleave_threshold: 0.3
+  uncertain_band_min: 0.73
+  uncertain_band_max: 0.78
 visualization:
   show_window: true
-  window_name: "Argus Surveillance"
+  window_name: Argus Surveillance
   draw_fps: true
   draw_boxes: true
   draw_ids: true
   box_thickness: 2
   font_scale: 0.6
-
 multi_camera:
   enabled: false
-  graph_file: "configs/camera_graph.json"
+  graph_file: configs/camera_graph.json
   search:
     initial_radius: 1
     radius_increment: 1
@@ -63,12 +54,20 @@ multi_camera:
     max_radius: 3
     total_recovery_timeout_s: 30.0
     confirmation_frames: 3
+    candidate_filter_rate: 0.5
     handoff_confirm_delay_s: 2.0
-
   ui_port: 8765
-
+storage:
+  db_path: data/identities.db
+  enabled: true
+playback:
+  fast_scan_auto_accept: 0.82
+  fast_scan_auto_reject: 0.78
+  fast_scan_rewind_s: 5.0
 forensic:
   target_fps: 15.0
-  resolution: [1280, 720]
+  resolution:
+  - 1280
+  - 720
   max_memory_frames: 9000
-  export_dir: "exports"
+  export_dir: exports

@@ -36,7 +36,7 @@ for name, ext in [("OSNet-x1.0", extractor_x1), ("OSNet-x0.25", extractor_x0)]:
 
 # Extract real people from bus.jpg and zidane.jpg using YOLO
 from src.detection.yolo_detector import YOLODetector
-detector = YOLODetector(model_name="yolov8n.pt", confidence_threshold=0.3)
+detector = YOLODetector(model_name="yolov11n.pt", confidence_threshold=0.3)
 
 bus_img = cv2.imread(r".venv/Lib/site-packages/ultralytics/assets/bus.jpg")
 det_res = detector.detect(bus_img, frame_id=1, timestamp_ms=0.0)

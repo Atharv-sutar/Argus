@@ -25,7 +25,7 @@ class InferenceConfig:
 
 @dataclass
 class DetectionConfig:
-    model_name: str = "yolov8n.pt"
+    model_name: str = "yolov11n.pt"
     confidence_threshold: float = 0.4
     iou_threshold: float = 0.45
     target_classes: List[int] = field(default_factory=lambda: [0])
