@@ -25,6 +25,25 @@ class SQLiteVectorStore(BaseVectorStore):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
+        
+        # Initialize FAISS backend for fast search
+        from src.identity.faiss_store import FaissVectorStore
+        self._faiss = FaissVectorStore()
+        self._load_all_to_faiss()
+
+    def _load_all_to_faiss(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT id, identity_id, vector_b64, model_name, version, 
+                       crop_type, quality_score, camera_id, timestamp_ms
+                FROM embeddings
+            ''')
+            rows = cursor.fetchall()
+            for row in rows:
+                ident_id = row[1]
+                emb = self._deserialize_emb(row)
+                self._faiss.add(emb, ident_id)
 
     def _init_db(self) -> None:
         with closing(sqlite3.connect(self.db_path)) as conn:
@@ -95,6 +114,9 @@ class SQLiteVectorStore(BaseVectorStore):
         return emb
 
     def add(self, embedding: Embedding, identity_id: str) -> None:
+        # Add to FAISS memory
+        self._faiss.add(embedding, identity_id)
+        # Persist to SQLite
         with closing(sqlite3.connect(self.db_path)) as conn:
             cursor = conn.cursor()
             cursor.execute('''
@@ -115,29 +137,8 @@ class SQLiteVectorStore(BaseVectorStore):
             conn.commit()
 
     def search(self, embedding: Embedding, top_k: int = 1) -> List[Tuple[str, float]]:
-        # Load all embeddings to do exact cosine similarity
-        with closing(sqlite3.connect(self.db_path)) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT id, identity_id, vector_b64, model_name, version, 
-                       crop_type, quality_score, camera_id, timestamp_ms
-                FROM embeddings
-            ''')
-            rows = cursor.fetchall()
-            
-        if not rows:
-            return []
-
-        best_per_identity: Dict[str, float] = {}
-        for row in rows:
-            ident_id = row[1]
-            emb = self._deserialize_emb(row)
-            sim = emb.cosine_similarity(embedding)
-            if ident_id not in best_per_identity or sim > best_per_identity[ident_id]:
-                best_per_identity[ident_id] = sim
-
-        ranked = sorted(best_per_identity.items(), key=lambda item: item[1], reverse=True)
-        return ranked[:top_k]
+        # Lightning fast FAISS search instead of SQLite full table scan
+        return self._faiss.search(embedding, top_k)
 
     def get_embeddings_for_identity(self, identity_id: str) -> List[Embedding]:
         with closing(sqlite3.connect(self.db_path)) as conn:
@@ -159,6 +160,7 @@ class SQLiteVectorStore(BaseVectorStore):
             return cursor.fetchone()[0]
 
     def remove_identity(self, identity_id: str) -> None:
+        self._faiss.remove_identity(identity_id)
         with closing(sqlite3.connect(self.db_path)) as conn:
             cursor = conn.cursor()
             cursor.execute('DELETE FROM embeddings WHERE identity_id = ?', (identity_id,))
@@ -166,6 +168,7 @@ class SQLiteVectorStore(BaseVectorStore):
             conn.commit()
 
     def clear(self) -> None:
+        self._faiss.clear()
         with closing(sqlite3.connect(self.db_path)) as conn:
             cursor = conn.cursor()
             cursor.execute('DELETE FROM embeddings')
