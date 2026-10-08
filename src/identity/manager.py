@@ -20,6 +20,7 @@ from src.core.types import (
     ViewCluster,
 )
 from src.identity.store import InMemoryVectorStore
+from src.identity.faiss_store import FaissVectorStore
 from src.identity.evidence import EvidenceEngine
 from src.reid.quality import CropQualityEvaluator
 from src.audit.logger import AuditLogger, AuditEventType
@@ -82,7 +83,7 @@ class IdentityManager:
         self.reid = reid_extractor
         self.undo_stack = undo_stack
         self.db_path = db_path
-        self.vector_store = vector_store or InMemoryVectorStore()
+        self.vector_store = vector_store or FaissVectorStore()
         self.similarity_threshold = similarity_threshold
         self.reacquisition_threshold = reacquisition_threshold
         self.reference_threshold = reference_threshold

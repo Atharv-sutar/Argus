@@ -56,4 +56,7 @@ def ensure_technologies(config: AppConfig) -> None:
         _ensure_package("torch", "2.0.0")
         _ensure_package("torchvision", "0.15.0")
         
+    # 3. Vector Database Dependencies
+    _ensure_package("faiss-cpu")
+        
     logger.info("Dynamic dependencies verified.")
