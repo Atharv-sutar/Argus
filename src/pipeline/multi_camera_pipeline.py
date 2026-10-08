@@ -197,6 +197,15 @@ class MultiCameraPipeline:
             max_memory_frames=fcfg.max_memory_frames
         )
 
+        # 10. Log Technology Stack
+        logger.info("\n" + "="*50)
+        logger.info("=== ARGUS AI TECHNOLOGY STACK INITIALIZED ===")
+        logger.info(f"Detector: {config.detection.model_name}")
+        logger.info(f"Tracker:  ByteTracker (IoU based)")
+        logger.info(f"ReID:     {self.reid_extractor.model_name if self.reid_extractor else 'None'}")
+        logger.info(f"Storage:  {self.identity_manager.vector_store.__class__.__name__ if self.identity_manager and self.identity_manager.vector_store else 'None'}")
+        logger.info("="*50 + "\n")
+
         # Sync nodes from graph
         self._sync_nodes_with_graph()
 
