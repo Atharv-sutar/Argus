@@ -21,6 +21,9 @@ class SQLiteVectorStore(BaseVectorStore):
     Computes exact cosine similarity and persists data across restarts.
     """
 
+    def __str__(self) -> str:
+        return "FAISS (with SQLite Persistence)"
+
     def __init__(self, db_path: str = "data/identities.db") -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)

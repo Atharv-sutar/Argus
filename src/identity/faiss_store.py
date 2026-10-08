@@ -22,6 +22,9 @@ class FaissVectorStore(BaseVectorStore):
     Provides scalable dense vector similarity search.
     """
 
+    def __str__(self) -> str:
+        return "FAISS Vector Store"
+
     def __init__(self, feature_dim: int = 512) -> None:
         if faiss is None:
             raise RuntimeError("faiss is not installed. FaissVectorStore requires faiss-cpu or faiss-gpu.")

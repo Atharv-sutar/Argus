@@ -15,6 +15,9 @@ class InMemoryVectorStore(BaseVectorStore):
     Computes exact cosine similarity without external database dependencies.
     """
 
+    def __str__(self) -> str:
+        return "InMemory Vector Store (Linear Search)"
+
     def __init__(self) -> None:
         self._entries: List[Tuple[Embedding, str]] = []
 

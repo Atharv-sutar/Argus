@@ -197,9 +197,7 @@ class MultiCameraPipeline:
             max_memory_frames=fcfg.max_memory_frames
         )
 
-        storage_str = self.identity_manager.vector_store.__class__.__name__ if self.identity_manager and self.identity_manager.vector_store else 'None'
-        if storage_str == "SQLiteVectorStore":
-            storage_str = "FAISS (with SQLite Persistence)"
+        storage_str = str(self.identity_manager.vector_store) if self.identity_manager and self.identity_manager.vector_store else 'None'
         
         # 10. Log Technology Stack
         logger.info("\n" + "="*50)
