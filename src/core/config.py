@@ -172,6 +172,8 @@ class AppConfig:
 
         return cls.from_dict(data)
 
+    load = from_yaml
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> AppConfig:
         """Construct AppConfig from a dictionary with nested dataclasses."""
