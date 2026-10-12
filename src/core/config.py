@@ -21,6 +21,8 @@ class CameraConfig:
 class InferenceConfig:
     device: str = "auto"
     half_precision: bool = False
+    engine_type: str = "auto"
+    engine_cache_dir: str = "models/trt_cache"
 
 
 @dataclass

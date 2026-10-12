@@ -140,6 +140,10 @@ class MultiCameraPipeline:
         self._tracker_factory = tracker_factory or self._default_tracker_factory
         self._camera_factory = camera_factory or self._default_camera_factory
 
+        # Pre-initialize single shared detector to prevent duplicate model instances on GPU
+        if self._shared_detector is None:
+            self._shared_detector = self._detector_factory()
+
         # 4. Runtime state & Camera Workers
         self._nodes: Dict[str, CameraNode] = {}
         self._workers: Dict[str, CameraWorker] = {}
@@ -202,12 +206,16 @@ class MultiCameraPipeline:
         # 10. Log Technology Stack
         tracker_type = getattr(config.tracking, "tracker_type", "botsort").lower()
         tracker_name = "BoT-SORT (GMC + Kalman [xc,yc,w,h] + Hungarian)" if "bot" in tracker_type else "ByteTracker (IoU based)"
+        det_backend = config.detection.model_name
+        if getattr(self, '_shared_detector', None) and hasattr(self._shared_detector, 'active_model_path'):
+            det_backend = self._shared_detector.active_model_path
+        reid_backend = getattr(self.reid_extractor, 'active_backend', 'PyTorch')
+        reid_name = getattr(self.reid_extractor, 'model_name', type(self.reid_extractor).__name__) if self.reid_extractor else 'None'
         logger.info("\n" + "="*50)
         logger.info("=== ARGUS AI TECHNOLOGY STACK INITIALIZED ===")
-        logger.info(f"Detector: {config.detection.model_name}")
+        logger.info(f"Detector: {config.detection.model_name} (Active: {det_backend})")
         logger.info(f"Tracker:  {tracker_name}")
-        reid_name = getattr(self.reid_extractor, 'model_name', type(self.reid_extractor).__name__) if self.reid_extractor else 'None'
-        logger.info(f"ReID:     {reid_name}")
+        logger.info(f"ReID:     {reid_name} (Backend: {reid_backend})")
         logger.info(f"Storage:  {storage_str}")
         logger.info("="*50 + "\n")
 

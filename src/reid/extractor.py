@@ -32,18 +32,48 @@ class PyTorchReIDExtractor(BaseReID):
         model_name: str = "osnet_x0_25",
         device: str = "auto",
         input_size: Tuple[int, int] = (256, 128),
+        prefer_engine: bool = True,
     ) -> None:
         self.model_name = model_name.lower()
         self.device_str = resolve_inference_device(device)
         self.input_size = input_size
         self.feature_dim = 512
+        self.prefer_engine = prefer_engine
         self._model = None
         self._osnet_model = None
         self._device = None
+        self._trt_session = None
+        self.active_backend = "PyTorch"
 
         self._init_model()
 
     def _init_model(self) -> None:
+        if self.prefer_engine and ("osnet" in self.model_name or self.model_name in ("default", "reid", "osnet_x0_25", "osnet_x1_0")):
+            try:
+                from pathlib import Path
+                from src.inference.tensorrt_engine import TensorRTInferenceSession
+
+                norm_name = "osnet_x1_0" if "x1_0" in self.model_name else "osnet_x0_25"
+                engine_path = Path("models") / f"{norm_name}.engine"
+                onnx_path = Path("models") / f"{norm_name}.onnx"
+
+                candidate_path = None
+                if engine_path.is_file():
+                    candidate_path = str(engine_path)
+                elif onnx_path.is_file():
+                    candidate_path = str(onnx_path)
+
+                if candidate_path:
+                    logger.info(f"Loading accelerated ReID session from {candidate_path}...")
+                    self._trt_session = TensorRTInferenceSession(candidate_path)
+                    self.active_backend = self._trt_session.active_backend
+                    self.feature_dim = 512
+                    logger.info(f"ReID model '{norm_name}' loaded via {self.active_backend} (dim={self.feature_dim}).")
+                    return
+            except Exception as e:
+                logger.warning(f"Could not load accelerated ReID session ({e}). Falling back to standard PyTorch.")
+                self._trt_session = None
+
         try:
             import torch
             self._device = torch.device(self.device_str)
@@ -53,16 +83,19 @@ class PyTorchReIDExtractor(BaseReID):
                 from src.reid.backbones.osnet import build_osnet
                 self._model = build_osnet(self.model_name if "x1_0" in self.model_name else "osnet_x0_25", pretrained=True).to(self._device).eval()
                 self.feature_dim = 512
+                self.active_backend = f"PyTorch ({self._device})"
             elif "mobilenet" in self.model_name:
                 import torchvision.models as models
                 backbone = models.mobilenet_v3_small(weights=models.MobileNet_V3_Small_Weights.DEFAULT)
                 backbone.classifier = torch.nn.Sequential(torch.nn.Identity())
                 self._model = backbone.to(self._device).eval()
                 self.feature_dim = 576
+                self.active_backend = f"PyTorch ({self._device})"
             else:
                 from src.reid.backbones.osnet import build_osnet
                 self._model = build_osnet("osnet_x0_25", pretrained=True).to(self._device).eval()
                 self.feature_dim = 512
+                self.active_backend = f"PyTorch ({self._device})"
 
             logger.info(f"ReID model '{self.model_name}' (dim={self.feature_dim}) initialized successfully on {self._device}.")
         except Exception as e:
@@ -115,6 +148,10 @@ class PyTorchReIDExtractor(BaseReID):
         """Runs forward pass through the primary model to extract a single L2-normalized vector."""
         if crop is None or crop.size == 0 or cv2 is None:
             return np.zeros(self.feature_dim, dtype=np.float32)
+
+        if model_override is None and self._trt_session is not None:
+            embs = self.extract_batch([crop])
+            return embs[0].vector if embs else np.zeros(self.feature_dim, dtype=np.float32)
 
         model = model_override or self._model
         if model is None:
@@ -209,6 +246,7 @@ class PyTorchReIDExtractor(BaseReID):
     def extract_batch(self, crops: List[np.ndarray]) -> List[Embedding]:
         """
         Fast GPU batched feature extraction for multiple candidate crops in a single tensor forward pass.
+        Supports accelerated TensorRT/ONNX Runtime inference with seamless PyTorch fallback.
         """
         if not crops:
             return []
@@ -220,41 +258,56 @@ class PyTorchReIDExtractor(BaseReID):
             crop_type="full",
         )
 
-        if self._model is not None:
+        valid_preps = []
+        indices = []
+        for i, crop in enumerate(crops):
+            if crop is not None and crop.size > 0:
+                p = self._preprocess(crop)
+                if p is not None:
+                    valid_preps.append(p)
+                    indices.append(i)
+
+        if not valid_preps:
+            return [zero_emb() for _ in crops]
+
+        feats = None
+
+        # 1. Accelerated Engine Path (TensorRT / ONNX Runtime CUDA)
+        if self._trt_session is not None:
+            try:
+                batch_arr = np.stack(valid_preps).astype(np.float32)
+                feats = self._trt_session.run(batch_arr)
+            except Exception as e:
+                logger.warning(f"Error in accelerated ReID batch inference ({e}). Falling back to PyTorch.")
+                feats = None
+
+        # 2. PyTorch Fallback Path
+        if feats is None and self._model is not None:
             try:
                 import torch
-
-                valid_preps = []
-                indices = []
-                for i, crop in enumerate(crops):
-                    if crop is not None and crop.size > 0:
-                        p = self._preprocess(crop)
-                        if p is not None:
-                            valid_preps.append(p)
-                            indices.append(i)
-
-                if valid_preps:
-                    batch_tensor = torch.from_numpy(np.stack(valid_preps)).to(self._device)
-                    with torch.inference_mode():
-                        feats = self._model(batch_tensor).cpu().numpy().astype(np.float32)
-
-                    if len(feats.shape) > 2:
-                        feats = feats.reshape(feats.shape[0], -1)
-
-                    embeddings: List[Embedding] = [zero_emb() for _ in range(len(crops))]
-                    for idx, orig_i in enumerate(indices):
-                        feat = feats[idx]
-                        norm = float(np.linalg.norm(feat))
-                        vec = (feat / norm) if norm > 0 else feat
-                        embeddings[orig_i] = Embedding(
-                            vector=vec,
-                            model_name=self.model_name,
-                            version="2.0",
-                            crop_type="full",
-                        )
-
-                    return embeddings
+                batch_tensor = torch.from_numpy(np.stack(valid_preps)).to(self._device)
+                with torch.inference_mode():
+                    feats = self._model(batch_tensor).cpu().numpy().astype(np.float32)
             except Exception as e:
-                logger.error(f"Error in batch ReID extraction: {e}")
+                logger.error(f"Error in batch PyTorch ReID extraction: {e}")
+                return [zero_emb() for _ in crops]
 
-        return [zero_emb() for _ in crops]
+        if feats is None:
+            return [zero_emb() for _ in crops]
+
+        if len(feats.shape) > 2:
+            feats = feats.reshape(feats.shape[0], -1)
+
+        embeddings: List[Embedding] = [zero_emb() for _ in range(len(crops))]
+        for idx, orig_i in enumerate(indices):
+            feat = feats[idx]
+            norm = float(np.linalg.norm(feat))
+            vec = (feat / norm) if norm > 0 else feat
+            embeddings[orig_i] = Embedding(
+                vector=vec,
+                model_name=self.model_name,
+                version="2.0",
+                crop_type="full",
+            )
+
+        return embeddings

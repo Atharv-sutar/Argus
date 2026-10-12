@@ -63,5 +63,10 @@ def ensure_technologies(config: AppConfig) -> None:
 
     # 4. Vector Database Dependencies
     _ensure_package("faiss-cpu")
+
+    # 5. Accelerated Inference Dependencies
+    engine_type = getattr(config.inference, "engine_type", "auto").lower()
+    if engine_type in ("tensorrt", "onnx", "auto"):
+        _ensure_package("onnx")
         
     logger.info("Dynamic dependencies verified.")

@@ -7,6 +7,8 @@ camera:
 inference:
   device: auto
   half_precision: false
+  engine_type: auto
+  engine_cache_dir: models/trt_cache
 detection:
   model_name: yolo11n.pt
   confidence_threshold: 0.4

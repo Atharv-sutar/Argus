@@ -40,12 +40,27 @@ class YOLODetector(BaseDetector):
     def _load_model(self) -> None:
         try:
             from ultralytics import YOLO
-            logger.info(f"Loading YOLO model '{self.model_name}' on device '{self.device}'...")
-            self._model = YOLO(self.model_name)
-            # Move model to resolved device
-            if hasattr(self._model, "to"):
+            from pathlib import Path
+            from src.inference.tensorrt_engine import setup_cuda_dll_path
+            setup_cuda_dll_path()
+
+            model_to_load = self.model_name
+            # If using GPU, prioritize compiled TensorRT engine or ONNX model if present
+            if "cuda" in self.device:
+                engine_cand = Path(self.model_name).with_suffix(".engine")
+                onnx_cand = Path(self.model_name).with_suffix(".onnx")
+                if engine_cand.is_file():
+                    model_to_load = str(engine_cand)
+                elif onnx_cand.is_file():
+                    model_to_load = str(onnx_cand)
+
+            logger.info(f"Loading YOLO model '{model_to_load}' on device '{self.device}'...")
+            self.active_model_path = str(model_to_load)
+            self._model = YOLO(model_to_load, task="detect")
+            # Move model to resolved device if PyTorch backend
+            if hasattr(self._model, "to") and not str(model_to_load).endswith((".engine", ".onnx")):
                 self._model.to(self.device)
-            logger.info("YOLO model loaded successfully.")
+            logger.info(f"YOLO model '{model_to_load}' loaded successfully.")
         except ImportError as e:
             logger.error("ultralytics package not installed. YOLODetector cannot run.")
             raise RuntimeError("ultralytics package not installed") from e
