@@ -34,10 +34,15 @@ class DetectionConfig:
 
 @dataclass
 class TrackingConfig:
+    tracker_type: str = "botsort"
     track_thresh: float = 0.4
     match_thresh: float = 0.8
     track_buffer: int = 30
     min_box_area: float = 100.0
+    gmc_method: str = "sparseOptFlow"
+    reid_weight: float = 0.5
+    appearance_thresh: float = 0.35
+    ema_alpha: float = 0.9
 
 
 @dataclass

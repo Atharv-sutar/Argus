@@ -15,10 +15,15 @@ detection:
   - 0
   image_size: 640
 tracking:
+  tracker_type: botsort
   track_thresh: 0.4
   match_thresh: 0.8
   track_buffer: 30
   min_box_area: 100.0
+  gmc_method: sparseOptFlow
+  reid_weight: 0.5
+  appearance_thresh: 0.35
+  ema_alpha: 0.9
 reid:
   model_name: osnet_x1_0
   match_threshold: 0.75

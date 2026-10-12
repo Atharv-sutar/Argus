@@ -56,7 +56,12 @@ def ensure_technologies(config: AppConfig) -> None:
         _ensure_package("torch", "2.0.0")
         _ensure_package("torchvision", "0.15.0")
         
-    # 3. Vector Database Dependencies
+    # 3. Tracker Dependencies
+    tracker_type = getattr(config.tracking, "tracker_type", "botsort").lower()
+    if "bot" in tracker_type or "sort" in tracker_type or "byte" in tracker_type:
+        _ensure_package("scipy")
+
+    # 4. Vector Database Dependencies
     _ensure_package("faiss-cpu")
         
     logger.info("Dynamic dependencies verified.")

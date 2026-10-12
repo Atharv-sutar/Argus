@@ -36,7 +36,7 @@ from src.identity.manager import IdentityManager
 from src.reid.extractor import PyTorchReIDExtractor
 from src.reid.quality import ReIDCropQuality
 from src.target.manager import TargetManager
-from src.tracking.byte_tracker import ByteTracker
+from src.tracking import ByteTracker, BoTSORTTracker
 from src.visualization.annotator import FrameAnnotator
 from src.core.undo_stack import UndoStack
 from src.forensic.clip_recorder import ForensicClipRecorder
@@ -200,11 +200,14 @@ class MultiCameraPipeline:
         storage_str = str(self.identity_manager.vector_store) if self.identity_manager and self.identity_manager.vector_store else 'None'
         
         # 10. Log Technology Stack
+        tracker_type = getattr(config.tracking, "tracker_type", "botsort").lower()
+        tracker_name = "BoT-SORT (GMC + Kalman [xc,yc,w,h] + Hungarian)" if "bot" in tracker_type else "ByteTracker (IoU based)"
         logger.info("\n" + "="*50)
         logger.info("=== ARGUS AI TECHNOLOGY STACK INITIALIZED ===")
         logger.info(f"Detector: {config.detection.model_name}")
-        logger.info(f"Tracker:  ByteTracker (IoU based)")
-        logger.info(f"ReID:     {self.reid_extractor.model_name if self.reid_extractor else 'None'}")
+        logger.info(f"Tracker:  {tracker_name}")
+        reid_name = getattr(self.reid_extractor, 'model_name', type(self.reid_extractor).__name__) if self.reid_extractor else 'None'
+        logger.info(f"ReID:     {reid_name}")
         logger.info(f"Storage:  {storage_str}")
         logger.info("="*50 + "\n")
 
@@ -215,6 +218,11 @@ class MultiCameraPipeline:
     def is_running(self) -> bool:
         """Returns True if the pipeline is active and not stopped."""
         return self._is_running
+
+    @property
+    def _pipelines(self) -> Dict[str, CameraWorker]:
+        """Backward-compatible alias for _workers."""
+        return self._workers
 
     @property
     def identity(self) -> Optional[IdentityManager]:
@@ -264,13 +272,26 @@ class MultiCameraPipeline:
         return self._shared_detector
 
     def _default_tracker_factory(self) -> BaseTracker:
+        tracker_type = getattr(self.config.tracking, "tracker_type", "botsort").lower()
+        if "bot" in tracker_type:
+            return BoTSORTTracker(
+                track_thresh=self.config.tracking.track_thresh,
+                match_thresh=self.config.tracking.match_thresh,
+                track_buffer=self.config.tracking.track_buffer,
+                min_box_area=self.config.tracking.min_box_area,
+                gmc_method=getattr(self.config.tracking, "gmc_method", "sparseOptFlow"),
+                reid_extractor=self.reid_extractor,
+                reid_weight=getattr(self.config.tracking, "reid_weight", 0.5),
+                appearance_thresh=getattr(self.config.tracking, "appearance_thresh", 0.35),
+                ema_alpha=getattr(self.config.tracking, "ema_alpha", 0.9),
+            )
         return ByteTracker(
             track_thresh=self.config.tracking.track_thresh,
             match_thresh=self.config.tracking.match_thresh,
             track_buffer=self.config.tracking.track_buffer,
             min_box_area=self.config.tracking.min_box_area,
             reid_extractor=self.reid_extractor,
-            reid_weight=0.5,
+            reid_weight=getattr(self.config.tracking, "reid_weight", 0.5),
         )
 
     def _default_camera_factory(self, node_cfg: CameraNodeConfig) -> BaseCamera:
@@ -344,6 +365,10 @@ class MultiCameraPipeline:
                     box_thickness=self.config.visualization.box_thickness,
                     font_scale=self.config.visualization.font_scale,
                 )
+
+    def _get_or_create_pipeline(self, camera_id: str) -> Optional[CameraWorker]:
+        """Backward-compatible alias for _get_or_create_worker."""
+        return self._get_or_create_worker(camera_id)
 
     def _get_or_create_worker(self, camera_id: str) -> Optional[CameraWorker]:
         """Lazy-instantiates CameraWorker for a given camera node."""
@@ -888,7 +913,8 @@ class MultiCameraPipeline:
 
         # Execute Phase 4: Batched ReID Extraction
         target = self.target_manager.target
-        should_reid = (self._frame_count % self.reid_interval == 0)
+        target_lost_or_uncertain = (target is not None and target.state in (TargetState.LOST, TargetState.UNCERTAIN))
+        should_reid = (self.reid_interval <= 1) or (self._frame_count % self.reid_interval == 0) or target_lost_or_uncertain
         
         precomputed_reid_candidates: Dict[str, List[Tuple[Track, np.ndarray, Embedding]]] = {}
         
