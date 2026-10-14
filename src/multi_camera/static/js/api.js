@@ -133,6 +133,22 @@ const API = {
     }
   },
 
+  async loadVideoDirectory(directoryPath, transitTimeS = 5.0) {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/cameras/load_directory`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ directory: directoryPath, transit_time_s: transitTimeS }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Failed to load video directory (${res.status})`);
+      return data;
+    } catch (err) {
+      console.error('[API] loadVideoDirectory error:', err);
+      throw err;
+    }
+  },
+
   async setActiveCamera(cameraId) {
     try {
       const res = await fetch(`${this.baseUrl}/api/camera/select_active`, {

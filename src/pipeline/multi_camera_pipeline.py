@@ -1916,24 +1916,30 @@ class MultiCameraPipeline:
         cards = []
         progress = self.search_manager.get_progress()
         searching_cams = set(progress.active_cameras) if self.search_manager.is_searching else set()
-        valid_graph_ids = set(self.graph.all_camera_ids())
+        valid_graph_ids = sorted(list(self.graph.all_camera_ids()))
 
         for cid in valid_graph_ids:
             node = self._nodes.get(cid)
-            if not node:
+            cfg = node.config if node else self.graph.get_node(cid)
+            if not cfg:
                 continue
-            cfg = node.config
             is_active = (cid == self._active_camera_id)
             is_searching = (cid in searching_cams)
             
-            if is_active and node.is_online:
+            if is_active and node and node.is_online:
                 status_str = "ACTIVE"
             elif is_searching:
                 status_str = f"SEARCHING (R={self.search_manager.get_progress().search_radius})"
-            elif node.is_online:
+            elif node and node.is_online:
+                status_str = "STANDBY"
+            elif cfg.enabled:
                 status_str = "STANDBY"
             else:
                 status_str = "OFFLINE"
+
+            has_frame = (node.last_frame is not None) if node else False
+            if not has_frame:
+                has_frame = (cid in self._latest_jpegs)
 
             cards.append({
                 "camera_id": cid,
@@ -1944,10 +1950,10 @@ class MultiCameraPipeline:
                 "is_active": is_active,
                 "is_searching": is_searching,
                 "status": status_str,
-                "fps": round(node.fps, 1),
+                "fps": round(node.fps, 1) if node else 0.0,
                 "floor": cfg.floor,
                 "zone": cfg.zone,
-                "has_frame": (node.last_frame is not None),
+                "has_frame": has_frame,
             })
         return cards
 

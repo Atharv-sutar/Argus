@@ -250,14 +250,81 @@ class SurveillanceApp {
 
 
     // Grid Layout Buttons
-    document.querySelectorAll('.grid-btn').forEach((btn) => {
+    document.querySelectorAll('.grid-btn[data-layout]').forEach((btn) => {
       btn.addEventListener('click', (e) => {
-        document.querySelectorAll('.grid-btn').forEach((b) => b.classList.remove('active'));
+        document.querySelectorAll('.grid-btn[data-layout]').forEach((b) => b.classList.remove('active'));
         btn.classList.add('active');
         const layout = btn.dataset.layout;
         this.matrixGrid.className = `camera-matrix-grid layout-${layout}`;
       });
     });
+
+    // Video Directory Loader Modal controls
+    const btnLoadVideos = document.getElementById('btn-load-videos');
+    const modalVideoDir = document.getElementById('video-dir-modal');
+    const btnVideoDirClose = document.getElementById('btn-video-dir-close');
+    const btnVideoDirCancel = document.getElementById('btn-video-dir-cancel');
+    const btnVideoDirSubmit = document.getElementById('btn-video-dir-submit');
+    const inputVideoDirPath = document.getElementById('video-dir-path-input');
+    const inputVideoDirTransit = document.getElementById('video-dir-transit-input');
+
+    const openVideoDirModal = () => {
+      if (modalVideoDir) {
+        modalVideoDir.style.display = 'flex';
+        if (inputVideoDirPath) inputVideoDirPath.focus();
+      }
+    };
+
+    const closeVideoDirModal = () => {
+      if (modalVideoDir) {
+        modalVideoDir.style.display = 'none';
+      }
+    };
+
+    if (btnLoadVideos) btnLoadVideos.addEventListener('click', openVideoDirModal);
+    if (btnVideoDirClose) btnVideoDirClose.addEventListener('click', closeVideoDirModal);
+    if (btnVideoDirCancel) btnVideoDirCancel.addEventListener('click', closeVideoDirModal);
+
+    if (btnVideoDirSubmit) {
+      btnVideoDirSubmit.addEventListener('click', async () => {
+        const pathVal = inputVideoDirPath ? inputVideoDirPath.value.trim() : '';
+        const transitVal = inputVideoDirTransit ? parseFloat(inputVideoDirTransit.value) || 5.0 : 5.0;
+        if (!pathVal) {
+          this.showToast('Please enter a directory path', 'error');
+          return;
+        }
+
+        btnVideoDirSubmit.disabled = true;
+        btnVideoDirSubmit.textContent = 'Loading...';
+        this.showToast(`Scanning and loading video directory '${pathVal}'...`, 'info');
+
+        try {
+          const res = await API.loadVideoDirectory(pathVal, transitVal);
+          if (res && res.success) {
+            closeVideoDirModal();
+            this.showToast(`Loaded ${res.count} camera video(s)! Updating surveillance grid...`, 'success');
+
+            // Clean up existing img elements before reload
+            document.querySelectorAll('.camera-feed-img').forEach(img => {
+              img.onerror = null;
+              img.src = '';
+            });
+
+            await this.loadLiveMatrix();
+            if (this.currentMode === 'topology') {
+              await this.loadGraphTopology();
+            }
+          } else {
+            throw new Error((res && res.error) || 'Failed to load video directory');
+          }
+        } catch (err) {
+          this.showToast(`Directory load failed: ${err.message}`, 'error');
+        } finally {
+          btnVideoDirSubmit.disabled = false;
+          btnVideoDirSubmit.textContent = 'Load Directory';
+        }
+      });
+    }
 
     // Target Action Buttons (Header + Card)
     const addSampleFn = async (e) => {
@@ -1033,8 +1100,10 @@ class SurveillanceApp {
         badgeText = '🟡 CONNECTING';
       }
 
-      const streamUrl = `${API.getCameraStreamUrl(cam.camera_id)}?t=${Date.now()}`;
-      const fallbackUrl = API.getCameraFrameUrl(cam.camera_id);
+      const useMjpegStream = (this.cameras.length <= 4) || isAct || isSearch;
+      const feedUrl = useMjpegStream
+        ? `${API.getCameraStreamUrl(cam.camera_id)}?t=${Date.now()}`
+        : `${API.getCameraFrameUrl(cam.camera_id)}?t=${Date.now()}`;
 
       const tile = document.createElement('div');
       tile.className = tileClass;
@@ -1053,7 +1122,7 @@ class SurveillanceApp {
         <div class="camera-tile-video" id="stage-${cam.camera_id}">
           <img class="camera-feed-img" 
                id="img-${cam.camera_id}"
-               src="${streamUrl}" 
+               src="${feedUrl}" 
                alt="${cam.name}">
           
           <div class="camera-tile-overlay">
@@ -1084,12 +1153,19 @@ class SurveillanceApp {
       });
 
       // Auto-reconnect stream if disconnected
+      let reconnectTimer = null;
       img.onerror = () => {
-        setTimeout(() => {
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(() => {
           if (tile.isConnected) {
-            img.src = `${API.baseUrl}/api/camera/${encodeURIComponent(cam.camera_id)}/stream?t=${Date.now()}`;
+            const isCurrentlyActive = (cam.camera_id === this.activeCameraId);
+            const isCurrentlySearching = cam.is_searching;
+            const retryMjpeg = (this.cameras.length <= 4) || isCurrentlyActive || isCurrentlySearching;
+            img.src = retryMjpeg
+              ? `${API.baseUrl}/api/camera/${encodeURIComponent(cam.camera_id)}/stream?t=${Date.now()}`
+              : `${API.baseUrl}/api/camera/${encodeURIComponent(cam.camera_id)}/frame.jpg?t=${Date.now()}`;
           }
-        }, 1000);
+        }, 2000);
       };
 
       // Click on tile video stage: Set active camera + select target at coordinates
@@ -1221,6 +1297,16 @@ class SurveillanceApp {
         } else {
           badge.className = 'tile-cam-badge badge-standby';
           badge.textContent = 'STANDBY';
+        }
+      }
+
+      // Upgrade active camera to live MJPEG stream if it was using snapshot fallback
+      const img = document.getElementById(`img-${cid}`);
+      if (img) {
+        if (isAct && !img.src.includes('/stream')) {
+          img.src = `${API.baseUrl}/api/camera/${encodeURIComponent(cid)}/stream?t=${Date.now()}`;
+        } else if (!isAct && this.cameras && this.cameras.length > 4 && img.src.includes('/stream')) {
+          img.src = `${API.baseUrl}/api/camera/${encodeURIComponent(cid)}/frame.jpg?t=${Date.now()}`;
         }
       }
     });

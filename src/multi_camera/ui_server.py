@@ -32,6 +32,7 @@ from src.core.multi_camera_types import (
     SourceType,
 )
 from src.multi_camera.camera_graph import CameraGraph
+from src.camera.directory_loader import auto_load_video_directory, is_video_directory
 from src.playback.annotations import Annotation, AnnotationStore
 from src.case.manager import CaseManager
 from src.audit.logger import AuditLogger, AuditEventType
@@ -318,34 +319,43 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                         while not _SHUTDOWN_EVENT.is_set() and (self.runtime_pipeline is None or getattr(self.runtime_pipeline, "is_running", True)):
                             frame_seq = None
                             frame_bytes = None
+                            is_placeholder = False
+
                             if self.runtime_pipeline is not None:
                                 frame_seq = getattr(self.runtime_pipeline, "get_camera_frame_seq", lambda c: None)(cam_id)
                             is_stale = (time.time() - last_changed_time > 2.0)
                             
                             # Skip encoding and streaming if the frame hasn't changed and is not stale
                             if frame_seq is not None and last_frame_id == frame_seq and not is_stale:
-                                time.sleep(0.01)
+                                time.sleep(0.025)
                                 continue
 
                             if self.runtime_pipeline is not None:
                                 frame_bytes = self.runtime_pipeline.get_camera_frame_jpeg(cam_id, quality=75)
 
                             if frame_bytes is None:
+                                is_placeholder = True
+                                # If placeholder already sent recently, don't spam the socket
+                                if last_frame_id == "placeholder" and not is_stale:
+                                    time.sleep(0.5)
+                                    continue
+
                                 if cv2 is not None and np is not None:
                                     blank = np.zeros((360, 640, 3), dtype=np.uint8)
-                                    cv2.putText(blank, f"CONNECTING [{cam_id}]...", (180, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 242, 254), 1, cv2.LINE_AA)
+                                    blank[:] = (18, 22, 32)
+                                    cv2.rectangle(blank, (0, 0), (639, 359), (45, 55, 75), 1)
+                                    cv2.putText(blank, f"STANDBY [{cam_id}]", (190, 175), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 242, 254), 1, cv2.LINE_AA)
+                                    cv2.putText(blank, "Awaiting signal / Target tracking", (170, 205), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (130, 145, 165), 1, cv2.LINE_AA)
                                     _, buf = cv2.imencode(".jpg", blank, [cv2.IMWRITE_JPEG_QUALITY, 50])
                                     frame_bytes = buf.tobytes()
 
                             if frame_bytes is not None:
                                 # Staleness detection: using sequence number or length fallback
-                                current_id = frame_seq if frame_seq is not None else len(frame_bytes)
+                                current_id = frame_seq if frame_seq is not None else ("placeholder" if is_placeholder else len(frame_bytes))
                                 if current_id != last_frame_id:
                                     last_frame_id = current_id
                                     last_changed_time = time.time()
                                 elif frame_seq is not None and (time.time() - last_changed_time > 5.0):
-                                    # Render STALE overlay only if we actually had a stream
-                                    # AND pipeline is not running or genuinely stalling for > 5s
                                     pipeline_running = getattr(self.runtime_pipeline, "is_running", True) if self.runtime_pipeline else True
                                     if cv2 is not None and np is not None and not pipeline_running:
                                         blank = np.zeros((360, 640, 3), dtype=np.uint8)
@@ -361,8 +371,8 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                                 self.wfile.write(header + frame_bytes + b"\r\n")
                                 self.wfile.flush()
                             
-                            # Minimal sleep to avoid CPU spinning if frame_seq isn't implemented
-                            time.sleep(0.005)
+                            # Throttle: 30-40 FPS max for active stream, 2 FPS for idle/placeholder
+                            time.sleep(0.5 if is_placeholder else 0.02)
 
                     except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError, OSError):
                         pass
@@ -1163,6 +1173,36 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             else:
                 self._send_json({"success": False, "error": "Runtime pipeline not active"}, status=HTTPStatus.BAD_REQUEST)
             return
+        elif path == "/api/cameras/load_directory":
+            dir_path = payload.get("directory") or payload.get("path")
+            transit_s = float(payload.get("transit_time_s", 5.0))
+            if not dir_path:
+                self._send_json({"success": False, "error": "Missing 'directory' parameter in payload"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                new_graph = auto_load_video_directory(dir_path, default_transit_time_s=transit_s)
+                with self.graph_lock:
+                    new_graph.save(self.graph_file)
+                if self.runtime_pipeline is not None:
+                    self.runtime_pipeline.update_graph(new_graph)
+                    cams = sorted(list(new_graph.all_camera_ids()))
+                    if cams:
+                        self.runtime_pipeline.set_active_camera(cams[0])
+                all_cams = sorted(list(new_graph.all_camera_ids()))
+                self._audit(AuditEventType.CONFIG_CHANGE, f"Loaded video directory: {dir_path} ({len(all_cams)} cameras)")
+                logger.info(f"[SERVER] Auto-loaded video directory '{dir_path}' with {len(all_cams)} cameras: {all_cams}")
+                self._send_json({
+                    "success": True,
+                    "message": f"Successfully loaded {len(all_cams)} camera video(s)",
+                    "count": len(all_cams),
+                    "cameras": all_cams,
+                    "active_camera": self.runtime_pipeline.active_camera_id if self.runtime_pipeline else (all_cams[0] if all_cams else None),
+                })
+            except Exception as e:
+                logger.exception(f"[SERVER] Error loading video directory '{dir_path}': {e}")
+                self._send_json({"success": False, "error": str(e)}, status=HTTPStatus.BAD_REQUEST)
+            return
+
         elif path == "/api/system/switch_source":
             if self.runtime_pipeline is None:
                 self._send_json({"success": False, "error": "Runtime pipeline not active"}, status=HTTPStatus.BAD_REQUEST)
@@ -1184,6 +1224,18 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 source_type = "video_file" if not str(file_path).startswith(("rtsp://", "http://")) else "rtsp"
             
             try:
+                if mode == "video" and Path(file_path).is_dir():
+                    new_graph = auto_load_video_directory(file_path)
+                    with self.graph_lock:
+                        new_graph.save(self.graph_file)
+                    self.runtime_pipeline.update_graph(new_graph)
+                    all_cams = sorted(list(new_graph.all_camera_ids()))
+                    if all_cams:
+                        self.runtime_pipeline.set_active_camera(all_cams[0])
+                    logger.info(f"[SERVER] Switched system to video directory {file_path} ({len(all_cams)} cameras)")
+                    self._send_json({"success": True, "mode": mode, "updated": all_cams, "count": len(all_cams)})
+                    return
+
                 with self.graph_lock:
                     if not self.graph_file.is_file():
                         self._send_json({"success": False, "error": "No graph file found"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
@@ -1192,31 +1244,16 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     graph_dict = CameraGraph.load(self.graph_file).to_dict()
                     updated_cameras = []
                     
-                    if mode == "video" and Path(file_path).is_dir():
-                        dir_path = Path(file_path)
-                        for cam in graph_dict.get("cameras", []):
-                            cid = cam.get("camera_id")
-                            # Try to find a matching video file for this camera
-                            matching_files = list(dir_path.glob(f"{cid}.*"))
-                            if matching_files:
-                                cam["source"] = str(matching_files[0])
-                                cam["source_type"] = "video_file"
-                                updated_cameras.append(cid)
-                                
-                        if not updated_cameras:
-                            self._send_json({"success": False, "error": f"No video files named cam_*.mp4 found in directory {file_path}"}, status=HTTPStatus.BAD_REQUEST)
-                            return
-                    else:
-                        for cam in graph_dict.get("cameras", []):
-                            if cam.get("camera_id") == cam_id:
-                                cam["source"] = source_val
-                                cam["source_type"] = source_type
-                                updated_cameras.append(cam_id)
-                                break
-                        
-                        if not updated_cameras:
-                            self._send_json({"success": False, "error": f"Camera '{cam_id}' not found in graph"}, status=HTTPStatus.BAD_REQUEST)
-                            return
+                    for cam in graph_dict.get("cameras", []):
+                        if cam.get("camera_id") == cam_id:
+                            cam["source"] = source_val
+                            cam["source_type"] = source_type
+                            updated_cameras.append(cam_id)
+                            break
+                    
+                    if not updated_cameras:
+                        self._send_json({"success": False, "error": f"Camera '{cam_id}' not found in graph"}, status=HTTPStatus.BAD_REQUEST)
+                        return
                         
                     new_graph = CameraGraph.from_dict(graph_dict)
                     new_graph.save(self.graph_file)
@@ -1228,6 +1265,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 logger.exception(f"[SERVER] Failed to switch source: {e}")
                 self._send_json({"success": False, "error": str(e)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
 
         elif path == "/api/system/quit":
             logger.info(f"[SERVER] Safe shutdown requested via /api/system/quit endpoint from {self.address_string()}")

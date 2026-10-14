@@ -27,6 +27,7 @@ from src.core.config import AppConfig
 from src.core.logging_config import setup_logging
 from src.core.multi_camera_types import CameraNodeConfig, SourceType
 from src.core.types import Target, TargetState, TrackResult
+from src.camera.directory_loader import auto_load_video_directory, is_video_directory
 from src.multi_camera.camera_graph import CameraGraph
 from src.multi_camera.ui_server import is_shutdown_requested, run_ui_server
 from src.pipeline.multi_camera_pipeline import MultiCameraPipeline
@@ -165,15 +166,17 @@ def build_pipeline(
 def build_multi_camera_pipeline(
     config: AppConfig,
     graph_path: Optional[str] = None,
+    graph: Optional[CameraGraph] = None,
 ) -> MultiCameraPipeline:
     """Loads camera topology graph and constructs MultiCameraPipeline."""
-    g_path = graph_path or config.multi_camera.graph_file
-    graph = CameraGraph.load(g_path)
-    if graph.node_count() == 0:
-        logger.warning(
-            f"Camera graph at '{g_path}' has 0 cameras configured. "
-            f"Use '--map-ui' to configure cameras and connections first."
-        )
+    if graph is None:
+        g_path = graph_path or config.multi_camera.graph_file
+        graph = CameraGraph.load(g_path)
+        if graph.node_count() == 0:
+            logger.warning(
+                f"Camera graph at '{g_path}' has 0 cameras configured. "
+                f"Use '--map-ui' or '--video-dir' to configure cameras and connections."
+            )
 
     return MultiCameraPipeline(
         graph=graph,
@@ -362,6 +365,7 @@ def _render_search_grid(
 def run_multi_camera_app(
     config_path: str = "configs/default.yaml",
     graph_path: Optional[str] = None,
+    video_dir: Optional[str] = None,
     no_gui: bool = True,
     serve_ui: bool = True,
     ui_port: int = 8765,
@@ -375,11 +379,25 @@ def run_multi_camera_app(
     from src.core.dependencies import ensure_technologies
     ensure_technologies(config)
 
-    pipeline = build_multi_camera_pipeline(config, graph_path=graph_path)
+    loaded_graph = None
+    target_graph_file = graph_path or config.multi_camera.graph_file
+    if video_dir is not None:
+        logger.info(f"Auto-loading multi-camera topology from video directory: '{video_dir}'")
+        loaded_graph = auto_load_video_directory(video_dir)
+        try:
+            loaded_graph.save(target_graph_file)
+            logger.info(f"Saved auto-loaded directory graph to '{target_graph_file}'")
+        except Exception as e:
+            logger.warning(f"Could not persist auto-loaded graph to '{target_graph_file}': {e}")
+
+    pipeline = build_multi_camera_pipeline(config, graph_path=graph_path, graph=loaded_graph)
+    if loaded_graph and loaded_graph.nodes:
+        first_cam = sorted(list(loaded_graph.all_camera_ids()))[0]
+        pipeline.set_active_camera(first_cam)
 
     server = None
     if serve_ui:
-        server = run_ui_server(port=ui_port, graph_file=graph_path or config.multi_camera.graph_file, pipeline=pipeline, block=False)
+        server = run_ui_server(port=ui_port, graph_file=target_graph_file, pipeline=pipeline, block=False)
         logger.info(f"Surveillance Operations Center web UI available at http://127.0.0.1:{ui_port}")
         _launch_browser_when_ready(ui_port)
 
@@ -802,6 +820,7 @@ def main() -> None:
     parser.add_argument("--map-ui", action="store_true", help="Launch interactive web camera mapping UI")
     parser.add_argument("--ui-port", type=int, default=8765, help="Port for the surveillance web UI")
     parser.add_argument("--source", type=str, default=None, help="Camera index, video file, or 'synthetic'")
+    parser.add_argument("--video-dir", type=str, default=None, help="Directory containing video files to auto-load as cameras (e.g. 'test_footage/EPFL campus')")
     parser.add_argument("--device", type=str, default=None, help="Inference device ('auto', 'cuda', 'cpu')")
     parser.add_argument("--target-id", type=int, default=None, help="Pre-select specific Track ID as target")
     parser.add_argument("--legacy-desktop", action="store_true", help="[Deprecated / Debug Only] Launch legacy OpenCV desktop window")
@@ -827,6 +846,7 @@ def main() -> None:
         run_multi_camera_app(
             config_path=args.config,
             graph_path=args.graph,
+            video_dir=args.video_dir,
             no_gui=True,
             serve_ui=True,
             ui_port=args.ui_port,
