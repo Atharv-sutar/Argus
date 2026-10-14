@@ -472,6 +472,87 @@ const API = {
     }
   },
 
+  async playbackPlay() {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/playback/play`, { method: 'POST' });
+      return await res.json();
+    } catch (err) {
+      console.error('[API] playbackPlay error:', err);
+      throw err;
+    }
+  },
+
+  async playbackPause() {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/playback/pause`, { method: 'POST' });
+      return await res.json();
+    } catch (err) {
+      console.error('[API] playbackPause error:', err);
+      throw err;
+    }
+  },
+
+  async playbackToggle() {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/playback/toggle`, { method: 'POST' });
+      return await res.json();
+    } catch (err) {
+      console.error('[API] playbackToggle error:', err);
+      throw err;
+    }
+  },
+
+  async playbackSpeed(speed = 1.0) {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/playback/speed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ speed }),
+      });
+      return await res.json();
+    } catch (err) {
+      console.error('[API] playbackSpeed error:', err);
+      throw err;
+    }
+  },
+
+  async playbackSeek(timeMs = null, ratio = null) {
+    try {
+      const payload = {};
+      if (timeMs !== null) payload.time_ms = timeMs;
+      if (ratio !== null) payload.ratio = ratio;
+      const res = await fetch(`${this.baseUrl}/api/playback/seek`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      return await res.json();
+    } catch (err) {
+      console.error('[API] playbackSeek error:', err);
+      throw err;
+    }
+  },
+
+  async undo() {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/undo`, { method: 'POST' });
+      return await res.json();
+    } catch (err) {
+      console.error('[API] undo error:', err);
+      throw err;
+    }
+  },
+
+  async redo() {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/redo`, { method: 'POST' });
+      return await res.json();
+    } catch (err) {
+      console.error('[API] redo error:', err);
+      throw err;
+    }
+  },
+
   async switchSource(cameraId, mode, sourceVal = null) {
     try {
       const res = await fetch(`${this.baseUrl}/api/system/switch_source`, {

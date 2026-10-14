@@ -71,10 +71,23 @@ def is_video_directory(dir_path: Union[str, Path]) -> bool:
 def discover_video_files(dir_path: Union[str, Path]) -> List[Path]:
     """
     Scans a directory for supported video files, returning them naturally sorted.
+    Handles quotes, relative paths, single video file inputs, and nested subdirectories.
     """
+    if isinstance(dir_path, str):
+        dir_path = dir_path.strip().strip('"').strip("'")
     p = Path(dir_path)
+    if not p.is_absolute():
+        p = (Path.cwd() / p).resolve()
+
     if not p.exists():
         raise FileNotFoundError(f"Directory not found: '{dir_path}'")
+
+    if p.is_file():
+        if p.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS:
+            p = p.parent
+        else:
+            raise ValueError(f"Path is not a valid video file or directory: '{dir_path}'")
+
     if not p.is_dir():
         raise ValueError(f"Path is not a directory: '{dir_path}'")
 
@@ -83,6 +96,15 @@ def discover_video_files(dir_path: Union[str, Path]) -> List[Path]:
         for entry in p.iterdir()
         if entry.is_file() and entry.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
     ]
+
+    # If no video files found in top-level directory, inspect immediate subdirectories
+    if not video_files:
+        for sub in p.iterdir():
+            if sub.is_dir():
+                for entry in sub.iterdir():
+                    if entry.is_file() and entry.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS:
+                        video_files.append(entry)
+
     video_files.sort(key=_natural_sort_key)
     return video_files
 

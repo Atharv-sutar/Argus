@@ -122,21 +122,20 @@ class OpenCVCamera(BaseCamera):
             with self._cap_lock:
                 if not self._running or self._is_closed:
                     break
-                if self._cap is None or not self._cap.isOpened():
-                    cap_is_open = False
-                else:
-                    cap_is_open = True
-                    try:
-                        success, frame = self._cap.read()
-                    except Exception as e:
-                        logger.debug(f"Exception in _capture_loop read for {self.source}: {e}")
-                        success, frame = False, None
+                cap = self._cap
+                cap_is_open = (cap is not None and cap.isOpened())
 
             if not cap_is_open:
                 time.sleep(0.1)
                 if self._running and not self._is_closed:
                     self._reopen_stream()
                 continue
+
+            try:
+                success, frame = cap.read()
+            except Exception as e:
+                logger.debug(f"Exception in _capture_loop read for {self.source}: {e}")
+                success, frame = False, None
 
             if not self._running or self._is_closed:
                 break

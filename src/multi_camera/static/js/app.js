@@ -407,6 +407,135 @@ class SurveillanceApp {
     document.getElementById('btn-clear-target-global').addEventListener('click', clearTargetFn);
     document.getElementById('btn-card-clear').addEventListener('click', clearTargetFn);
 
+    // Undo / Redo Actions
+    const undoFn = async () => {
+      try {
+        const res = await API.undo();
+        if (res && res.success) {
+          this.showToast('Reverted last target/gallery action', 'info');
+          await this.refreshGallery();
+          await this.refreshStatus();
+        } else {
+          this.showToast(res && res.error ? res.error : 'Nothing to undo', 'info');
+        }
+      } catch (err) {
+        this.showToast(`Undo error: ${err.message}`, 'error');
+      }
+    };
+    this.undoFn = undoFn;
+
+    const redoFn = async () => {
+      try {
+        const res = await API.redo();
+        if (res && res.success) {
+          this.showToast('Redid last target/gallery action', 'info');
+          await this.refreshGallery();
+          await this.refreshStatus();
+        } else {
+          this.showToast(res && res.error ? res.error : 'Nothing to redo', 'info');
+        }
+      } catch (err) {
+        this.showToast(`Redo error: ${err.message}`, 'error');
+      }
+    };
+    this.redoFn = redoFn;
+
+    document.getElementById('btn-undo-global')?.addEventListener('click', undoFn);
+    document.getElementById('btn-redo-global')?.addEventListener('click', redoFn);
+
+    // Playback Toolbar Controls
+    const btnPlayPause = document.getElementById('btn-play-pause');
+    if (btnPlayPause) {
+      btnPlayPause.addEventListener('click', async () => {
+        try {
+          const res = await API.playbackToggle();
+          if (res && res.success) {
+            btnPlayPause.textContent = res.is_playing ? 'Pause' : 'Play';
+          }
+        } catch (e) {
+          this.showToast(`Playback error: ${e.message}`, 'error');
+        }
+      });
+    }
+
+    const btnSpeedUp = document.getElementById('btn-speed-up');
+    const speeds = [1.0, 2.0, 4.0, 0.5];
+    let speedIdx = 0;
+    if (btnSpeedUp) {
+      btnSpeedUp.addEventListener('click', async () => {
+        speedIdx = (speedIdx + 1) % speeds.length;
+        const nextSpeed = speeds[speedIdx];
+        try {
+          const res = await API.playbackSpeed(nextSpeed);
+          if (res && res.success) {
+            btnSpeedUp.textContent = `Speed: ${nextSpeed}x`;
+          }
+        } catch (e) {
+          this.showToast(`Speed error: ${e.message}`, 'error');
+        }
+      });
+    }
+
+    const scrubber = document.getElementById('playback-scrubber');
+    if (scrubber) {
+      scrubber.addEventListener('change', async (e) => {
+        const ratio = parseFloat(e.target.value) / 100.0;
+        try {
+          await API.playbackSeek(null, ratio);
+        } catch (e) {
+          this.showToast(`Seek error: ${e.message}`, 'error');
+        }
+      });
+    }
+
+    const btnFinishPlayback = document.getElementById('btn-finish-playback');
+    if (btnFinishPlayback) {
+      btnFinishPlayback.addEventListener('click', async () => {
+        try {
+          await API.playbackPause();
+          if (btnPlayPause) btnPlayPause.textContent = 'Play';
+          this.showToast('Route complete! Forensic journey clip ready for export.', 'success');
+          if (this.btnForensicExport) {
+            this.btnForensicExport.style.display = 'inline-flex';
+            this.btnForensicExport.click();
+          }
+        } catch (e) {
+          this.showToast(`Finish error: ${e.message}`, 'error');
+        }
+      });
+    }
+
+    // Fast Scan Controls
+    if (this.btnFastScan) {
+      this.btnFastScan.addEventListener('click', async () => {
+        try {
+          const res = await API.startFastScan();
+          if (res && res.success) {
+            if (this.fastScanOverlay) this.fastScanOverlay.style.display = 'flex';
+            this.showToast('Fast Scan started across video footage', 'info');
+            this.startFastScanPolling();
+          } else {
+            this.showToast(res && res.error ? res.error : 'Cannot start fast scan (no video file loaded)', 'error');
+          }
+        } catch (e) {
+          this.showToast(`Fast scan error: ${e.message}`, 'error');
+        }
+      });
+    }
+
+    if (this.btnStopFastScan) {
+      this.btnStopFastScan.addEventListener('click', async () => {
+        try {
+          await API.pauseFastScan();
+          if (this.fastScanOverlay) this.fastScanOverlay.style.display = 'none';
+          if (this.fastScanTimer) clearInterval(this.fastScanTimer);
+          this.showToast('Fast Scan paused for operator review', 'info');
+        } catch (e) {
+          this.showToast(`Pause scan error: ${e.message}`, 'error');
+        }
+      });
+    }
+
     // Refresh / Restart Feeds Button
     const refreshCamerasFn = async () => {
       const btnRefresh = document.getElementById('btn-refresh-cameras');
@@ -770,8 +899,10 @@ class SurveillanceApp {
         
         const configUpdates = {
           multi_camera: {
-            max_search_radius: parseInt(document.getElementById('set-max-radius').value),
-            total_recovery_timeout: parseInt(document.getElementById('set-recovery-timeout').value)
+            search: {
+              max_radius: parseInt(document.getElementById('set-max-radius').value),
+              total_recovery_timeout: parseFloat(document.getElementById('set-recovery-timeout').value)
+            }
           },
           reid: {
             match_threshold: parseFloat(document.getElementById('set-match-threshold').value)
@@ -851,7 +982,24 @@ class SurveillanceApp {
     window.addEventListener('keydown', (e) => {
       if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
       const key = e.key.toLowerCase();
-      if (key === 'n' && !e.ctrlKey) {
+      if ((e.ctrlKey || e.metaKey) && key === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          if (this.redoFn) this.redoFn();
+        } else {
+          if (this.undoFn) this.undoFn();
+        }
+      } else if ((e.ctrlKey || e.metaKey) && key === 'y') {
+        e.preventDefault();
+        if (this.redoFn) this.redoFn();
+      } else if (e.code === 'Space') {
+        const btnPlayPause = document.getElementById('btn-play-pause');
+        const toolbar = document.getElementById('playback-toolbar');
+        if (toolbar && toolbar.style.display !== 'none' && btnPlayPause) {
+          e.preventDefault();
+          btnPlayPause.click();
+        }
+      } else if (key === 'n' && !e.ctrlKey) {
         e.preventDefault();
         this.openAnnotationModal();
       } else if (key === 'a') {
@@ -1004,6 +1152,7 @@ class SurveillanceApp {
 
   setMode(mode) {
     this.mode = mode;
+    this.currentMode = mode;
     document.getElementById('btn-mode-matrix').classList.toggle('active', mode === 'matrix');
     document.getElementById('btn-mode-topology').classList.toggle('active', mode === 'topology');
 
@@ -1318,6 +1467,28 @@ class SurveillanceApp {
 
 
 
+  startFastScanPolling() {
+    if (this.fastScanTimer) clearInterval(this.fastScanTimer);
+    this.fastScanTimer = setInterval(async () => {
+      try {
+        const data = await API.getPlaybackStats();
+        if (data && data.success && data.stats) {
+          if (this.fsFrames) this.fsFrames.textContent = data.stats.frames_processed || 0;
+          if (this.fsAccepted) this.fsAccepted.textContent = data.stats.auto_accepted || 0;
+          if (this.fsProgressBar && data.stats.max_duration_ms > 0) {
+            const pct = Math.min(100, Math.round((data.stats.current_time_ms / data.stats.max_duration_ms) * 100));
+            this.fsProgressBar.style.width = `${pct}%`;
+          }
+          if (data.mode !== 'fast_scan' || !data.stats.is_playing) {
+            clearInterval(this.fastScanTimer);
+            this.fastScanTimer = null;
+            if (this.fastScanOverlay) this.fastScanOverlay.style.display = 'none';
+          }
+        }
+      } catch (err) {}
+    }, 500);
+  }
+
   async pollAnnotations() {
     try {
       this.annotations = await API.getAnnotations();
@@ -1460,6 +1631,26 @@ class SurveillanceApp {
       const gSize = st.gallery ? st.gallery.size : (st.gallery_size || 0);
       const gMax = st.gallery ? st.gallery.max_size : (st.gallery_max || 25);
       this.hdrGalleryStats.textContent = `${gSize} / ${gMax}`;
+      if (this.galleryCountBadge) {
+        this.galleryCountBadge.textContent = `${gSize} / ${gMax}`;
+      }
+
+      // Update playback toolbar display if video cameras exist
+      const playbackToolbar = document.getElementById('playback-toolbar');
+      if (playbackToolbar && this.cameras) {
+        const hasVideo = this.cameras.some(c => c.source_type === 'video_file' || c.source_type === 'video');
+        playbackToolbar.style.display = hasVideo ? 'flex' : 'none';
+        if (hasVideo && st.playback) {
+          const scrubber = document.getElementById('playback-scrubber');
+          if (scrubber && !this._isDraggingScrubber && st.playback.max_duration_ms > 0) {
+            scrubber.value = Math.min(100, (st.playback.current_time_ms / st.playback.max_duration_ms) * 100);
+          }
+          const btnPlayPause = document.getElementById('btn-play-pause');
+          if (btnPlayPause) {
+            btnPlayPause.textContent = st.playback.is_playing ? 'Pause' : 'Play';
+          }
+        }
+      }
 
       // Update Target Summary Card
       this.cardTargetId.textContent = st.target_track_id ? `Tracker #${st.target_track_id}` : (st.target_state !== 'UNSELECTED' ? 'TARGET_0' : 'UNSELECTED');
@@ -1578,6 +1769,31 @@ class SurveillanceApp {
      RIGHT VERTICAL TARGET GALLERY COLUMN RENDERING (REQUIREMENT #2)
      ========================================================================== */
 
+  renderGalleryCard(thumb) {
+    const isMan = thumb.is_manual;
+    const tagClass = isMan ? 'badge-manual' : 'badge-auto';
+    const tagLabel = isMan ? 'MANUAL' : 'AUTO';
+    const qualityPct = Math.round((thumb.quality_score || thumb.confidence || 0.9) * 100);
+    const imgSrc = thumb.image_b64 ? `data:image/jpeg;base64,${thumb.image_b64}` : '';
+
+    return `
+      <div class="gallery-crop-card" title="Entry: ${thumb.entry_id} | Camera: ${thumb.camera_id}">
+        <div class="crop-thumb-box">
+          ${imgSrc ? `<img src="${imgSrc}" class="crop-thumb-img" alt="Target Crop">` : '<div style="color:#64748b;font-size:10px;">No image</div>'}
+        </div>
+        <div class="crop-meta-box">
+          <div class="crop-meta-top">
+            <span class="crop-type-badge ${tagClass}">${tagLabel}</span>
+            <span class="crop-quality-text">Q: ${qualityPct}%</span>
+            <button class="crop-delete-btn" data-entry="${thumb.entry_id}" title="Remove this angle">&times;</button>
+          </div>
+          <div class="crop-cam-text">${thumb.camera_id || 'cam_0'}</div>
+          <div class="crop-time-text">${thumb.timestamp_ms ? `${(thumb.timestamp_ms / 1000).toFixed(1)}s` : 'Captured'}</div>
+        </div>
+      </div>
+    `;
+  }
+
   async refreshGallery(g = null) {
     try {
       if (!g) {
@@ -1616,31 +1832,7 @@ class SurveillanceApp {
 
       // Reverse list to show newest appearances at top
       const items = [...g.thumbnails].reverse();
-
-      this.galleryCardsList.innerHTML = items.map((thumb) => {
-        const isMan = thumb.is_manual;
-        const tagClass = isMan ? 'badge-manual' : 'badge-auto';
-        const tagLabel = isMan ? 'MANUAL' : 'AUTO';
-        const qualityPct = Math.round((thumb.quality_score || thumb.confidence || 0.9) * 100);
-        const imgSrc = thumb.image_b64 ? `data:image/jpeg;base64,${thumb.image_b64}` : '';
-
-        return `
-          <div class="gallery-crop-card" title="Entry: ${thumb.entry_id} | Camera: ${thumb.camera_id}">
-            <div class="crop-thumb-box">
-              ${imgSrc ? `<img src="${imgSrc}" class="crop-thumb-img" alt="Target Crop">` : '<div style="color:#64748b;font-size:10px;">No image</div>'}
-            </div>
-            <div class="crop-meta-box">
-              <div class="crop-meta-top">
-                <span class="crop-type-badge ${tagClass}">${tagLabel}</span>
-                <span class="crop-quality-text">Q: ${qualityPct}%</span>
-                <button class="crop-delete-btn" data-entry="${thumb.entry_id}" title="Remove this angle">&times;</button>
-              </div>
-              <div class="crop-cam-text">${thumb.camera_id || 'cam_0'}</div>
-              <div class="crop-time-text">${thumb.timestamp_ms ? `${(thumb.timestamp_ms / 1000).toFixed(1)}s` : 'Captured'}</div>
-            </div>
-          </div>
-        `;
-      }).join('');
+      this.galleryCardsList.innerHTML = items.map((thumb) => this.renderGalleryCard(thumb)).join('');
 
       // Wire up crop delete buttons (Hypothesis A fix)
       this.galleryCardsList.querySelectorAll('.crop-delete-btn').forEach((btn) => {

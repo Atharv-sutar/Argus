@@ -175,25 +175,27 @@ class IdentityManager:
 
         entries = []
         for i, emb in enumerate(ident.trusted_gallery):
+            e = emb[0] if isinstance(emb, tuple) else emb
             crop_b64 = self._entry_crops.get(f"{ident.identity_id}_trusted_{i}", "")
             entries.append({
                 "entry_id": f"trusted_{i}",
                 "is_manual": True,
-                "camera_id": emb.camera_id,
-                "timestamp_ms": emb.timestamp_ms,
+                "camera_id": getattr(e, "camera_id", "cam_0"),
+                "timestamp_ms": getattr(e, "timestamp_ms", 0.0),
                 "confidence": 1.0,
-                "quality_score": emb.quality_score,
+                "quality_score": getattr(e, "quality_score", 1.0),
                 "image_b64": crop_b64,
             })
         for i, emb in enumerate(ident.provisional_gallery):
+            e = emb[0] if isinstance(emb, tuple) else emb
             crop_b64 = self._entry_crops.get(f"{ident.identity_id}_provisional_{i}", "")
             entries.append({
                 "entry_id": f"provisional_{i}",
                 "is_manual": False,
-                "camera_id": emb.camera_id,
-                "timestamp_ms": emb.timestamp_ms,
-                "confidence": emb.quality_score,
-                "quality_score": emb.quality_score,
+                "camera_id": getattr(e, "camera_id", "cam_0"),
+                "timestamp_ms": getattr(e, "timestamp_ms", 0.0),
+                "confidence": getattr(e, "quality_score", 1.0),
+                "quality_score": getattr(e, "quality_score", 1.0),
                 "image_b64": crop_b64,
             })
 
@@ -235,7 +237,8 @@ class IdentityManager:
         if entry_id.startswith("trusted_"):
             try:
                 idx = int(entry_id.split("_", 1)[1])
-                if 0 <= idx < len(ident.trusted_gallery):
+                old_len = len(ident.trusted_gallery)
+                if 0 <= idx < old_len:
                     emb = ident.trusted_gallery.pop(idx)
                     up = ident.trusted_upper_gallery.pop(idx) if 0 <= idx < len(ident.trusted_upper_gallery) else None
                     lo = ident.trusted_lower_gallery.pop(idx) if 0 <= idx < len(ident.trusted_lower_gallery) else None
@@ -731,6 +734,7 @@ class IdentityManager:
                 {"source": "manual", "camera_id": None, "quality_score": float(q_score), "gallery_size_after": self.size},
                 camera_id=None
             )
+        self.save_target_gallery()
         return True
 
     def enroll_cross_camera_viewpoint(

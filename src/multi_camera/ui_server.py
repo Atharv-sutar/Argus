@@ -540,11 +540,16 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 return
 
             elif path == "/api/playback/stats":
-                if hasattr(self, 'pipeline') and self.runtime_pipeline and getattr(self.runtime_pipeline, 'playback_controller', None):
-                    stats = self.runtime_pipeline.playback_controller.stats
-                    self._send_json({"success": True, "stats": stats, "mode": self.runtime_pipeline.playback_controller.mode})
+                if self.runtime_pipeline is not None and getattr(self.runtime_pipeline, 'playback_controller', None):
+                    pc = self.runtime_pipeline.playback_controller
+                    stats = dict(pc.stats)
+                    stats["current_time_ms"] = pc.current_time_ms
+                    stats["max_duration_ms"] = pc.max_duration_ms
+                    stats["is_playing"] = pc.is_playing
+                    stats["speed"] = pc.playback_speed
+                    self._send_json({"success": True, "stats": stats, "mode": pc.mode})
                 else:
-                    self._send_json({"success": False, "error": "Playback controller not found"}, status=400)
+                    self._send_json({"success": False, "error": "Playback controller not found"}, status=HTTPStatus.BAD_REQUEST)
                 return
 
             elif path == "/api/annotations":
@@ -598,8 +603,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                                 if self.runtime_pipeline.get_camera_status(cid)
                             }
                             gallery = self.runtime_pipeline.gallery
-                            thumbnails = gallery.get_thumbnails(max_count=25)
-                            
+                            thumbnails = gallery.get_thumbnails(max_count=25) if gallery else []
                             
                             pending_handoff = None
                             if getattr(self.runtime_pipeline, "target_state", "UNSELECTED") == "UNCERTAIN":
@@ -611,6 +615,24 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                             import dataclasses
                             telemetry = self.runtime_pipeline.get_telemetry()
                             event_data = dataclasses.asdict(telemetry)
+                            if gallery is not None:
+                                event_data["gallery"] = {
+                                    "size": gallery.size,
+                                    "max_size": gallery.max_size,
+                                    "manual_count": gallery.manual_count,
+                                    "auto_count": gallery.auto_count,
+                                    "thumbnails": thumbnails,
+                                }
+                            event_data["pending_handoff"] = pending_handoff
+                            event_data["topology_version"] = getattr(self.runtime_pipeline.graph, "topology_version", 1)
+                            if getattr(self.runtime_pipeline, "playback_controller", None) is not None:
+                                pc = self.runtime_pipeline.playback_controller
+                                event_data["playback"] = {
+                                    "current_time_ms": pc.current_time_ms,
+                                    "max_duration_ms": pc.max_duration_ms,
+                                    "is_playing": pc.is_playing,
+                                    "speed": pc.playback_speed,
+                                }
                             
                             payload = json.dumps(event_data)
                             self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
@@ -893,10 +915,13 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     # Update configuration fields based on payload
                     cfg = self.runtime_pipeline.config
                     
-                    if "multi_camera" in payload and "search" in payload["multi_camera"]:
-                        search_pl = payload["multi_camera"]["search"]
+                    if "multi_camera" in payload:
+                        mc_pl = payload["multi_camera"]
+                        search_pl = mc_pl.get("search", mc_pl) if isinstance(mc_pl, dict) else {}
                         if "max_radius" in search_pl:
                             cfg.multi_camera.search.max_radius = int(search_pl["max_radius"])
+                        elif "max_search_radius" in search_pl:
+                            cfg.multi_camera.search.max_radius = int(search_pl["max_search_radius"])
                         if "total_recovery_timeout" in search_pl:
                             cfg.multi_camera.search.total_recovery_timeout = float(search_pl["total_recovery_timeout"])
                             
@@ -987,34 +1012,89 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             return
 
 
+        elif path == "/api/playback/play":
+            if self.runtime_pipeline is not None and getattr(self.runtime_pipeline, 'playback_controller', None):
+                self.runtime_pipeline.playback_controller.play()
+                self._send_json({"success": True, "is_playing": True})
+            else:
+                self._send_json({"success": False, "error": "Playback controller not found"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        elif path == "/api/playback/pause":
+            if self.runtime_pipeline is not None and getattr(self.runtime_pipeline, 'playback_controller', None):
+                self.runtime_pipeline.playback_controller.pause()
+                self._send_json({"success": True, "is_playing": False})
+            else:
+                self._send_json({"success": False, "error": "Playback controller not found"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        elif path == "/api/playback/toggle":
+            if self.runtime_pipeline is not None and getattr(self.runtime_pipeline, 'playback_controller', None):
+                pc = self.runtime_pipeline.playback_controller
+                pc.toggle_play_pause()
+                self._send_json({"success": True, "is_playing": pc.is_playing})
+            else:
+                self._send_json({"success": False, "error": "Playback controller not found"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        elif path == "/api/playback/speed":
+            speed = float(payload.get("speed", 1.0))
+            if self.runtime_pipeline is not None and getattr(self.runtime_pipeline, 'playback_controller', None):
+                pc = self.runtime_pipeline.playback_controller
+                pc.set_speed(speed)
+                self._send_json({"success": True, "speed": pc.playback_speed})
+            else:
+                self._send_json({"success": False, "error": "Playback controller not found"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        elif path == "/api/playback/seek":
+            if self.runtime_pipeline is not None and getattr(self.runtime_pipeline, 'playback_controller', None):
+                pc = self.runtime_pipeline.playback_controller
+                if "time_ms" in payload:
+                    time_ms = float(payload["time_ms"])
+                elif "ratio" in payload:
+                    time_ms = float(payload["ratio"]) * pc.max_duration_ms
+                else:
+                    time_ms = 0.0
+                pc.seek(time_ms)
+                self._send_json({"success": True, "current_time_ms": pc.current_time_ms})
+            else:
+                self._send_json({"success": False, "error": "Playback controller not found"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
         elif path == "/api/playback/fast-scan/start":
             try:
                 data = payload
                 skip_zones = data.get("skip_zones", [])
-                if hasattr(self, 'pipeline') and self.runtime_pipeline and getattr(self.runtime_pipeline, 'playback_controller', None):
+                if self.runtime_pipeline is not None and getattr(self.runtime_pipeline, 'playback_controller', None):
                     self.runtime_pipeline.playback_controller.start_fast_scan(skip_zones)
                     self._send_json({"success": True})
                 else:
-                    self._send_json({"success": False, "error": "Playback controller not found"}, status=400)
+                    self._send_json({"success": False, "error": "Playback controller not found"}, status=HTTPStatus.BAD_REQUEST)
             except Exception as e:
-                self._send_json({"success": False, "error": str(e)}, status=500)
+                self._send_json({"success": False, "error": str(e)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
 
         elif path == "/api/playback/fast-scan/pause":
-            if hasattr(self, 'pipeline') and self.runtime_pipeline and getattr(self.runtime_pipeline, 'playback_controller', None):
+            if self.runtime_pipeline is not None and getattr(self.runtime_pipeline, 'playback_controller', None):
                 self.runtime_pipeline.playback_controller.mode = "playback"
                 self.runtime_pipeline.playback_controller.pause()
                 self._send_json({"success": True})
             else:
-                self._send_json({"success": False, "error": "Playback controller not found"}, status=400)
+                self._send_json({"success": False, "error": "Playback controller not found"}, status=HTTPStatus.BAD_REQUEST)
             return
 
         elif path == "/api/playback/stats":
-            if hasattr(self, 'pipeline') and self.runtime_pipeline and getattr(self.runtime_pipeline, 'playback_controller', None):
-                stats = self.runtime_pipeline.playback_controller.stats
-                self._send_json({"success": True, "stats": stats, "mode": self.runtime_pipeline.playback_controller.mode})
+            if self.runtime_pipeline is not None and getattr(self.runtime_pipeline, 'playback_controller', None):
+                pc = self.runtime_pipeline.playback_controller
+                stats = dict(pc.stats)
+                stats["current_time_ms"] = pc.current_time_ms
+                stats["max_duration_ms"] = pc.max_duration_ms
+                stats["is_playing"] = pc.is_playing
+                stats["speed"] = pc.playback_speed
+                self._send_json({"success": True, "stats": stats, "mode": pc.mode})
             else:
-                self._send_json({"success": False, "error": "Playback controller not found"}, status=400)
+                self._send_json({"success": False, "error": "Playback controller not found"}, status=HTTPStatus.BAD_REQUEST)
             return
 
         elif path.startswith("/api/cases/") and path.endswith("/export"):
