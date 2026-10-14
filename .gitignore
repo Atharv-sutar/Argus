@@ -54,3 +54,4 @@ test_cases_export/
 test_exports/
 *.sqlite
 test_annotations.sqlite
+diagnostics/epfl_crops/
