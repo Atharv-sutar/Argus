@@ -73,6 +73,7 @@ def _build_test_setup():
     config.multi_camera.search.confirmation_frames = 2
     config.multi_camera.search.per_radius_timeout_s = 5.0
     config.reid.similarity_threshold = 0.80
+    config.reid.extract_interval_frames = 1
 
     target_vec = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
     bystander_vec = np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
@@ -171,7 +172,7 @@ def test_cross_camera_handoff_and_reacquisition():
     # Handoff to Cam B must succeed
     assert pipe.active_camera_id == "cam_B"
     pipe_b = pipe._pipelines["cam_B"]
-    assert pipe_b.current_target.state == TargetState.TRACKING
+    assert pipe_b.current_target.state in (TargetState.TRACKING, TargetState.CONFIRMED)
 
 
 def test_lone_bystander_anti_scoop_and_legitimate_reacquisition():

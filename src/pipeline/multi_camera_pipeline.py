@@ -1100,8 +1100,8 @@ class MultiCameraPipeline:
 
         # 4. Check Target State
         target = self.target_manager.target
-        target_is_active = (self.target_manager.is_active() and target.state in (TargetState.TRACKING, TargetState.OCCLUDED, TargetState.LOCKED))
-        target_is_lost = (self.target_manager.is_active() and target.state in (TargetState.LOST, TargetState.UNCERTAIN))
+        target_is_active = (self.target_manager.is_active() and target.state in (TargetState.TRACKING, TargetState.OCCLUDED, TargetState.LOCKED, TargetState.CONFIRMED))
+        target_is_lost = (self.target_manager.is_active() and target.state in (TargetState.LOST, TargetState.UNCERTAIN, TargetState.SEARCHING, TargetState.REJECTED))
 
         if target_is_active:
             if self.search_manager.is_searching:
@@ -1340,9 +1340,9 @@ class MultiCameraPipeline:
                 if is_occluded:
                     self.target_manager.mark_tracking(current_track, track_res.frame_id, timestamp_ms)
                     self.target_manager.target.state = TargetState.OCCLUDED
-                elif target.state in (TargetState.TRACKING, TargetState.LOCKED, TargetState.OCCLUDED):
+                elif target.state in (TargetState.TRACKING, TargetState.LOCKED, TargetState.OCCLUDED, TargetState.CONFIRMED):
                     self.target_manager.mark_tracking(current_track, track_res.frame_id, timestamp_ms)
-            elif current_track is None and target.state in (TargetState.TRACKING, TargetState.LOCKED, TargetState.OCCLUDED):
+            elif current_track is None and target.state in (TargetState.TRACKING, TargetState.LOCKED, TargetState.OCCLUDED, TargetState.CONFIRMED):
                 self.target_manager.mark_lost(timestamp_ms)
             return
 
@@ -1363,7 +1363,7 @@ class MultiCameraPipeline:
                     crops_list.append(c_crop)
 
             if not crops_list:
-                if target.state in (TargetState.TRACKING, TargetState.LOCKED, TargetState.OCCLUDED):
+                if target.state in (TargetState.TRACKING, TargetState.LOCKED, TargetState.OCCLUDED, TargetState.CONFIRMED):
                     self.target_manager.mark_lost(timestamp_ms)
                 return
 
@@ -1374,7 +1374,7 @@ class MultiCameraPipeline:
                 return
 
         if not candidates_to_extract:
-            if target.state in (TargetState.TRACKING, TargetState.LOCKED, TargetState.OCCLUDED):
+            if target.state in (TargetState.TRACKING, TargetState.LOCKED, TargetState.OCCLUDED, TargetState.CONFIRMED):
                 self.target_manager.mark_lost(timestamp_ms)
             return
 

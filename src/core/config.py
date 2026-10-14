@@ -53,15 +53,15 @@ class TrackingConfig:
 @dataclass
 class ReIDConfig:
     model_name: str = "auto"
-    match_threshold: float = 0.65
-    reacquisition_threshold: float = 0.75
-    auto_add_threshold: float = 0.80
+    match_threshold: float = 0.75
+    reacquisition_threshold: float = 0.78
+    auto_add_threshold: float = 0.82
     auto_add_min_consecutive: int = 3
     diversity_threshold: float = 0.92
     max_gallery_size: int = 25
     min_margin: float = 0.05
-    lock_switch_margin: float = 0.05
-    extract_interval_frames: int = 5
+    lock_switch_margin: float = 0.08
+    extract_interval_frames: int = 3
     min_crop_width: int = 32
     min_crop_height: int = 64
     event_driven_reid: bool = True  # Uncertainty-triggered ReID: bypass redundant per-frame extraction during steady tracking

@@ -447,6 +447,7 @@ class TargetManager:
         frame_id: int,
         timestamp_ms: float,
         decision: Optional[VerifiedIdentityDecision] = None,
+        **kwargs: Any,
     ) -> bool:
         """
         Reassociates a lost/switched target with a new tracker ID.
