@@ -8,12 +8,18 @@ Set-Location $repoDir
 $venvPython = Join-Path $repoDir ".venv\Scripts\python.exe"
 
 # 1. Locate available Python interpreter
+$pythonCmd = $null
 if (Test-Path $venvPython) {
     $pythonCmd = $venvPython
 } else {
-    $pythonCmd = (Get-Command python -ErrorAction SilentlyContinue)?.Source
-    if (-not $pythonCmd) {
-        $pythonCmd = (Get-Command py -ErrorAction SilentlyContinue)?.Source
+    $pyCmdObj = Get-Command python -ErrorAction SilentlyContinue
+    if ($pyCmdObj) {
+        $pythonCmd = $pyCmdObj.Source
+    } else {
+        $pyCmdObj = Get-Command py -ErrorAction SilentlyContinue
+        if ($pyCmdObj) {
+            $pythonCmd = $pyCmdObj.Source
+        }
     }
 }
 
@@ -23,7 +29,10 @@ if (-not $pythonCmd) {
     Write-Host "[ARGUS] Installing Python 3.12 via Windows Package Manager (winget)..." -ForegroundColor Cyan
     try {
         winget install Python.Python.3.12 --silent --accept-package-agreements --accept-source-agreements
-        $pythonCmd = (Get-Command python -ErrorAction SilentlyContinue)?.Source
+        $pyCmdObj = Get-Command python -ErrorAction SilentlyContinue
+        if ($pyCmdObj) {
+            $pythonCmd = $pyCmdObj.Source
+        }
     } catch {
         Write-Host "[CRITICAL] Could not install Python automatically. Please install Python 3.11+ from https://www.python.org/downloads/" -ForegroundColor Red
         exit 1
