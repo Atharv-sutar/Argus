@@ -120,18 +120,32 @@ class AuditLogger:
                     """, (limit, offset))
                     
                     for row in cursor.fetchall():
+                        detail_obj = json.loads(row["detail_json"])
                         logs.append({
                             "id": row["id"],
                             "timestamp_utc": row["timestamp_utc"],
+                            "timestamp": row["timestamp_utc"],
                             "event_type": row["event_type"],
                             "camera_id": row["camera_id"],
                             "track_id": row["track_id"],
-                            "detail": json.loads(row["detail_json"]),
+                            "detail": detail_obj,
+                            "details": detail_obj,
                             "valid": True # Verification is separate
                         })
             except Exception as e:
                 logger.error(f"Failed to read audit log: {e}")
         return logs
+
+    def clear(self) -> None:
+        """Clear all audit log entries."""
+        with self._lock:
+            try:
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM audit_log")
+                    conn.commit()
+            except Exception as e:
+                logger.error(f"Failed to clear audit log: {e}")
 
     def verify_chain(self) -> Tuple[bool, Optional[str]]:
         """

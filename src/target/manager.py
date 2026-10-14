@@ -367,7 +367,8 @@ class TargetManager:
                 {"camera_id": None, "track_id": track.track_id, "reid_confidence": None},
                 track_id=track.track_id
             )
-        self._target.state = TargetState.TRACKING
+        if self._target.state != TargetState.CONFIRMED:
+            self._target.state = TargetState.TRACKING
         return self._target
 
     def mark_uncertain(self, timestamp_ms: float) -> Target:

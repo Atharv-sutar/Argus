@@ -85,3 +85,47 @@ def test_discover_video_files_handles_quotes_and_subdirectories(tmp_path):
     # Pass parent directory with nested camera subfolder
     found_parent = discover_video_files(str(tmp_path))
     assert len(found_parent) == 2
+
+
+def test_mark_tracking_preserves_confirmed_state():
+    from src.target.manager import TargetManager
+    from src.core.types import TargetState, Track, BoundingBox
+
+    tm = TargetManager()
+    track1 = Track(track_id=19, box=BoundingBox(10, 10, 50, 100))
+    tm.mark_tracking(track1, frame_id=1, timestamp_ms=100.0)
+    assert tm.target.state == TargetState.TRACKING
+
+    # Transition to CONFIRMED
+    tm.mark_confirmed(track1, frame_id=2, timestamp_ms=200.0)
+    assert tm.target.state == TargetState.CONFIRMED
+
+    # Subsequent mark_tracking calls during spatial tracking must NOT revert to TRACKING
+    track1_moved = Track(track_id=19, box=BoundingBox(15, 12, 50, 100))
+    tm.mark_tracking(track1_moved, frame_id=3, timestamp_ms=300.0)
+    assert tm.target.state == TargetState.CONFIRMED
+    assert tm.target.last_known_box.x1 == 15
+
+
+def test_audit_logger_clear_and_compatibility(tmp_path):
+    from src.audit.logger import AuditLogger, AuditEventType
+
+    db_path = str(tmp_path / "test_audit.db")
+    logger = AuditLogger(db_path=db_path)
+
+    logger.log(AuditEventType.TARGET_LOCKED, {"track_id": 42}, camera_id="cam_0", track_id=42)
+    logger.log(AuditEventType.HANDOFF_ACCEPTED, {"info": "confirmed"}, camera_id="cam_1")
+
+    logs = logger.get_logs()
+    assert len(logs) == 2
+    # Verify backward and forward compatibility fields
+    assert "timestamp_utc" in logs[0]
+    assert "timestamp" in logs[0]
+    assert "detail" in logs[0]
+    assert "details" in logs[0]
+    assert logs[0]["detail"]["info"] == "confirmed"
+
+    # Test clear
+    logger.clear()
+    assert len(logger.get_logs()) == 0
+

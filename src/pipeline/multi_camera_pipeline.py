@@ -1368,15 +1368,16 @@ class MultiCameraPipeline:
 
         # Case A: On frames where ReID is NOT evaluated
         if not should_reid or self.identity.is_empty:
-            # Fix B2: Clear stale candidate scores so sim values don't persist from old ReID frames
-            self._last_candidate_scores.clear()
             if current_track is not None:
                 if is_occluded:
                     self.target_manager.mark_tracking(current_track, track_res.frame_id, timestamp_ms)
                     self.target_manager.target.state = TargetState.OCCLUDED
-                elif target.state in (TargetState.TRACKING, TargetState.LOCKED, TargetState.OCCLUDED, TargetState.CONFIRMED):
+                elif target.state == TargetState.CONFIRMED:
+                    self.target_manager.mark_confirmed(current_track, track_res.frame_id, timestamp_ms)
+                elif target.state in (TargetState.TRACKING, TargetState.LOCKED, TargetState.OCCLUDED):
                     self.target_manager.mark_tracking(current_track, track_res.frame_id, timestamp_ms)
             elif current_track is None and target.state in (TargetState.TRACKING, TargetState.LOCKED, TargetState.OCCLUDED, TargetState.CONFIRMED):
+                self._last_candidate_scores.clear()
                 self.target_manager.mark_lost(timestamp_ms)
             return
 

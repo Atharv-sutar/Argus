@@ -1378,6 +1378,14 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": False, "error": str(e)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
 
+        elif path == "/api/audit/clear":
+            if hasattr(self, 'audit_logger') and self.audit_logger:
+                self.audit_logger.clear()
+                self._send_json({"success": True, "message": "Audit trail cleared."})
+            else:
+                self._send_json({"success": False, "error": "Audit logger not available"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
         elif path == "/api/system/quit":
             logger.info(f"[SERVER] Safe shutdown requested via /api/system/quit endpoint from {self.address_string()}")
             _SHUTDOWN_EVENT.set()

@@ -54,21 +54,144 @@
       </div>
     </div>
 
-    <!-- Shortcuts Overlay -->
-    <div id="shortcuts-overlay" class="overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center;">
-      <div class="handoff-modal" style="background: var(--bg-panel); padding: 20px; border-radius: 8px; border: 1px solid var(--border-color); width: 400px; max-width: 90%;">
-        <h3 style="margin-top: 0; color: var(--amber-glow);">Keyboard Shortcuts</h3>
-        <ul style="list-style: none; padding: 0; margin-bottom: 20px;">
-            <li style="margin-bottom: 8px;"><strong>n</strong> - Add Note / Annotation</li>
-            <li style="margin-bottom: 8px;"><strong>a</strong> - Add Angle (Capture)</li>
-            <li style="margin-bottom: 8px;"><strong>c</strong> - Clear Target</li>
-            <li style="margin-bottom: 8px;"><strong>r</strong> - Restart / Refresh Cameras</li>
-            <li style="margin-bottom: 8px;"><strong>q</strong> - Shutdown / Quit</li>
-            <li style="margin-bottom: 8px;"><strong>s</strong> - Open Settings</li>
-            <li style="margin-bottom: 8px;"><strong>?</strong> - Toggle Shortcuts</li>
-        </ul>
+    <!-- Interactive Operator Field Guide & Shortcuts Overlay -->
+    <div id="shortcuts-overlay" class="overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 1000; align-items: center; justify-content: center;">
+      <div class="handoff-modal" style="background: var(--bg-panel); padding: 24px; border-radius: 10px; border: 1px solid var(--border-color); width: 740px; max-width: 95%; max-height: 85vh; overflow-y: auto; box-shadow: 0 10px 40px rgba(0,0,0,0.8);">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-subtle); padding-bottom: 12px; margin-bottom: 16px;">
+          <div>
+            <h3 style="margin: 0; color: var(--cyan-bright); font-size: 16px; font-weight: 700; letter-spacing: 0.5px;">ARGUS // OPERATOR FIELD MANUAL & SYSTEM CONTROLS</h3>
+            <span style="font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);">Comprehensive operational guide for multi-camera forensic tracking</span>
+          </div>
+          <button type="button" id="btn-shortcuts-close-top" class="btn btn-secondary btn-xs" style="padding: 3px 8px;">✕</button>
+        </div>
+
+        <!-- Section 1: Workflow -->
+        <div style="margin-bottom: 20px; background: rgba(0, 242, 254, 0.04); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 6px; padding: 12px 16px;">
+          <h4 style="margin: 0 0 8px 0; color: var(--cyan-bright); font-size: 13px; display: flex; align-items: center; gap: 6px;">
+            <span>🎯</span> Core Surveillance Tracking Workflow
+          </h4>
+          <ol style="margin: 0; padding-left: 20px; font-size: 12px; color: #cbd5e1; line-height: 1.6;">
+            <li><strong>Acquire Feeds:</strong> Use <em>Live</em> for webcams or click <em>Load Videos</em> to auto-load camera folders.</li>
+            <li><strong>Lock Focus:</strong> <strong>Left-Click</strong> on any detected person bounding box to lock target and seed appearance gallery.</li>
+            <li><strong>Capture Viewpoints:</strong> When target turns or changes lighting, press <kbd style="background:#1e293b;padding:1px 5px;border-radius:3px;border:1px solid #475569;">A</kbd> to add angle crops. (2–4 diverse angles ensure superior cross-camera matching).</li>
+            <li><strong>Autonomous Recovery:</strong> When the target leaves the camera, Argus automatically expands search radius (R=1 &rarr; R=2) across adjacent cameras in the network graph.</li>
+            <li><strong>Target Correction:</strong> If tracking latches onto a bystander in dense crowds, simply <strong>Left-Click</strong> the actual target to correct it, or press <kbd style="background:#1e293b;padding:1px 5px;border-radius:3px;border:1px solid #475569;">Ctrl+Z</kbd> to undo.</li>
+          </ol>
+        </div>
+
+        <!-- Section 2: Mouse Controls -->
+        <div style="margin-bottom: 20px;">
+          <h4 style="margin: 0 0 8px 0; color: #fff; font-size: 13px; display: flex; align-items: center; gap: 6px;">
+            <span>🖱️</span> Mouse Controls Reference
+          </h4>
+          <table style="width: 100%; border-collapse: collapse; font-size: 12px; color: #cbd5e1;">
+            <thead>
+              <tr style="background: rgba(0,0,0,0.4); text-align: left; border-bottom: 1px solid var(--border-subtle);">
+                <th style="padding: 6px 10px;">Action</th>
+                <th style="padding: 6px 10px;">Target Surface</th>
+                <th style="padding: 6px 10px;">System Response</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                <td style="padding: 6px 10px;"><strong style="color:#00f2fe;">Left-Click</strong></td>
+                <td style="padding: 6px 10px;">Person Bounding Box</td>
+                <td style="padding: 6px 10px;">Locks target (or corrects existing tracking focus).</td>
+              </tr>
+              <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                <td style="padding: 6px 10px;"><strong style="color:#f59e0b;">Shift + Left-Click</strong></td>
+                <td style="padding: 6px 10px;">Person Bounding Box</td>
+                <td style="padding: 6px 10px;">Starts a <em>NEW</em> focus investigation (resets previous target & gallery).</td>
+              </tr>
+              <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                <td style="padding: 6px 10px;"><strong style="color:#94a3b8;">Left-Click</strong></td>
+                <td style="padding: 6px 10px;">Camera Header / Empty Tile</td>
+                <td style="padding: 6px 10px;">Focuses that camera as active without altering target focus.</td>
+              </tr>
+              <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                <td style="padding: 6px 10px;"><strong style="color:#10b981;">Timeline Drag</strong></td>
+                <td style="padding: 6px 10px;">Playback Scrubber</td>
+                <td style="padding: 6px 10px;">Seeks synchronized video time across all loaded cameras.</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 10px;"><strong style="color:#a855f7;">Canvas Drag / Scroll</strong></td>
+                <td style="padding: 6px 10px;">Topology Map</td>
+                <td style="padding: 6px 10px;">Pans network graph, draws transitions between cameras, and zooms.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Section 3: Keyboard Shortcuts -->
+        <div style="margin-bottom: 20px;">
+          <h4 style="margin: 0 0 8px 0; color: #fff; font-size: 13px; display: flex; align-items: center; gap: 6px;">
+            <span>⌨️</span> Keyboard Shortcuts Reference
+          </h4>
+          <table style="width: 100%; border-collapse: collapse; font-size: 12px; color: #cbd5e1;">
+            <thead>
+              <tr style="background: rgba(0,0,0,0.4); text-align: left; border-bottom: 1px solid var(--border-subtle);">
+                <th style="padding: 6px 10px;">Key</th>
+                <th style="padding: 6px 10px;">Name</th>
+                <th style="padding: 6px 10px;">Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                <td style="padding: 6px 10px;"><kbd style="background:#1e293b;padding:2px 6px;border-radius:4px;border:1px solid #475569;font-weight:bold;">A</kbd></td>
+                <td style="padding: 6px 10px; color:#00f2fe; font-weight:600;">Add Angle</td>
+                <td style="padding: 6px 10px;">Capture current appearance crop to trusted gallery.</td>
+              </tr>
+              <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                <td style="padding: 6px 10px;"><kbd style="background:#1e293b;padding:2px 6px;border-radius:4px;border:1px solid #475569;font-weight:bold;">C</kbd></td>
+                <td style="padding: 6px 10px; color:#f43f5e; font-weight:600;">Clear Target</td>
+                <td style="padding: 6px 10px;">Deselect focus target and reset search state to idle.</td>
+              </tr>
+              <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                <td style="padding: 6px 10px;"><kbd style="background:#1e293b;padding:2px 6px;border-radius:4px;border:1px solid #475569;font-weight:bold;">Space</kbd></td>
+                <td style="padding: 6px 10px; color:#10b981; font-weight:600;">Play / Pause</td>
+                <td style="padding: 6px 10px;">Toggle synchronized multi-camera video playback.</td>
+              </tr>
+              <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                <td style="padding: 6px 10px;"><kbd style="background:#1e293b;padding:2px 6px;border-radius:4px;border:1px solid #475569;font-weight:bold;">Ctrl+Z</kbd></td>
+                <td style="padding: 6px 10px; color:#f59e0b; font-weight:600;">Undo</td>
+                <td style="padding: 6px 10px;">Revert last target selection or gallery angle modification.</td>
+              </tr>
+              <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                <td style="padding: 6px 10px;"><kbd style="background:#1e293b;padding:2px 6px;border-radius:4px;border:1px solid #475569;font-weight:bold;">Ctrl+Y</kbd></td>
+                <td style="padding: 6px 10px; color:#f59e0b; font-weight:600;">Redo</td>
+                <td style="padding: 6px 10px;">Redo previously reverted target or gallery action.</td>
+              </tr>
+              <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                <td style="padding: 6px 10px;"><kbd style="background:#1e293b;padding:2px 6px;border-radius:4px;border:1px solid #475569;font-weight:bold;">N</kbd></td>
+                <td style="padding: 6px 10px; font-weight:600;">Add Note</td>
+                <td style="padding: 6px 10px;">Add forensic case annotation anchored to current camera & time.</td>
+              </tr>
+              <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                <td style="padding: 6px 10px;"><kbd style="background:#1e293b;padding:2px 6px;border-radius:4px;border:1px solid #475569;font-weight:bold;">S</kbd></td>
+                <td style="padding: 6px 10px; font-weight:600;">Settings</td>
+                <td style="padding: 6px 10px;">Open Advanced Settings (ReID model, search radius, thresholds).</td>
+              </tr>
+              <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                <td style="padding: 6px 10px;"><kbd style="background:#1e293b;padding:2px 6px;border-radius:4px;border:1px solid #475569;font-weight:bold;">R</kbd></td>
+                <td style="padding: 6px 10px; font-weight:600;">Restart Feeds</td>
+                <td style="padding: 6px 10px;">Reconnect and refresh all active video feeds.</td>
+              </tr>
+              <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                <td style="padding: 6px 10px;"><kbd style="background:#1e293b;padding:2px 6px;border-radius:4px;border:1px solid #475569;font-weight:bold;">?</kbd></td>
+                <td style="padding: 6px 10px; font-weight:600;">Operator Guide</td>
+                <td style="padding: 6px 10px;">Toggle this interactive manual & control sheet.</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 10px;"><kbd style="background:#1e293b;padding:2px 6px;border-radius:4px;border:1px solid #475569;font-weight:bold;">Q</kbd></td>
+                <td style="padding: 6px 10px; color:#f43f5e; font-weight:600;">Safe Shutdown</td>
+                <td style="padding: 6px 10px;">Cleanly terminate workers, save database, and quit server.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
         <div style="display: flex; justify-content: flex-end;">
-            <button type="button" id="btn-shortcuts-close" class="btn btn-primary">Close</button>
+          <button type="button" id="btn-shortcuts-close" class="btn btn-primary">Close Manual</button>
         </div>
       </div>
     </div>
@@ -264,17 +387,20 @@
 
         <div style="width: 1px; height: 24px; background: var(--border-color); margin: 0 10px;"></div>
 
-        <button id="btn-add-sample-global" class="btn btn-primary btn-sm" title="Capture current angle to target gallery (Shortcut: 'a')">
-          + Add Angle
+        <button id="btn-add-sample-global" class="btn btn-primary btn-sm" title="Capture current angle to target gallery (Key: 'a')">
+          + Angle
         </button>
-        <button id="btn-clear-target-global" class="btn btn-danger btn-sm" title="Clear active target and reset search (Shortcut: 'c')">
-          Clear Target
+        <button id="btn-clear-target-global" class="btn btn-danger btn-sm" title="Clear active target and reset search (Key: 'c')">
+          ✕ Clear
         </button>
-        <button id="btn-undo-global" class="btn btn-secondary btn-sm" title="Undo last target/gallery action (Shortcut: Ctrl+Z)">
-          ↶ Undo
+        <button id="btn-undo-global" class="btn btn-secondary btn-sm btn-icon-sm" title="Undo last target/gallery action (Ctrl+Z)">
+          ↶
         </button>
-        <button id="btn-redo-global" class="btn btn-secondary btn-sm" title="Redo last target/gallery action (Shortcut: Ctrl+Y)">
-          ↷ Redo
+        <button id="btn-redo-global" class="btn btn-secondary btn-sm btn-icon-sm" title="Redo last target/gallery action (Ctrl+Y)">
+          ↷
+        </button>
+        <button id="btn-guide-global" class="btn btn-secondary btn-sm" title="Interactive Operator Field Guide (Key: '?')">
+          ❓ Guide
         </button>
         
         <div id="forensic-indicator" class="forensic-rec-indicator" style="display: none;">
@@ -284,7 +410,7 @@
           <span id="forensic-rec-frames" class="forensic-rec-frames">0f</span>
         </div>
         <button id="btn-forensic-export" class="btn btn-forensic btn-sm" title="Export forensic evidence clip of target journey" style="display: none;">
-          📹 Export Clip
+          📹 Export
         </button>
 
         <div class="header-dropdown">
@@ -356,6 +482,18 @@
           </div>
 
           <!-- Video Grid Container -->
+          <div class="operator-quick-hints">
+            <div>
+              <span style="color: var(--cyan-bright); font-weight: 700;">💡 GUIDE:</span>
+              <span style="margin-left: 8px;"><strong>Left-Click:</strong> Lock Target</span> &bull;
+              <span style="margin-left: 8px;"><strong>Shift+Click:</strong> New Target</span> &bull;
+              <span style="margin-left: 8px;"><strong>A:</strong> Add Angle Crop</span> &bull;
+              <span style="margin-left: 8px;"><strong>C:</strong> Clear</span> &bull;
+              <span style="margin-left: 8px;"><strong>Space:</strong> Play/Pause</span> &bull;
+              <span style="margin-left: 8px;"><strong>Ctrl+Z:</strong> Undo</span>
+            </div>
+            <button id="btn-quick-guide-link" class="btn btn-secondary btn-xs" style="font-size: 10px; padding: 2px 8px;">Full Guide (?) &raquo;</button>
+          </div>
           <div id="camera-matrix-grid" class="camera-matrix-grid layout-auto">
             <!-- Dynamic Camera Tiles Injected by app.js -->
             <div class="matrix-loading">
@@ -719,7 +857,8 @@
         <div id="audit-modal-log-container" style="flex: 1; overflow-y: auto; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 4px; padding: 10px; font-family: 'JetBrains Mono', monospace; font-size: 11px; margin-bottom: 10px; min-height: 400px;">
             <div style="color: var(--text-dim);">Loading audit logs...</div>
         </div>
-        <div style="display: flex; gap: 10px; justify-content: flex-end;">
+        <div style="display: flex; gap: 10px; justify-content: space-between; align-items: center;">
+            <button type="button" id="btn-audit-clear" class="btn btn-outline-danger btn-sm" style="color: var(--red-glow); border-color: rgba(244,63,94,0.4);">🗑️ Clear Audit Trail</button>
             <button type="button" id="btn-audit-close" class="btn btn-secondary">Close</button>
         </div>
       </div>

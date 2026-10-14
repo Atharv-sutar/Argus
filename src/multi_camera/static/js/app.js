@@ -933,49 +933,92 @@ class SurveillanceApp {
     const btnAudit = document.getElementById('btn-audit-global');
     const auditOverlay = document.getElementById('audit-overlay');
     const btnAuditClose = document.getElementById('btn-audit-close');
+    const btnAuditClear = document.getElementById('btn-audit-clear');
     const auditModalContainer = document.getElementById('audit-modal-log-container');
+
+    const renderAuditModalLogs = async () => {
+      try {
+        if (auditModalContainer) {
+          auditModalContainer.innerHTML = '<div style="color: var(--text-dim); text-align: center; padding: 20px;">Loading audit logs...</div>';
+        }
+        const res = await API.getAuditLogs(500, 0);
+        if (res && res.success && res.logs && auditModalContainer) {
+          if (res.logs.length === 0) {
+            auditModalContainer.innerHTML = '<div style="color: var(--text-dim); text-align: center; padding: 30px;">No audit logs recorded yet.</div>';
+            return;
+          }
+          let lastDateStr = null;
+          const htmlParts = [];
+          for (const log of res.logs) {
+            const rawTime = log.timestamp_utc || log.timestamp;
+            let d = new Date(rawTime);
+            if (isNaN(d.getTime())) {
+              d = new Date();
+            }
+            const dateStr = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+
+            if (dateStr !== lastDateStr) {
+              lastDateStr = dateStr;
+              htmlParts.push(`
+                <div class="audit-date-divider">
+                  <span>📅 ${dateStr}</span>
+                </div>
+              `);
+            }
+
+            const timeStr = d.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            let color = '#94a3b8'; // default
+            if (log.event_type.includes('START') || log.event_type.includes('MATCH')) color = '#00f2fe';
+            if (log.event_type.includes('LOST') || log.event_type.includes('REJECT') || log.event_type.includes('REMOVE') || log.event_type.includes('CLEAR')) color = 'var(--red-glow)';
+            if (log.event_type.includes('ADD') || log.event_type.includes('ACCEPT') || log.event_type.includes('LOCKED') || log.event_type.includes('CONFIRMED')) color = '#10b981';
+            if (log.event_type.includes('CORRECTION') || log.event_type.includes('EXPAND') || log.event_type.includes('UNCERTAIN')) color = '#f59e0b';
+            
+            const detailObj = log.detail || log.details || {};
+            const detailStr = (typeof detailObj === 'object') ? JSON.stringify(detailObj) : String(detailObj);
+            const camTag = log.camera_id ? `<span style="background: rgba(255,255,255,0.08); padding: 1px 6px; border-radius: 3px; color: #a1a1aa; margin-right: 6px; font-size: 10px;">${log.camera_id}</span>` : '';
+            
+            htmlParts.push(`<div style="margin-bottom: 6px; display: flex; gap: 10px; border-bottom: 1px solid var(--border-color); padding-bottom: 4px; align-items: baseline;">
+              <span style="color: #64748b; min-width: 80px; font-family: monospace;">[${timeStr}]</span>
+              <span style="color: ${color}; min-width: 160px; font-weight: 600;">${log.event_type}</span>
+              <span style="color: #cbd5e1; word-break: break-all; flex: 1;">${camTag}${detailStr}</span>
+            </div>`);
+          }
+          auditModalContainer.innerHTML = htmlParts.join('');
+        }
+      } catch(e) {
+        if (auditModalContainer) {
+           auditModalContainer.innerHTML = `<div style="color: var(--red-glow);">Failed to load audit logs: ${e.message}</div>`;
+        }
+      }
+    };
 
     if (btnAudit && auditOverlay) {
       btnAudit.addEventListener('click', async () => {
         auditOverlay.style.display = 'flex';
-        try {
-          if (auditModalContainer) {
-            auditModalContainer.innerHTML = '<div style="color: var(--text-dim);">Loading audit logs...</div>';
-          }
-          const res = await API.getAuditLogs(500, 0);
-          if (res && res.success && res.logs && auditModalContainer) {
-            if (res.logs.length === 0) {
-              auditModalContainer.innerHTML = '<div style="color: var(--text-dim);">No audit logs found.</div>';
-              return;
-            }
-            const logHtml = res.logs.map(log => {
-              const timeStr = new Date(log.timestamp_utc + 'Z').toLocaleString();
-              let color = '#94a3b8'; // default
-              if (log.event_type.includes('START') || log.event_type.includes('MATCH')) color = '#00f2fe';
-              if (log.event_type.includes('LOST') || log.event_type.includes('REJECT') || log.event_type.includes('REMOVE') || log.event_type.includes('CLEAR')) color = 'var(--red-glow)';
-              if (log.event_type.includes('ADD') || log.event_type.includes('ACCEPT') || log.event_type.includes('LOCKED')) color = '#10b981';
-              if (log.event_type.includes('CORRECTION') || log.event_type.includes('EXPAND')) color = '#f59e0b';
-              
-              const detailStr = (typeof log.detail === 'object') ? JSON.stringify(log.detail) : log.detail;
-              
-              return `<div style="margin-bottom: 6px; display: flex; gap: 12px; border-bottom: 1px solid var(--border-color); padding-bottom: 4px;">
-                <span style="color: #64748b; min-width: 150px;">[${timeStr}]</span>
-                <span style="color: ${color}; min-width: 150px; font-weight: 600;">${log.event_type}</span>
-                <span style="color: #cbd5e1; word-break: break-all;">${detailStr}</span>
-              </div>`;
-            }).join('');
-            auditModalContainer.innerHTML = logHtml;
-          }
-        } catch(e) {
-          if (auditModalContainer) {
-             auditModalContainer.innerHTML = `<div style="color: var(--red-glow);">Failed to load audit logs: ${e.message}</div>`;
-          }
-        }
+        await renderAuditModalLogs();
       });
 
       btnAuditClose.addEventListener('click', () => {
         auditOverlay.style.display = 'none';
       });
+
+      if (btnAuditClear) {
+        btnAuditClear.addEventListener('click', async () => {
+          if (!confirm("Are you sure you want to permanently clear the audit trail history?")) return;
+          try {
+            const res = await API.clearAuditLogs();
+            if (res && res.success) {
+              this.showToast("Audit trail cleared", "info");
+              await renderAuditModalLogs();
+              this.updateAuditLog();
+            } else {
+              this.showToast(res && res.error ? res.error : "Failed to clear audit trail", "error");
+            }
+          } catch (err) {
+            this.showToast(`Clear error: ${err.message}`, "error");
+          }
+        });
+      }
     }
 
     // Global Keyboard Shortcuts (Issue 2)
@@ -1025,20 +1068,26 @@ class SurveillanceApp {
     });
     
     const btnShortcutsGlobal = document.getElementById('btn-shortcuts-global');
-    if (btnShortcutsGlobal) {
-        btnShortcutsGlobal.addEventListener('click', () => {
-            const overlay = document.getElementById('shortcuts-overlay');
-            if (overlay) overlay.style.display = 'flex';
-        });
-    }
-    
+    const btnGuideGlobal = document.getElementById('btn-guide-global');
+    const btnQuickGuideLink = document.getElementById('btn-quick-guide-link');
     const btnShortcutsClose = document.getElementById('btn-shortcuts-close');
-    if (btnShortcutsClose) {
-        btnShortcutsClose.addEventListener('click', () => {
-            const overlay = document.getElementById('shortcuts-overlay');
-            if (overlay) overlay.style.display = 'none';
-        });
-    }
+    const btnShortcutsCloseTop = document.getElementById('btn-shortcuts-close-top');
+
+    const openGuideModal = () => {
+      const overlay = document.getElementById('shortcuts-overlay');
+      if (overlay) overlay.style.display = 'flex';
+    };
+
+    const closeGuideModal = () => {
+      const overlay = document.getElementById('shortcuts-overlay');
+      if (overlay) overlay.style.display = 'none';
+    };
+
+    if (btnShortcutsGlobal) btnShortcutsGlobal.addEventListener('click', openGuideModal);
+    if (btnGuideGlobal) btnGuideGlobal.addEventListener('click', openGuideModal);
+    if (btnQuickGuideLink) btnQuickGuideLink.addEventListener('click', openGuideModal);
+    if (btnShortcutsClose) btnShortcutsClose.addEventListener('click', closeGuideModal);
+    if (btnShortcutsCloseTop) btnShortcutsCloseTop.addEventListener('click', closeGuideModal);
   }
 
 
@@ -1546,27 +1595,41 @@ class SurveillanceApp {
           return;
         }
 
-        const logHtml = res.logs.map(log => {
-          const timeStr = new Date(log.timestamp).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        let lastDateStr = null;
+        const htmlParts = [];
+        for (const log of res.logs) {
+          const rawTime = log.timestamp_utc || log.timestamp;
+          let d = new Date(rawTime);
+          if (isNaN(d.getTime())) {
+            d = new Date();
+          }
+          const dateStr = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+          if (dateStr !== lastDateStr) {
+            lastDateStr = dateStr;
+            htmlParts.push(`<div style="margin: 8px 0 4px 0; padding: 2px 6px; background: rgba(255,255,255,0.06); border-radius: 3px; color: var(--text-dim); font-size: 10px; font-weight: 600;">📅 ${dateStr}</div>`);
+          }
+
+          const timeStr = d.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
           let color = '#94a3b8'; // default
           if (log.event_type.includes('START') || log.event_type.includes('MATCH')) color = '#00f2fe';
           if (log.event_type.includes('LOST') || log.event_type.includes('REJECT') || log.event_type.includes('REMOVE') || log.event_type.includes('CLEAR')) color = 'var(--red-glow)';
-          if (log.event_type.includes('ADD') || log.event_type.includes('ACCEPT') || log.event_type.includes('LOCKED')) color = '#10b981';
-          if (log.event_type.includes('CORRECTION') || log.event_type.includes('EXPAND')) color = '#f59e0b';
+          if (log.event_type.includes('ADD') || log.event_type.includes('ACCEPT') || log.event_type.includes('LOCKED') || log.event_type.includes('CONFIRMED')) color = '#10b981';
+          if (log.event_type.includes('CORRECTION') || log.event_type.includes('EXPAND') || log.event_type.includes('UNCERTAIN')) color = '#f59e0b';
           
-          let detStr = log.details;
-          if (detStr.length > 60) {
-             detStr = detStr.substring(0, 57) + '...';
+          const detailObj = log.detail || log.details || {};
+          let detStr = (typeof detailObj === 'object') ? JSON.stringify(detailObj) : String(detailObj);
+          if (detStr.length > 55) {
+             detStr = detStr.substring(0, 52) + '...';
           }
           
-          return `<div style="margin-bottom: 4px; display: flex; gap: 8px;">
+          htmlParts.push(`<div style="margin-bottom: 4px; display: flex; gap: 8px; font-size: 11px;">
             <span style="color: #64748b;">[${timeStr}]</span>
-            <span style="color: ${color}; min-width: 130px; font-weight: 600;">${log.event_type}</span>
-            <span style="color: #cbd5e1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title='${log.details}'>${detStr}</span>
-          </div>`;
-        }).join('');
+            <span style="color: ${color}; min-width: 120px; font-weight: 600;">${log.event_type}</span>
+            <span style="color: #cbd5e1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title='${JSON.stringify(detailObj)}'>${detStr}</span>
+          </div>`);
+        }
         
-        container.innerHTML = logHtml;
+        container.innerHTML = htmlParts.join('');
       }
     } catch(err) {
       // ignore

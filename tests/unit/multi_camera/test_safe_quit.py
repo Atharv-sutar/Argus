@@ -46,7 +46,9 @@ def test_safe_quit_endpoint_stops_pipeline():
             data = json.loads(resp.read().decode("utf-8"))
             assert data["success"] is True
 
-        time.sleep(0.6)
+        deadline = time.time() + 2.0
+        while len(pipe._workers) > 0 and time.time() < deadline:
+            time.sleep(0.1)
 
         # Verify pipeline workers are cleaned up
         assert len(pipe._workers) == 0

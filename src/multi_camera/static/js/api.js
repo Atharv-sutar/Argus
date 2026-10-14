@@ -196,6 +196,17 @@ const API = {
     }
   },
 
+  async clearAuditLogs() {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/audit/clear`, { method: 'POST' });
+      if (!res.ok) return { success: false };
+      return await res.json();
+    } catch (err) {
+      console.error('[API] clearAuditLogs error:', err);
+      return { success: false, error: err.message };
+    }
+  },
+
   async getStatus() {
     try {
       const res = await fetch(`${this.baseUrl}/api/status`);
