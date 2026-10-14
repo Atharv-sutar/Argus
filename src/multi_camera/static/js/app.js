@@ -1021,6 +1021,28 @@ class SurveillanceApp {
       }
     }
 
+    // System Dropdown Click Toggle & Outside Click Handler
+    const systemDropdown = document.getElementById('dropdown-system');
+    const btnSystemDropdown = document.getElementById('btn-system-dropdown');
+    if (btnSystemDropdown && systemDropdown) {
+      btnSystemDropdown.addEventListener('click', (e) => {
+        e.stopPropagation();
+        systemDropdown.classList.toggle('open');
+      });
+
+      document.addEventListener('click', (e) => {
+        if (!systemDropdown.contains(e.target)) {
+          systemDropdown.classList.remove('open');
+        }
+      });
+
+      systemDropdown.querySelectorAll('.dropdown-item').forEach(item => {
+        item.addEventListener('click', () => {
+          systemDropdown.classList.remove('open');
+        });
+      });
+    }
+
     // Global Keyboard Shortcuts (Issue 2)
     window.addEventListener('keydown', (e) => {
       if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;

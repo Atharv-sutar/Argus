@@ -78,18 +78,20 @@ body.theme-dark {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 14px;
-  z-index: 100;
-  gap: 10px;
+  padding: 0 16px;
+  z-index: 500;
+  gap: 12px;
   max-width: 100vw;
   box-sizing: border-box;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
+  position: relative;
+  overflow: visible;
 }
 
-.app-header::-webkit-scrollbar {
-  display: none;
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
 }
 
 .brand {
@@ -140,9 +142,9 @@ body.theme-dark {
 .header-hud {
   display: flex;
   align-items: center;
-  gap: 6px;
-  flex-shrink: 1;
-  min-width: 0;
+  gap: 8px;
+  flex-shrink: 0;
+  margin: 0 auto;
 }
 
 .hud-chip {
@@ -227,6 +229,8 @@ body.theme-dark {
   gap: 6px;
   flex-shrink: 0;
   margin-left: auto;
+  position: relative;
+  overflow: visible;
 }
 
 .header-actions .btn-sm {
@@ -1485,28 +1489,31 @@ body.theme-dark {
 .header-dropdown {
   position: relative;
   display: inline-block;
+  overflow: visible;
 }
 
 .header-dropdown .dropbtn {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
+  gap: 5px;
+  padding: 4px 10px;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .header-dropdown .dropdown-content {
   display: none;
   position: absolute;
   right: 0;
-  top: 100%;
-  padding-top: 4px;
+  top: calc(100% + 4px);
   background-color: transparent;
-  min-width: 180px;
-  z-index: 999;
+  min-width: 220px;
+  z-index: 1000;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.7);
 }
 
-.header-dropdown:hover .dropdown-content {
+.header-dropdown:hover .dropdown-content,
+.header-dropdown.open .dropdown-content {
   display: flex;
   flex-direction: column;
 }

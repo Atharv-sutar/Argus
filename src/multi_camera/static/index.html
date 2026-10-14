@@ -315,45 +315,25 @@
 
     <!-- Top Surveillance Command Header -->
     <header class="app-header">
-      <div class="brand">
-        <div class="logo-icon">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-            <circle cx="12" cy="12" r="9"></circle>
-            <circle cx="12" cy="12" r="3"></circle>
-            <path d="M12 3v3M12 18v3M3 12h3M18 12h3"></path>
-          </svg>
+      <!-- Left: Brand & Mode Switch -->
+      <div class="header-left">
+        <div class="brand">
+          <div class="logo-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <circle cx="12" cy="12" r="9"></circle>
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M12 3v3M12 18v3M3 12h3M18 12h3"></path>
+            </svg>
+          </div>
+          <div class="brand-text">
+            <div class="brand-name">ARGUS <span class="brand-accent">SURVEILLANCE</span></div>
+            <div class="brand-sub">MULTI-CAMERA AI & PERSON RE-ID</div>
+          </div>
         </div>
-        <div class="brand-text">
-          <div class="brand-name">ARGUS <span class="brand-accent">SURVEILLANCE</span></div>
-          <div class="brand-sub">MULTI-CAMERA AI & PERSON RE-ID</div>
-        </div>
-      </div>
 
-      <!-- Center Operations HUD Badges -->
-      <div class="header-hud">
-        <div class="hud-chip">
-          <span class="chip-label">ACTIVE CAM</span>
-          <span id="header-active-cam" class="chip-val chip-cyan">None</span>
-        </div>
-        <div class="hud-chip">
-          <span class="chip-label">TARGET STATUS</span>
-          <span id="header-target-state" class="chip-val chip-badge state-unselected">UNSELECTED</span>
-        </div>
-        <div class="hud-chip">
-          <span class="chip-label">SEARCH RADIUS</span>
-          <span id="header-search-radius" class="chip-val chip-amber">R = 0 (IDLE)</span>
-        </div>
-        <div class="hud-chip">
-          <span class="chip-label">GALLERY</span>
-          <span id="header-gallery-stats" class="chip-val chip-emerald">0 / 25</span>
-        </div>
-      </div>
-
-      <!-- Mode Switch & Controls -->
-      <div class="header-actions">
         <div class="view-switch">
           <button id="btn-mode-matrix" class="mode-btn active" data-mode="matrix" title="Multi-Camera Live Video Matrix">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="3" y="3" width="7" height="7"></rect>
               <rect x="14" y="3" width="7" height="7"></rect>
               <rect x="14" y="14" width="7" height="7"></rect>
@@ -362,7 +342,7 @@
             Live Matrix
           </button>
           <button id="btn-mode-topology" class="mode-btn" data-mode="topology" title="Camera Graph Topology Editor">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="6" cy="6" r="3"></circle>
               <circle cx="18" cy="6" r="3"></circle>
               <circle cx="18" cy="18" r="3"></circle>
@@ -375,18 +355,30 @@
             Topology Map
           </button>
         </div>
+      </div>
 
-        <div style="width: 1px; height: 24px; background: var(--border-color); margin: 0 10px;"></div>
-        
-        <button id="btn-source-live" class="btn btn-secondary btn-sm" title="Switch active camera to Live Webcam">
-          🎥 Live
-        </button>
-        <button id="btn-source-video" class="btn btn-secondary btn-sm" title="Switch active camera to Pre-recorded Video">
-          📼 Video
-        </button>
+      <!-- Center Operations HUD Badges -->
+      <div class="header-hud">
+        <div class="hud-chip">
+          <span class="chip-label">CAM</span>
+          <span id="header-active-cam" class="chip-val chip-cyan">None</span>
+        </div>
+        <div class="hud-chip">
+          <span class="chip-label">TARGET</span>
+          <span id="header-target-state" class="chip-val chip-badge state-unselected">UNSELECTED</span>
+        </div>
+        <div class="hud-chip">
+          <span class="chip-label">SEARCH</span>
+          <span id="header-search-radius" class="chip-val chip-amber">R = 0 (IDLE)</span>
+        </div>
+        <div class="hud-chip">
+          <span class="chip-label">GALLERY</span>
+          <span id="header-gallery-stats" class="chip-val chip-emerald">0 / 25</span>
+        </div>
+      </div>
 
-        <div style="width: 1px; height: 24px; background: var(--border-color); margin: 0 10px;"></div>
-
+      <!-- Right Controls & System Menu -->
+      <div class="header-actions">
         <button id="btn-add-sample-global" class="btn btn-primary btn-sm" title="Capture current angle to target gallery (Key: 'a')">
           + Angle
         </button>
@@ -413,16 +405,19 @@
           📹 Export
         </button>
 
-        <div class="header-dropdown">
-          <button class="btn btn-secondary btn-sm dropbtn" title="System Settings & Actions">
+        <div class="header-dropdown" id="dropdown-system">
+          <button id="btn-system-dropdown" class="btn btn-secondary btn-sm dropbtn" type="button" title="System Settings & Actions">
             ⚙️ System ▼
           </button>
-          <div class="dropdown-content">
+          <div class="dropdown-content" id="dropdown-system-content">
             <div class="dropdown-panel">
+              <button id="btn-source-live" class="dropdown-item" title="Switch active camera to Live Webcam">🎥 Switch to Live Feed</button>
+              <button id="btn-source-video" class="dropdown-item" title="Switch active camera to Pre-recorded Video">📼 Switch to Video Feed</button>
+              <div class="dropdown-divider"></div>
               <button id="btn-fast-scan" class="dropdown-item" title="Fast Scan Footage">⏩ Fast Scan</button>
               <button id="btn-audit-global" class="dropdown-item" title="View Audit Trail">📜 Audit Trail</button>
               <button id="btn-settings-global" class="dropdown-item" title="Advanced Settings (Shortcut: 's')">⚙️ Settings</button>
-              <button id="btn-shortcuts-global" class="dropdown-item" title="Keyboard Shortcuts (Shortcut: '?')">❓ Shortcuts</button>
+              <button id="btn-shortcuts-global" class="dropdown-item" title="Keyboard Shortcuts (Shortcut: '?')">❓ Operator Guide</button>
               <div class="dropdown-divider"></div>
               <button id="btn-quit-global" class="dropdown-item item-danger" title="Safely shutdown all camera pipelines and server (Shortcut: 'q')">⏻ Shutdown</button>
             </div>
