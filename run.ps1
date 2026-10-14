@@ -1,11 +1,35 @@
-# Argus Surveillance System PowerShell Launcher
+# ============================================================
+# Argus Surveillance Operations Center — PowerShell Launcher
+# ============================================================
 
-$venvPython = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
+$repoDir = $PSScriptRoot
+Set-Location $repoDir
 
-if (-not (Test-Path $venvPython)) {
-    Write-Host "[ARGUS] Virtual environment not found. Creating .venv..." -ForegroundColor Yellow
-    py -3.12 -m venv .venv
-    & (Join-Path $PSScriptRoot ".venv\Scripts\pip.exe") install -e .
+$venvPython = Join-Path $repoDir ".venv\Scripts\python.exe"
+
+# 1. Locate available Python interpreter
+if (Test-Path $venvPython) {
+    $pythonCmd = $venvPython
+} else {
+    $pythonCmd = (Get-Command python -ErrorAction SilentlyContinue)?.Source
+    if (-not $pythonCmd) {
+        $pythonCmd = (Get-Command py -ErrorAction SilentlyContinue)?.Source
+    }
 }
 
-& $venvPython -m src.app.main $args
+# 2. If Python is completely missing, attempt automatic installation via winget
+if (-not $pythonCmd) {
+    Write-Host "[ARGUS] Python was not found in system PATH." -ForegroundColor Yellow
+    Write-Host "[ARGUS] Installing Python 3.12 via Windows Package Manager (winget)..." -ForegroundColor Cyan
+    try {
+        winget install Python.Python.3.12 --silent --accept-package-agreements --accept-source-agreements
+        $pythonCmd = (Get-Command python -ErrorAction SilentlyContinue)?.Source
+    } catch {
+        Write-Host "[CRITICAL] Could not install Python automatically. Please install Python 3.11+ from https://www.python.org/downloads/" -ForegroundColor Red
+        exit 1
+    }
+}
+
+# 3. Launch self-healing bootstrapper
+$bootstrapScript = Join-Path $repoDir "scripts\bootstrap.py"
+& $pythonCmd $bootstrapScript $args
