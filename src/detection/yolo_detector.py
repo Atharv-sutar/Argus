@@ -129,6 +129,7 @@ class YOLODetector(BaseDetector):
                             )
                         )
 
+            del results
             return DetectionResult(
                 detections=detections,
                 frame_id=frame_id,
@@ -222,6 +223,8 @@ class YOLODetector(BaseDetector):
                             timestamp_ms=ts
                         )
                     )
+
+                del results
 
             except Exception as e:
                 logger.error(f"Error during batched detection for chunk {i // chunk_size}: {e}")

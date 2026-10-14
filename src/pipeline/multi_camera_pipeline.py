@@ -40,6 +40,7 @@ from src.tracking import ByteTracker, BoTSORTTracker
 from src.visualization.annotator import FrameAnnotator
 from src.core.undo_stack import UndoStack
 from src.forensic.clip_recorder import ForensicClipRecorder
+from src.inference.device import trim_gpu_memory
 
 logger = logging.getLogger(__name__)
 
@@ -771,6 +772,7 @@ class MultiCameraPipeline:
             self._latest_jpegs.clear()
 
         self.forensic_recorder.discard()
+        trim_gpu_memory()
 
         logger.info("[MULTI-CAM] Target cleared and gallery purged. Playback resumed if paused.")
 
@@ -1265,6 +1267,10 @@ class MultiCameraPipeline:
                         time.time() * 1000.0,
                         target.state.value if target else "UNKNOWN",
                     )
+
+        # 10. Memory Management: periodic VRAM cache trimming and garbage collection
+        if self._frame_count % 100 == 0:
+            trim_gpu_memory()
 
         return results
 
@@ -2158,7 +2164,8 @@ class MultiCameraPipeline:
             # Persist target gallery on graceful shutdown
             if getattr(self.config, "storage", None) and self.config.storage.enabled:
                 self.identity.save_to_db(self.config.storage.db_path)
-                
+
+        trim_gpu_memory()
         logger.info("[MULTI-CAM] Pipeline stopped.")
 
     def profile_hardware(self) -> str:

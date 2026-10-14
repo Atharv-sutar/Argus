@@ -41,3 +41,21 @@ def resolve_inference_device(requested_device: str = "auto") -> str:
         return "cpu"
 
     return "cpu"
+
+
+def trim_gpu_memory() -> None:
+    """
+    Safely triggers PyTorch CUDA cache clearing and garbage collection.
+    Prevents progressive VRAM fragmentation on memory-constrained GPUs (e.g. 4GB GTX 1650).
+    """
+    try:
+        import gc
+        gc.collect()
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            if hasattr(torch.cuda, "ipc_collect"):
+                torch.cuda.ipc_collect()
+    except Exception as e:
+        logger.debug(f"[MEMORY] GPU trim exception: {e}")
+

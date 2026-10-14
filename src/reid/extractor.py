@@ -284,6 +284,7 @@ class PyTorchReIDExtractor(BaseReID):
                 try:
                     batch_arr = np.stack(chunk_preps).astype(np.float32)
                     chunk_feats = self._trt_session.run(batch_arr)
+                    del batch_arr
                 except Exception as e:
                     logger.warning(f"Error in accelerated ReID batch inference ({e}). Falling back to PyTorch.")
                     chunk_feats = None
@@ -295,6 +296,7 @@ class PyTorchReIDExtractor(BaseReID):
                     batch_tensor = torch.from_numpy(np.stack(chunk_preps)).to(self._device)
                     with torch.inference_mode():
                         chunk_feats = self._model(batch_tensor).cpu().numpy().astype(np.float32)
+                    del batch_tensor
                 except Exception as e:
                     logger.error(f"Error in batch PyTorch ReID extraction: {e}")
                     chunk_feats = np.zeros((len(chunk_preps), self.feature_dim), dtype=np.float32)
