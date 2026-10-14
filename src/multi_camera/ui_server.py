@@ -460,6 +460,37 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     })
                 return
 
+            elif path == "/api/recording/stats":
+                if self.runtime_pipeline is not None and getattr(self.runtime_pipeline, "recording_manager", None):
+                    self._send_json(self.runtime_pipeline.recording_manager.get_storage_stats())
+                else:
+                    self._send_json({
+                        "enabled": False,
+                        "active_cameras": [],
+                        "total_segments": 0,
+                        "storage_used_bytes": 0,
+                        "storage_used_mb": 0.0,
+                        "storage_used_gb": 0.0,
+                    })
+                return
+
+            elif path == "/api/recording/segments":
+                if self.runtime_pipeline is not None and getattr(self.runtime_pipeline, "recording_manager", None):
+                    camera_id = query.get("camera_id", [None])[0]
+                    start_ms = float(query.get("start_ms", [0.0])[0]) if "start_ms" in query else None
+                    end_ms = float(query.get("end_ms", [0.0])[0]) if "end_ms" in query else None
+                    limit = int(query.get("limit", [50])[0])
+                    segments = self.runtime_pipeline.recording_manager.index.query_segments(
+                        camera_id=camera_id,
+                        start_time_ms=start_ms,
+                        end_time_ms=end_ms,
+                        limit=limit,
+                    )
+                    self._send_json({"segments": segments})
+                else:
+                    self._send_json({"segments": []})
+                return
+
             elif path == "/api/undo/stack":
                 if self.runtime_pipeline is not None and getattr(self.runtime_pipeline, "undo_stack", None):
                     self._send_json(self.runtime_pipeline.undo_stack.get_state())

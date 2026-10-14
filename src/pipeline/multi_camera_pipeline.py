@@ -41,6 +41,7 @@ from src.visualization.annotator import FrameAnnotator
 from src.core.undo_stack import UndoStack
 from src.forensic.clip_recorder import ForensicClipRecorder
 from src.inference.device import trim_gpu_memory
+from src.recording.manager import ContinuousRecordingManager
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +203,20 @@ class MultiCameraPipeline:
             max_memory_frames=fcfg.max_memory_frames
         )
 
+        # 9.5 Continuous Recording NVR
+        rcfg = getattr(self.config, "recording", None)
+        if rcfg is not None:
+            self.recording_manager = ContinuousRecordingManager(
+                enabled=rcfg.enabled,
+                output_dir=rcfg.output_dir,
+                segment_duration_s=rcfg.segment_duration_s,
+                max_storage_gb=rcfg.retention.max_storage_gb,
+                max_age_days=rcfg.retention.max_age_days,
+                cleanup_interval_s=rcfg.retention.cleanup_interval_s,
+            )
+        else:
+            self.recording_manager = ContinuousRecordingManager(enabled=False)
+
         storage_str = str(self.identity_manager.vector_store) if self.identity_manager and self.identity_manager.vector_store else 'None'
         
         # 10. Log Technology Stack
@@ -345,6 +360,8 @@ class MultiCameraPipeline:
         # Remove deleted nodes and cleanup caches
         for cid in list(self._nodes.keys()):
             if cid not in graph_ids:
+                if getattr(self, "recording_manager", None):
+                    self.recording_manager.stop_camera_recording(cid)
                 worker = self._workers.pop(cid, None)
                 if worker is not None:
                     try:
@@ -365,6 +382,8 @@ class MultiCameraPipeline:
             if cid in self._nodes:
                 old_cfg = self._nodes[cid].config
                 if str(old_cfg.source) != str(cfg.source) or old_cfg.source_type != cfg.source_type:
+                    if getattr(self, "recording_manager", None):
+                        self.recording_manager.stop_camera_recording(cid)
                     if cid in self._workers:
                         try:
                             self._workers[cid].stop()
@@ -411,6 +430,16 @@ class MultiCameraPipeline:
             self._workers[camera_id] = worker
             if camera.is_opened():
                 node.mark_online()
+                if getattr(self, "recording_manager", None) and self.recording_manager.enabled:
+                    fps = float(getattr(node.config, "fps", None) or getattr(self.config.camera, "fps", 20.0) or 20.0)
+                    width = int(getattr(node.config, "width", None) or getattr(self.config.camera, "width", 1280) or 1280)
+                    height = int(getattr(node.config, "height", None) or getattr(self.config.camera, "height", 720) or 720)
+                    self.recording_manager.start_camera_recording(
+                        camera_id=camera_id,
+                        source_type=node.config.source_type,
+                        resolution=(width, height),
+                        fps=fps,
+                    )
             else:
                 node.mark_offline()
             logger.info(f"[MULTI-CAM] Initialized camera worker for '{camera_id}' (source={node.config.source}, opened={camera.is_opened()})")
@@ -468,6 +497,7 @@ class MultiCameraPipeline:
             forensic_recording=self.forensic_recorder.is_recording,
             forensic_duration_s=round(self.forensic_recorder.duration_seconds, 1),
             forensic_frames=self.forensic_recorder.frame_count,
+            recording_stats=self.recording_manager.get_storage_stats() if getattr(self, "recording_manager", None) else None,
         )
 
     def get_camera_status(self, camera_id: str) -> Optional[CameraStatus]:
@@ -871,6 +901,12 @@ class MultiCameraPipeline:
                 logger.error(f"[MULTI-CAM] Camera worker error on {cid}: {e}")
                 role = next((r for c, _, r in tasks if c == cid), "error")
                 acquired_results[cid] = (cid, role, None, 0.0)
+
+        # Single-stream continuous recording tap for live surveillance feeds
+        if getattr(self, "recording_manager", None) and self.recording_manager.enabled:
+            for cid, res in acquired_results.items():
+                if len(res) >= 4 and res[2] is not None:
+                    self.recording_manager.feed_frame(cid, res[2], res[3])
 
         # Execute Phase 2: Cross-Camera Batched YOLO Inference
         yolo_frames = []
@@ -2071,6 +2107,9 @@ class MultiCameraPipeline:
     def release_all_cameras(self) -> None:
         """Safely stops and releases all active camera capture handles."""
         logger.info("[MULTI-CAM] Releasing all camera capture handles...")
+        if getattr(self, "recording_manager", None):
+            for cid in list(self._workers.keys()):
+                self.recording_manager.stop_camera_recording(cid)
         with self._frame_lock:
             for cid, worker in list(self._workers.items()):
                 try:
@@ -2169,6 +2208,10 @@ class MultiCameraPipeline:
         """Stop all camera workers and release resources."""
         self._is_running = False
         self._is_paused = False
+
+        # Stop continuous recording writers and retention daemon
+        if getattr(self, "recording_manager", None):
+            self.recording_manager.stop_all()
 
         # Discard any in-progress forensic recording
         if self.forensic_recorder.is_recording:

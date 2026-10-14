@@ -545,3 +545,4 @@ class PipelineTelemetry:
     forensic_recording: bool = False
     forensic_duration_s: float = 0.0
     forensic_frames: int = 0
+    recording_stats: Optional[Dict[str, Any]] = None

@@ -82,3 +82,12 @@ forensic:
   - 720
   max_memory_frames: 9000
   export_dir: exports
+recording:
+  enabled: true
+  output_dir: recordings
+  segment_duration_s: 300.0
+  container_format: mp4
+  retention:
+    max_storage_gb: 50.0
+    max_age_days: 7.0
+    cleanup_interval_s: 300.0

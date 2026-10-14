@@ -153,6 +153,25 @@ class ForensicConfig:
     max_memory_frames: int = 9000
     export_dir: str = "exports"
 
+
+@dataclass
+class RecordingRetentionConfig:
+    """Configuration for retention cleanup of continuous recordings."""
+    max_storage_gb: float = 50.0
+    max_age_days: float = 7.0
+    cleanup_interval_s: float = 300.0
+
+
+@dataclass
+class RecordingConfig:
+    """Configuration for continuous background NVR recording."""
+    enabled: bool = True
+    output_dir: str = "recordings"
+    segment_duration_s: float = 300.0
+    container_format: str = "mp4"
+    retention: RecordingRetentionConfig = field(default_factory=RecordingRetentionConfig)
+
+
 @dataclass
 class AppConfig:
     camera: CameraConfig = field(default_factory=CameraConfig)
@@ -165,6 +184,7 @@ class AppConfig:
     storage: StorageConfig = field(default_factory=StorageConfig)
     playback: PlaybackConfig = field(default_factory=PlaybackConfig)
     forensic: ForensicConfig = field(default_factory=ForensicConfig)
+    recording: RecordingConfig = field(default_factory=RecordingConfig)
 
     @classmethod
     def from_yaml(cls, path: Union[str, Path]) -> AppConfig:
@@ -209,6 +229,11 @@ class AppConfig:
             
         forensic_config = ForensicConfig(**forensic_data) if forensic_data else ForensicConfig()
 
+        rec_data = data.get("recording", {})
+        ret_data = rec_data.pop("retention", {}) if isinstance(rec_data, dict) else {}
+        ret_config = RecordingRetentionConfig(**ret_data) if ret_data else RecordingRetentionConfig()
+        recording_config = RecordingConfig(**rec_data, retention=ret_config) if rec_data else RecordingConfig()
+
         return cls(
             camera=CameraConfig(**camera_data),
             inference=InferenceConfig(**inference_data),
@@ -220,6 +245,7 @@ class AppConfig:
             storage=storage_config,
             playback=playback_config,
             forensic=forensic_config,
+            recording=recording_config,
         )
 
 
