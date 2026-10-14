@@ -1,7 +1,7 @@
 {
-  "timestamp": "2026-10-14 21:22:37",
+  "timestamp": "2026-10-14 22:05:49",
   "config": {
-    "reid_model": "osnet_x1_0",
+    "reid_model": "auto",
     "match_threshold": 0.75,
     "reacquisition_threshold": 0.78,
     "auto_add_threshold": 0.82,
@@ -13,27 +13,28 @@
   "metrics": {
     "total_frames": 500,
     "target_present_frames": 343,
-    "true_positives": 342,
-    "false_positives": 87,
-    "false_negatives": 1,
-    "true_negatives": 70,
-    "precision": 0.7972,
-    "recall": 0.9971,
-    "f1_score": 0.886,
-    "false_positive_rate": 0.5541,
-    "id_switches": 87,
+    "true_positives": 327,
+    "false_positives": 0,
+    "false_negatives": 16,
+    "true_negatives": 157,
+    "precision": 1.0,
+    "recall": 0.9534,
+    "f1_score": 0.9761,
+    "false_positive_rate": 0.0,
+    "id_switches": 0,
     "recovery_events": 1,
-    "mean_target_sim": 0.997,
-    "mean_bystander_sim": 0.9971,
-    "separation_gap": -0.0001,
+    "mean_target_sim": 0.891,
+    "mean_bystander_sim": 0.1592,
+    "separation_gap": 0.7318,
     "state_frames": {
-      "UNSELECTED": 35,
+      "UNSELECTED": 50,
       "LOCKED": 1,
-      "TRACKING": 287,
-      "CONFIRMED": 141,
-      "SEARCHING": 36
+      "TRACKING": 218,
+      "CONFIRMED": 108,
+      "SEARCHING": 122,
+      "UNCERTAIN": 1
     }
   },
-  "elapsed_seconds": 24.04,
-  "evaluation_fps": 20.8
+  "elapsed_seconds": 57.53,
+  "evaluation_fps": 8.7
 }

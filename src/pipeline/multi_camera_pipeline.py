@@ -1578,15 +1578,35 @@ class MultiCameraPipeline:
                             f"Refusing to lock onto single person in frame while target is LOST"
                         )
 
-                # Manual anchor verification for reacquisition
+                # Manual anchor verification for reacquisition (Anti-Scoop Guard)
                 if is_match and self.identity._manual_matrix is not None and len(self.identity._manual_entries) > 0:
-                    manual_anchor_thresh = max(0.55, self._reacquisition_threshold - 0.15)
+                    manual_anchor_thresh = max(0.68, self._reacquisition_threshold - 0.05)
                     if man_sim_f < manual_anchor_thresh:
                         logger.info(
                             f"[ANTI-SCOOP] Reacquisition of Track #{cand_track.track_id} REJECTED: "
                             f"manual anchor check failed (sim_manual={man_sim_f:.3f} < {manual_anchor_thresh:.3f})"
                         )
                         is_match = False
+
+                # Spatial boundary exit safeguard:
+                # If target was lost while exiting the frame boundary on this camera,
+                # do not reacquire an interior candidate that suddenly appears far from that exit boundary.
+                if is_match and target.last_known_box is not None and self._active_camera_id:
+                    w_active = self._get_or_create_worker(self._active_camera_id)
+                    if w_active is not None and w_active._last_frame is not None:
+                        fh, fw = w_active._last_frame.shape[:2]
+                        lb = target.last_known_box
+                        was_at_edge = (lb.x1 <= 20 or lb.x2 >= fw - 20 or lb.y1 <= 20 or lb.y2 >= fh - 20)
+                        if was_at_edge:
+                            cb = cand_track.box
+                            cand_at_edge = (cb.x1 <= 30 or cb.x2 >= fw - 30 or cb.y1 <= 30 or cb.y2 >= fh - 30)
+                            dist_to_exit = ((cb.center[0] - lb.center[0])**2 + (cb.center[1] - lb.center[1])**2)**0.5
+                            if not cand_at_edge and dist_to_exit > 120.0:
+                                logger.info(
+                                    f"[ANTI-SCOOP] Boundary exit guard: Rejecting Track #{cand_track.track_id} "
+                                    f"(target exited boundary at {lb.center}, candidate is interior at {cb.center}, dist={dist_to_exit:.1f}px)"
+                                )
+                                is_match = False
 
                 self._evidence_engine.register_observation(
                     track_id=cand_track.track_id,

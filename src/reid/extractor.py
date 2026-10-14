@@ -50,26 +50,44 @@ class PyTorchReIDExtractor(BaseReID):
         self._init_model()
 
     def _init_model(self) -> None:
-        if self.prefer_engine and ("osnet" in self.model_name or self.model_name in ("default", "reid", "osnet_x0_25", "osnet_x1_0")):
+        if self.prefer_engine:
             try:
                 from pathlib import Path
                 from src.inference.tensorrt_engine import TensorRTInferenceSession
 
-                norm_name = "osnet_x1_0" if "x1_0" in self.model_name else "osnet_x0_25"
-                engine_path = Path("models") / f"{norm_name}.engine"
-                onnx_path = Path("models") / f"{norm_name}.onnx"
-
                 candidate_path = None
-                if engine_path.is_file():
-                    candidate_path = str(engine_path)
-                elif onnx_path.is_file():
-                    candidate_path = str(onnx_path)
+                dim = 512
+                norm_name = "person_reid_youtu"
+
+                # 1. Prefer production Person ReID Youtu ONNX model (768D) if requested or auto/default
+                if self.model_name in ("auto", "default", "reid", "youtu", "person_reid_youtu"):
+                    for p in [
+                        Path("src/reid/backbones/person_reid_youtu_2021nov.onnx"),
+                        Path("models/person_reid_youtu_2021nov.onnx"),
+                    ]:
+                        if p.is_file():
+                            candidate_path = str(p)
+                            dim = 768
+                            norm_name = "person_reid_youtu"
+                            break
+
+                # 2. Check for explicit or fallback OSNet engine/onnx
+                if candidate_path is None and ("osnet" in self.model_name or self.model_name in ("default", "reid", "auto")):
+                    norm_name = "osnet_x1_0" if "x1_0" in self.model_name else "osnet_x0_25"
+                    engine_path = Path("models") / f"{norm_name}.engine"
+                    onnx_path = Path("models") / f"{norm_name}.onnx"
+                    if engine_path.is_file():
+                        candidate_path = str(engine_path)
+                        dim = 512
+                    elif onnx_path.is_file():
+                        candidate_path = str(onnx_path)
+                        dim = 512
 
                 if candidate_path:
                     logger.info(f"Loading accelerated ReID session from {candidate_path}...")
                     self._trt_session = TensorRTInferenceSession(candidate_path)
                     self.active_backend = self._trt_session.active_backend
-                    self.feature_dim = 512
+                    self.feature_dim = dim
                     logger.info(f"ReID model '{norm_name}' loaded via {self.active_backend} (dim={self.feature_dim}).")
                     return
             except Exception as e:
@@ -125,18 +143,18 @@ class PyTorchReIDExtractor(BaseReID):
             pad_total = max(0, new_h - h)
             pad_top = pad_total // 2
             pad_bottom = pad_total - pad_top
-            padded = cv2.copyMakeBorder(crop, pad_top, pad_bottom, 0, 0, cv2.BORDER_CONSTANT, value=[114, 114, 114])
+            padded = cv2.copyMakeBorder(crop, pad_top, pad_bottom, 0, 0, cv2.BORDER_REPLICATE)
         elif current_aspect < target_aspect:
             # Crop is narrower than 1:2 -> pad left and right
             new_w = int(h * target_aspect)
             pad_total = max(0, new_w - w)
             pad_left = pad_total // 2
             pad_right = pad_total - pad_left
-            padded = cv2.copyMakeBorder(crop, 0, 0, pad_left, pad_right, cv2.BORDER_CONSTANT, value=[114, 114, 114])
+            padded = cv2.copyMakeBorder(crop, 0, 0, pad_left, pad_right, cv2.BORDER_REPLICATE)
         else:
             padded = crop
 
-        # OSNet expects input format (H=256, W=128)
+        # Standard ReID input format (H=256, W=128)
         resized = cv2.resize(padded, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
 

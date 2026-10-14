@@ -30,7 +30,7 @@ tracking:
   appearance_thresh: 0.35
   ema_alpha: 0.9
 reid:
-  model_name: osnet_x1_0
+  model_name: auto
   match_threshold: 0.75
   reacquisition_threshold: 0.78
   auto_add_threshold: 0.82
