@@ -906,8 +906,20 @@ class MultiCameraPipeline:
         # Execute Phase 2.5: Cross-Camera Batched ReID Extraction for Tracking
         cam_det_embeddings: Dict[str, List[Optional[Embedding]]] = {}
         reid_weight = getattr(self.config.tracking, "reid_weight", 0.0)
+        event_driven_reid = getattr(self.config.reid, "event_driven_reid", True)
+        target = self.target_manager.target
+        target_lost_or_uncertain = (target is not None and target.state in (TargetState.LOST, TargetState.UNCERTAIN))
 
-        if self.reid_extractor is not None and reid_weight > 0.0:
+        should_extract_tracking_reid = (
+            self.reid_extractor is not None and reid_weight > 0.0 and (
+                not event_driven_reid or
+                target_lost_or_uncertain or
+                self.search_manager.is_searching or
+                (self._frame_count % self.reid_interval == 0)
+            )
+        )
+
+        if should_extract_tracking_reid:
             crops_to_batch: List[np.ndarray] = []
             crop_mapping: List[Tuple[str, int]] = []
 
@@ -1014,7 +1026,23 @@ class MultiCameraPipeline:
                             self.search_manager.on_candidate_lost(cid)
                             continue
 
+                        # Target-aware crop filtering: on active camera during steady tracking,
+                        # skip bystander crops unless target is lost, uncertain, or occluded.
+                        is_target_steady = (role == "active" and target is not None and 
+                                            target.state in (TargetState.TRACKING, TargetState.LOCKED))
+                        target_track_id = getattr(target, 'track_id', -1) if target is not None else -1
+                        active_target_occluded = False
+                        if is_target_steady and target_track_id >= 0:
+                            tgt_tr = next((t for t in track_res.tracks if t.track_id == target_track_id), None)
+                            if tgt_tr is not None:
+                                active_target_occluded = self._is_occluded(tgt_tr, track_res.tracks, iou_threshold=0.25)
+
                         for track in track_res.tracks:
+                            if event_driven_reid and is_target_steady and not active_target_occluded:
+                                # When active target is tracked and not occluded, only evaluate the target track
+                                if track.track_id != target_track_id:
+                                    continue
+
                             c_crop = worker.extract_crop(frame, track.box)
                             if c_crop is not None and c_crop.size > 0 and c_crop.shape[0] >= 12 and c_crop.shape[1] >= 12:
                                 blur_score = 100.0
@@ -1027,7 +1055,7 @@ class MultiCameraPipeline:
                                 
                                 # Only extract ReID if crop is reasonably sharp (variance > threshold)
                                 # For small crops, 50-100 is a reasonable threshold
-                                if blur_score > self.config.reid.min_sharpness or track.track_id == getattr(target, 'track_id', -1):
+                                if blur_score > self.config.reid.min_sharpness or track.track_id == target_track_id:
                                     crops_to_extract.append(c_crop)
                                     crop_meta.append((cid, track, c_crop))
                                 else:

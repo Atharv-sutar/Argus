@@ -64,6 +64,7 @@ class ReIDConfig:
     extract_interval_frames: int = 5
     min_crop_width: int = 32
     min_crop_height: int = 64
+    event_driven_reid: bool = True  # Uncertainty-triggered ReID: bypass redundant per-frame extraction during steady tracking
     
     # PROVISIONAL / INITIAL thresholds pending calibration against real camera footage
     # (resolution, lighting, and noise vary significantly per camera)
