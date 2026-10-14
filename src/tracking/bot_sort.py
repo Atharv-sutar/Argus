@@ -503,7 +503,8 @@ class BoTSORTTracker(BaseTracker):
     def update(
         self,
         detection_result: DetectionResult,
-        frame: Optional[np.ndarray] = None
+        frame: Optional[np.ndarray] = None,
+        det_embeddings: Optional[List[Optional[Embedding]]] = None,
     ) -> TrackResult:
         """
         Process new detections and update tracking state with BoT-SORT.
@@ -535,27 +536,33 @@ class BoTSORTTracker(BaseTracker):
         high_dets = [d for d in valid_detections if d.confidence >= self.track_thresh]
         low_dets = [d for d in valid_detections if d.confidence < self.track_thresh]
 
-        # 5. Extract ReID appearance embeddings for high-confidence detections if enabled
-        det_embeddings: List[Optional[Embedding]] = [None] * len(high_dets)
-        if self.reid_extractor is not None and frame is not None and high_dets:
-            crops = []
-            valid_indices = []
-            for i, d in enumerate(high_dets):
-                x1, y1, x2, y2 = map(int, d.box.as_xyxy())
-                x1, y1 = max(0, x1), max(0, y1)
-                x2, y2 = min(frame.shape[1], x2), min(frame.shape[0], y2)
-                crop = frame[y1:y2, x1:x2]
-                if crop.size > 0 and crop.shape[0] >= 16 and crop.shape[1] >= 16:
-                    crops.append(crop)
-                    valid_indices.append(i)
+        # 5. Appearance embeddings for high-confidence detections
+        if self.reid_extractor is None:
+            det_embeddings = [None] * len(high_dets)
+        elif det_embeddings is None:
+            det_embeddings = [None] * len(high_dets)
+            if frame is not None and high_dets:
+                crops = []
+                valid_indices = []
+                for i, d in enumerate(high_dets):
+                    x1, y1, x2, y2 = map(int, d.box.as_xyxy())
+                    x1, y1 = max(0, x1), max(0, y1)
+                    x2, y2 = min(frame.shape[1], x2), min(frame.shape[0], y2)
+                    crop = frame[y1:y2, x1:x2]
+                    if crop.size > 0 and crop.shape[0] >= 16 and crop.shape[1] >= 16:
+                        crops.append(crop)
+                        valid_indices.append(i)
 
-            if crops:
-                try:
-                    embs = self.reid_extractor.extract_batch(crops)
-                    for emb, idx in zip(embs, valid_indices):
-                        det_embeddings[idx] = emb
-                except Exception as e:
-                    logger.debug("ReID extraction in BoT-SORT failed: %s", e)
+                if crops:
+                    try:
+                        embs = self.reid_extractor.extract_batch(crops)
+                        for emb, idx in zip(embs, valid_indices):
+                            det_embeddings[idx] = emb
+                    except Exception as e:
+                        logger.debug("ReID extraction in BoT-SORT failed: %s", e)
+        elif len(det_embeddings) < len(high_dets):
+            # Pad with None if fewer embeddings provided
+            det_embeddings = list(det_embeddings) + [None] * (len(high_dets) - len(det_embeddings))
 
         # 6. Stage 1: Associate Active Tracks with High-Confidence Detections
         matches_1: List[Tuple[int, int]] = []
@@ -613,7 +620,7 @@ class BoTSORTTracker(BaseTracker):
         for t_idx, d_idx in matches_1:
             track = active_tracks[t_idx]
             det = high_dets[d_idx]
-            emb = det_embeddings[d_idx]
+            emb = det_embeddings[d_idx] if (det_embeddings is not None and d_idx < len(det_embeddings)) else None
             track.update(det, self._frame_id, embedding=emb)
 
         # 7. Stage 2: Associate Remaining Tracks with Low-Confidence Detections (Pure IoU)
@@ -641,7 +648,7 @@ class BoTSORTTracker(BaseTracker):
         # 8. Stage 3: Initialize New Tracks for Unmatched High-Confidence Detections
         for d_idx in unmatched_high_dets:
             det = high_dets[d_idx]
-            emb = det_embeddings[d_idx]
+            emb = det_embeddings[d_idx] if (det_embeddings is not None and d_idx < len(det_embeddings)) else None
             new_track = SingleBoTTrack(
                 track_id=self._next_id,
                 detection=det,

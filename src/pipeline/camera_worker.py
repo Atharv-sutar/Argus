@@ -49,10 +49,14 @@ class CameraWorker:
         return self.camera.read()
 
     def process_frame(
-        self, frame: np.ndarray, timestamp_ms: float, det_result: DetectionResult
+        self,
+        frame: np.ndarray,
+        timestamp_ms: float,
+        det_result: DetectionResult,
+        det_embeddings: Optional[List[Optional[Embedding]]] = None,
     ) -> TrackResult:
         """
-        Executes ByteTrack motion tracking on a single frame using pre-computed detections.
+        Executes motion tracking on a single frame using pre-computed detections.
         """
         # Calculate instantaneous FPS
         now = time.time()
@@ -63,8 +67,11 @@ class CameraWorker:
                 self._fps = 0.9 * self._fps + 0.1 * inst_fps if self._fps > 0 else inst_fps
         self._last_frame_time = now
 
-        # 1. Tracking
-        track_result = self.tracker.update(det_result, frame)
+        # 1. Tracking with precomputed or on-demand appearance embeddings
+        try:
+            track_result = self.tracker.update(det_result, frame, det_embeddings=det_embeddings) # type: ignore
+        except TypeError:
+            track_result = self.tracker.update(det_result, frame)
 
         self._last_frame = frame
         self._last_track_result = track_result

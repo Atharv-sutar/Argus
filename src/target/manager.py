@@ -102,6 +102,42 @@ class TargetManager:
             )
         return True
 
+    def select_by_track_id(
+        self,
+        track_id: int,
+        track_result: Optional[TrackResult] = None,
+        frame: Optional[np.ndarray] = None,
+        camera_id: str = "camera_0",
+    ) -> bool:
+        """Convenience method / alias for start_new_investigation selecting by track ID."""
+        return self.start_new_investigation(
+            track_id=track_id,
+            track_result=track_result,
+            frame=frame,
+            camera_id=camera_id,
+        )
+
+    def select_by_point(
+        self,
+        x: float,
+        y: float,
+        track_result: TrackResult,
+        frame: Optional[np.ndarray] = None,
+        camera_id: str = "camera_0",
+    ) -> Optional[int]:
+        """Select a target containing point (x, y) from track_result."""
+        for track in track_result.tracks:
+            b = track.box
+            if b.x1 <= x <= b.x2 and b.y1 <= y <= b.y2:
+                self.start_new_investigation(
+                    track_id=track.track_id,
+                    track_result=track_result,
+                    frame=frame,
+                    camera_id=camera_id,
+                )
+                return track.track_id
+        return None
+
     def correct_target(
         self,
         track_id: int,

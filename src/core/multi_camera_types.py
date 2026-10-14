@@ -54,6 +54,9 @@ class HandoffDecision(str, Enum):
     CONFIRMED = "confirmed"      # High confidence, auto-accept
     REJECTED = "rejected"        # Match failed or human rejected
 
+    def __bool__(self) -> bool:
+        return self == HandoffDecision.CONFIRMED
+
 
 @dataclass
 class CameraNodeConfig:

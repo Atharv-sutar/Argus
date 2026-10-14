@@ -354,7 +354,7 @@ class IdentityManager:
         if hasattr(self, "evidence_engine") and self.evidence_engine is not None:
             self.evidence_engine.clear()
         
-    def rollback_auto_entries(self, for_track_id: int) -> int:
+    def rollback_auto_entries(self, for_track_id: Optional[int] = None) -> int:
         """
         Shim for TargetGallery.rollback_auto_entries. 
         Removes provisional entries belonging to the specified track.
@@ -365,7 +365,10 @@ class IdentityManager:
             # Find indices to remove (in reverse order to safely shift crops)
             indices_to_remove = []
             for i, e in enumerate(ident.provisional_gallery):
-                if isinstance(e, tuple) and e[1] == for_track_id:
+                if isinstance(e, tuple):
+                    if for_track_id is None or e[1] == for_track_id:
+                        indices_to_remove.append(i)
+                elif for_track_id is None or getattr(e, "track_id", None) in (for_track_id, None):
                     indices_to_remove.append(i)
             
             for idx in reversed(indices_to_remove):
@@ -1036,6 +1039,32 @@ class IdentityManager:
 
         evaluations.sort(key=lambda x: x[1], reverse=True)
         return evaluations
+
+    def verify_candidate_crop(
+        self,
+        crop: np.ndarray,
+        identity_id: str = "target_0",
+    ) -> Tuple[bool, float]:
+        """Verifies if candidate crop matches the given identity_id."""
+        ev = self.evaluate_candidate_crop(crop, identity_id)
+        return ev.is_match, ev.candidate_score
+
+    def find_best_candidate(
+        self,
+        candidate_crops: List[Tuple[Any, np.ndarray]],
+        identity_id: str = "target_0",
+    ) -> Tuple[Optional[Any], float, float, float]:
+        """
+        Finds the best matching candidate crop against identity_id,
+        returning (best_item, best_score, second_score, margin).
+        """
+        ranked = self.rank_candidate_crops(candidate_crops, identity_id)
+        if not ranked:
+            return None, 0.0, 0.0, 0.0
+        best_item, best_score, _ = ranked[0]
+        second_score = ranked[1][1] if len(ranked) > 1 else 0.0
+        margin = max(0.0, best_score - second_score)
+        return best_item, best_score, second_score, margin
 
     def save_target_gallery(self) -> None:
         """Saves the target_0 gallery state and crops to the vector store metadata."""

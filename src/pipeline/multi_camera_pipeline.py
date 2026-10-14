@@ -267,8 +267,16 @@ class MultiCameraPipeline:
     def transit_history(self) -> List[Dict[str, Any]]:
         return list(self._transit_history)
 
+    @property
+    def detector(self) -> BaseDetector:
+        """The shared detection engine used across the multi-camera network."""
+        if self._shared_detector is None:
+            self._shared_detector = self._detector_factory()
+        return self._shared_detector
+
     def _default_detector_factory(self) -> BaseDetector:
         if self._shared_detector is None:
+            batch_sz = getattr(self.config.inference, "batch_size", 4)
             self._shared_detector = YOLODetector(
                 model_name=self.config.detection.model_name,
                 confidence_threshold=self.config.detection.confidence_threshold,
@@ -276,6 +284,7 @@ class MultiCameraPipeline:
                 target_classes=self.config.detection.target_classes,
                 device=self.config.inference.device,
                 image_size=self.config.detection.image_size,
+                batch_size=batch_sz,
             )
         return self._shared_detector
 
@@ -861,12 +870,21 @@ class MultiCameraPipeline:
                 role = next((r for c, _, r in tasks if c == cid), "error")
                 acquired_results[cid] = (cid, role, None, 0.0)
 
-        # Execute Phase 2: Batched YOLO Inference (or Mock Detection for Tests)
+        # Execute Phase 2: Cross-Camera Batched YOLO Inference
         yolo_frames = []
         yolo_meta = []
         det_map = {}
         
-        for cid, (_, role, frame, ts_ms) in acquired_results.items():
+        # Deterministic camera order: active camera first, then search cameras
+        ordered_cids = []
+        if active_cam_id and active_cam_id in acquired_results:
+            ordered_cids.append(active_cam_id)
+        for cid in sorted(acquired_results.keys()):
+            if cid != active_cam_id and cid not in ordered_cids:
+                ordered_cids.append(cid)
+
+        for cid in ordered_cids:
+            _, role, frame, ts_ms = acquired_results[cid]
             if frame is not None and role in ("active", "search"):
                 worker = self._get_or_create_worker(cid)
                 if worker and hasattr(worker, "detector"):
@@ -877,7 +895,7 @@ class MultiCameraPipeline:
                     yolo_meta.append((cid, ts_ms))
         
         if yolo_frames:
-            batch_det_results = self._default_detector_factory().detect_batch( # type: ignore
+            batch_det_results = self.detector.detect_batch(
                 frames=yolo_frames,
                 frame_ids=[self._frame_count] * len(yolo_frames),
                 timestamps_ms=[ts for _, ts in yolo_meta]
@@ -885,9 +903,51 @@ class MultiCameraPipeline:
             for meta, det_res in zip(yolo_meta, batch_det_results):
                 det_map[meta[0]] = det_res
 
+        # Execute Phase 2.5: Cross-Camera Batched ReID Extraction for Tracking
+        cam_det_embeddings: Dict[str, List[Optional[Embedding]]] = {}
+        reid_weight = getattr(self.config.tracking, "reid_weight", 0.0)
+
+        if self.reid_extractor is not None and reid_weight > 0.0:
+            crops_to_batch: List[np.ndarray] = []
+            crop_mapping: List[Tuple[str, int]] = []
+
+            for cid, det_res in det_map.items():
+                worker = self._get_or_create_worker(cid)
+                if worker and getattr(worker.tracker, "reid_extractor", None) is None:
+                    continue
+                _, _, frame, _ = acquired_results.get(cid, (None, None, None, 0.0))
+                if frame is not None and det_res and det_res.detections:
+                    valid_dets = [d for d in det_res.detections if d.box.area >= self.config.tracking.min_box_area]
+                    high_dets = [d for d in valid_dets if d.confidence >= self.config.tracking.track_thresh]
+                    cam_det_embeddings[cid] = [None] * len(high_dets)
+
+                    for idx, d in enumerate(high_dets):
+                        x1, y1, x2, y2 = map(int, d.box.as_xyxy())
+                        x1, y1 = max(0, x1), max(0, y1)
+                        x2, y2 = min(frame.shape[1], x2), min(frame.shape[0], y2)
+                        crop = frame[y1:y2, x1:x2]
+                        if crop.size > 0 and crop.shape[0] >= 16 and crop.shape[1] >= 16:
+                            crops_to_batch.append(crop)
+                            crop_mapping.append((cid, idx))
+
+            if crops_to_batch:
+                try:
+                    all_embs = self.reid_extractor.extract_batch(crops_to_batch)
+                    for (cid, idx), emb in zip(crop_mapping, all_embs):
+                        cam_det_embeddings[cid][idx] = emb
+                except Exception as e:
+                    logger.debug(f"[MULTI-CAM] Cross-camera ReID tracking batch error: {e}")
+
         # Execute Phase 3: Parallel Tracking
-        def _task_track(cid: str, worker: CameraWorker, frame: np.ndarray, ts_ms: float, det_res: DetectionResult):
-            track_res = worker.process_frame(frame, ts_ms, det_res)
+        def _task_track(
+            cid: str,
+            worker: CameraWorker,
+            frame: np.ndarray,
+            ts_ms: float,
+            det_res: DetectionResult,
+            det_embs: Optional[List[Optional[Embedding]]] = None,
+        ):
+            track_res = worker.process_frame(frame, ts_ms, det_res, det_embeddings=det_embs)
             return cid, frame, ts_ms, track_res
         
         track_futures = {}
@@ -896,7 +956,8 @@ class MultiCameraPipeline:
                 worker = self._get_or_create_worker(cid)
                 det_res = det_map.get(cid)
                 if worker and det_res:
-                    track_futures[self._executor.submit(_task_track, cid, worker, frame, ts_ms, det_res)] = cid
+                    det_embs = cam_det_embeddings.get(cid)
+                    track_futures[self._executor.submit(_task_track, cid, worker, frame, ts_ms, det_res, det_embs)] = cid
         
         phase1_results = {}
         for future in concurrent.futures.as_completed(track_futures):
@@ -907,7 +968,8 @@ class MultiCameraPipeline:
                 phase1_results[cid] = (cid, role, frame, ts_ms, track_res)
             except Exception as e:
                 logger.error(f"[MULTI-CAM] Tracking error on {cid}: {e}")
-                _, role, _, _ = acquired_results[cid]
+                _, role, frame, ts_ms = acquired_results[cid]
+                phase1_results[cid] = (cid, role, frame, ts_ms, None)
 
         # Fix: Ensure standby cameras get their unannotated frames encoded in Phase 2
         for cid, (_, role, frame, ts_ms) in acquired_results.items():

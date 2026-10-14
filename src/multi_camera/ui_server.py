@@ -108,6 +108,7 @@ def probe_local_webcams(
     end_index: int = 4,
     pipeline: Any = None,
     timeout_per_index: float = 1.5,
+    max_indices: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
     Safe sequential probe of local webcam devices with timeout per index.
@@ -115,6 +116,9 @@ def probe_local_webcams(
     """
     if _SHUTDOWN_EVENT.is_set():
         return []
+
+    if max_indices is not None:
+        end_index = start_index + max_indices
 
     cameras: List[Dict[str, Any]] = []
     t_start = time.time()

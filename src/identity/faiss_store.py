@@ -40,6 +40,10 @@ class FaissVectorStore(BaseVectorStore):
 
     def add(self, embedding: Embedding, identity_id: str) -> None:
         vec = embedding.vector
+        if self.index.ntotal == 0 and vec.shape[0] != self.feature_dim:
+            self.feature_dim = vec.shape[0]
+            self.index = faiss.IndexIDMap(faiss.IndexFlatIP(self.feature_dim))
+
         if vec.shape[0] != self.feature_dim:
             logger.warning(f"Embedding dim {vec.shape[0]} doesn't match FAISS dim {self.feature_dim}. Ignored.")
             return

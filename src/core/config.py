@@ -23,6 +23,9 @@ class InferenceConfig:
     half_precision: bool = False
     engine_type: str = "auto"
     engine_cache_dir: str = "models/trt_cache"
+    batch_size: int = 4
+    enable_cross_camera_batching: bool = True
+    max_batch_size: int = 8
 
 
 @dataclass

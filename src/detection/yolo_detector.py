@@ -27,6 +27,7 @@ class YOLODetector(BaseDetector):
         target_classes: Optional[List[int]] = None,
         device: str = "auto",
         image_size: int = 640,
+        batch_size: int = 4,
     ) -> None:
         self.model_name = model_name
         self.confidence_threshold = confidence_threshold
@@ -34,6 +35,7 @@ class YOLODetector(BaseDetector):
         self.target_classes = target_classes if target_classes is not None else [0]  # 0 is person in COCO
         self.device = resolve_inference_device(device)
         self.image_size = image_size
+        self.batch_size = max(1, batch_size)
         self._model = None
         self._load_model()
 
@@ -158,64 +160,72 @@ class YOLODetector(BaseDetector):
         if self._model is None:
             return [DetectionResult(detections=[], frame_id=fid, timestamp_ms=ts) for fid, ts in zip(frame_ids, timestamps_ms)]
 
-        try:
-            # ultralytics YOLO handles a list of numpy arrays natively for batched inference
-            results = self._model.predict(
-                source=frames,
-                conf=self.confidence_threshold,
-                iou=self.iou_threshold,
-                classes=self.target_classes,
-                imgsz=self.image_size,
-                device=self.device,
-                verbose=False,
-            )
+        det_results: List[DetectionResult] = []
+        chunk_size = max(1, self.batch_size)
 
-            det_results: List[DetectionResult] = []
-            
-            for frame, fid, ts, res in zip(frames, frame_ids, timestamps_ms, results):
-                detections: List[Detection] = []
-                boxes_obj = res.boxes
-                if boxes_obj is not None and len(boxes_obj) > 0:
-                    xyxy = boxes_obj.xyxy.cpu().numpy()
-                    confs = boxes_obj.conf.cpu().numpy()
-                    cls_ids = boxes_obj.cls.cpu().numpy().astype(int)
+        for i in range(0, len(frames), chunk_size):
+            chunk_frames = frames[i : i + chunk_size]
+            chunk_fids = frame_ids[i : i + chunk_size]
+            chunk_ts = timestamps_ms[i : i + chunk_size]
 
-                    h, w = frame.shape[:2]
-                    for box_coords, conf, cid in zip(xyxy, confs, cls_ids):
-                        x1, y1, x2, y2 = map(float, box_coords)
-                        x1 = max(0.0, min(float(w), x1))
-                        y1 = max(0.0, min(float(h), y1))
-                        x2 = max(0.0, min(float(w), x2))
-                        y2 = max(0.0, min(float(h), y2))
-                        if x2 <= x1 or y2 <= y1:
-                            continue
-
-                        bbox = BoundingBox(
-                            x1=x1,
-                            y1=y1,
-                            x2=x2,
-                            y2=y2,
-                            confidence=float(conf),
-                        )
-                        detections.append(
-                            Detection(
-                                box=bbox,
-                                class_id=int(cid),
-                                class_name="person" if int(cid) == 0 else f"class_{cid}",
-                                confidence=float(conf),
-                            )
-                        )
-
-                det_results.append(
-                    DetectionResult(
-                        detections=detections,
-                        frame_id=fid,
-                        timestamp_ms=ts
-                    )
+            try:
+                # ultralytics YOLO handles a list of numpy arrays natively for batched inference
+                results = self._model.predict(
+                    source=chunk_frames,
+                    batch=len(chunk_frames),
+                    conf=self.confidence_threshold,
+                    iou=self.iou_threshold,
+                    classes=self.target_classes,
+                    imgsz=self.image_size,
+                    device=self.device,
+                    verbose=False,
                 )
 
-            return det_results
+                for frame, fid, ts, res in zip(chunk_frames, chunk_fids, chunk_ts, results):
+                    detections: List[Detection] = []
+                    boxes_obj = res.boxes
+                    if boxes_obj is not None and len(boxes_obj) > 0:
+                        xyxy = boxes_obj.xyxy.cpu().numpy()
+                        confs = boxes_obj.conf.cpu().numpy()
+                        cls_ids = boxes_obj.cls.cpu().numpy().astype(int)
 
-        except Exception as e:
-            logger.error(f"Error during batched detection: {e}")
-            return [DetectionResult(detections=[], frame_id=fid, timestamp_ms=ts) for fid, ts in zip(frame_ids, timestamps_ms)]
+                        h, w = frame.shape[:2]
+                        for box_coords, conf, cid in zip(xyxy, confs, cls_ids):
+                            x1, y1, x2, y2 = map(float, box_coords)
+                            x1 = max(0.0, min(float(w), x1))
+                            y1 = max(0.0, min(float(h), y1))
+                            x2 = max(0.0, min(float(w), x2))
+                            y2 = max(0.0, min(float(h), y2))
+                            if x2 <= x1 or y2 <= y1:
+                                continue
+
+                            bbox = BoundingBox(
+                                x1=x1,
+                                y1=y1,
+                                x2=x2,
+                                y2=y2,
+                                confidence=float(conf),
+                            )
+                            detections.append(
+                                Detection(
+                                    box=bbox,
+                                    class_id=int(cid),
+                                    class_name="person" if int(cid) == 0 else f"class_{cid}",
+                                    confidence=float(conf),
+                                )
+                            )
+
+                    det_results.append(
+                        DetectionResult(
+                            detections=detections,
+                            frame_id=fid,
+                            timestamp_ms=ts
+                        )
+                    )
+
+            except Exception as e:
+                logger.error(f"Error during batched detection for chunk {i // chunk_size}: {e}")
+                for fid, ts in zip(chunk_fids, chunk_ts):
+                    det_results.append(DetectionResult(detections=[], frame_id=fid, timestamp_ms=ts))
+
+        return det_results

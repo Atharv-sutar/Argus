@@ -142,7 +142,8 @@ class ByteTracker(BaseTracker):
     def update(
         self,
         detection_result: DetectionResult,
-        frame: Optional[np.ndarray] = None
+        frame: Optional[np.ndarray] = None,
+        det_embeddings: Optional[List[Optional[Embedding]]] = None,
     ) -> TrackResult:
         self._frame_id = detection_result.frame_id
         timestamp_ms = detection_result.timestamp_ms
@@ -167,35 +168,38 @@ class ByteTracker(BaseTracker):
         iou_matrix_high = self._compute_iou_matrix(active_tracks, high_dets)
 
         # ReID Fusion
-        det_embeddings: List[Optional[Embedding]] = [None] * len(high_dets)
-        if self.reid_extractor is not None and frame is not None and high_dets:
-            crops = []
-            valid_indices = []
-            for i, d in enumerate(high_dets):
-                x1, y1, x2, y2 = map(int, d.box.as_xyxy())
-                x1, y1 = max(0, x1), max(0, y1)
-                x2, y2 = min(frame.shape[1], x2), min(frame.shape[0], y2)
-                crop = frame[y1:y2, x1:x2]
-                if crop.size > 0 and crop.shape[0] >= 16 and crop.shape[1] >= 16:
-                    crops.append(crop)
-                    valid_indices.append(i)
-            
-            if crops:
-                embs = self.reid_extractor.extract_batch(crops)
-                for emb, idx in zip(embs, valid_indices):
-                    det_embeddings[idx] = emb
+        det_embeddings_used = [None] * len(high_dets)
+        if self.reid_extractor is not None:
+            if det_embeddings is not None:
+                det_embeddings_used = list(det_embeddings)
+                if len(det_embeddings_used) < len(high_dets):
+                    det_embeddings_used.extend([None] * (len(high_dets) - len(det_embeddings_used)))
+            elif frame is not None and high_dets:
+                crops = []
+                valid_indices = []
+                for i, d in enumerate(high_dets):
+                    x1, y1, x2, y2 = map(int, d.box.as_xyxy())
+                    x1, y1 = max(0, x1), max(0, y1)
+                    x2, y2 = min(frame.shape[1], x2), min(frame.shape[0], y2)
+                    crop = frame[y1:y2, x1:x2]
+                    if crop.size > 0 and crop.shape[0] >= 16 and crop.shape[1] >= 16:
+                        crops.append(crop)
+                        valid_indices.append(i)
                 
-                # Fuse into cost matrix
+                if crops:
+                    embs = self.reid_extractor.extract_batch(crops)
+                    for emb, idx in zip(embs, valid_indices):
+                        det_embeddings_used[idx] = emb
+
+            # Fuse into cost matrix
+            if any(e is not None for e in det_embeddings_used):
                 for i, t in enumerate(active_tracks):
                     if t.track_id in self._track_embeddings:
                         t_emb = self._track_embeddings[t.track_id]
-                        for j, d_emb in enumerate(det_embeddings):
+                        for j, d_emb in enumerate(det_embeddings_used):
                             if d_emb is not None:
-                                # Cosine similarity (1.0 is identical)
                                 sim = t_emb.cosine_similarity(d_emb)
-                                # Map similarity to [0, 1] loosely
                                 reid_score = max(0.0, sim)
-                                # Fuse: since we greedy match descending order, higher is better
                                 iou_matrix_high[i, j] = (1.0 - self.reid_weight) * iou_matrix_high[i, j] + self.reid_weight * reid_score
 
         matches_1, unmatched_t_indices_1, unmatched_d_indices_1 = self._linear_assignment(
@@ -205,8 +209,8 @@ class ByteTracker(BaseTracker):
         for t_idx, d_idx in matches_1:
             track = active_tracks[t_idx]
             track.update(high_dets[d_idx], self._frame_id)
-            if det_embeddings[d_idx] is not None:
-                self._track_embeddings[track.track_id] = det_embeddings[d_idx]
+            if det_embeddings_used is not None and d_idx < len(det_embeddings_used) and det_embeddings_used[d_idx] is not None:
+                self._track_embeddings[track.track_id] = det_embeddings_used[d_idx]
 
         # Stage 2: Associate remaining tracks with low-confidence detections
         remaining_tracks = [active_tracks[i] for i in unmatched_t_indices_1]
@@ -227,8 +231,8 @@ class ByteTracker(BaseTracker):
             det = high_dets[d_idx]
             new_track = SingleTrackState(self._next_id, det, self._frame_id)
             self._tracks[self._next_id] = new_track
-            if det_embeddings[d_idx] is not None:
-                self._track_embeddings[self._next_id] = det_embeddings[d_idx]
+            if det_embeddings_used is not None and d_idx < len(det_embeddings_used) and det_embeddings_used[d_idx] is not None:
+                self._track_embeddings[self._next_id] = det_embeddings_used[d_idx]
             self._next_id += 1
 
         # Clean up stale/removed tracks exceeding track_buffer

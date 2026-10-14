@@ -33,12 +33,14 @@ class PyTorchReIDExtractor(BaseReID):
         device: str = "auto",
         input_size: Tuple[int, int] = (256, 128),
         prefer_engine: bool = True,
+        batch_size: int = 32,
     ) -> None:
         self.model_name = model_name.lower()
         self.device_str = resolve_inference_device(device)
         self.input_size = input_size
         self.feature_dim = 512
         self.prefer_engine = prefer_engine
+        self.batch_size = max(1, batch_size)
         self._model = None
         self._osnet_model = None
         self._device = None
@@ -270,33 +272,42 @@ class PyTorchReIDExtractor(BaseReID):
         if not valid_preps:
             return [zero_emb() for _ in crops]
 
-        feats = None
+        feats_list = []
+        chunk_size = max(1, self.batch_size)
 
-        # 1. Accelerated Engine Path (TensorRT / ONNX Runtime CUDA)
-        if self._trt_session is not None:
-            try:
-                batch_arr = np.stack(valid_preps).astype(np.float32)
-                feats = self._trt_session.run(batch_arr)
-            except Exception as e:
-                logger.warning(f"Error in accelerated ReID batch inference ({e}). Falling back to PyTorch.")
-                feats = None
+        for i in range(0, len(valid_preps), chunk_size):
+            chunk_preps = valid_preps[i : i + chunk_size]
+            chunk_feats = None
 
-        # 2. PyTorch Fallback Path
-        if feats is None and self._model is not None:
-            try:
-                import torch
-                batch_tensor = torch.from_numpy(np.stack(valid_preps)).to(self._device)
-                with torch.inference_mode():
-                    feats = self._model(batch_tensor).cpu().numpy().astype(np.float32)
-            except Exception as e:
-                logger.error(f"Error in batch PyTorch ReID extraction: {e}")
-                return [zero_emb() for _ in crops]
+            # 1. Accelerated Engine Path (TensorRT / ONNX Runtime CUDA)
+            if self._trt_session is not None:
+                try:
+                    batch_arr = np.stack(chunk_preps).astype(np.float32)
+                    chunk_feats = self._trt_session.run(batch_arr)
+                except Exception as e:
+                    logger.warning(f"Error in accelerated ReID batch inference ({e}). Falling back to PyTorch.")
+                    chunk_feats = None
 
-        if feats is None:
+            # 2. PyTorch Fallback Path
+            if chunk_feats is None and self._model is not None:
+                try:
+                    import torch
+                    batch_tensor = torch.from_numpy(np.stack(chunk_preps)).to(self._device)
+                    with torch.inference_mode():
+                        chunk_feats = self._model(batch_tensor).cpu().numpy().astype(np.float32)
+                except Exception as e:
+                    logger.error(f"Error in batch PyTorch ReID extraction: {e}")
+                    chunk_feats = np.zeros((len(chunk_preps), self.feature_dim), dtype=np.float32)
+
+            if chunk_feats is not None:
+                if len(chunk_feats.shape) > 2:
+                    chunk_feats = chunk_feats.reshape(chunk_feats.shape[0], -1)
+                feats_list.append(chunk_feats)
+
+        if not feats_list:
             return [zero_emb() for _ in crops]
 
-        if len(feats.shape) > 2:
-            feats = feats.reshape(feats.shape[0], -1)
+        feats = np.vstack(feats_list) if len(feats_list) > 1 else feats_list[0]
 
         embeddings: List[Embedding] = [zero_emb() for _ in range(len(crops))]
         for idx, orig_i in enumerate(indices):

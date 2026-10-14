@@ -9,6 +9,9 @@ inference:
   half_precision: false
   engine_type: auto
   engine_cache_dir: models/trt_cache
+  batch_size: 4
+  enable_cross_camera_batching: true
+  max_batch_size: 8
 detection:
   model_name: yolo11n.pt
   confidence_threshold: 0.4
