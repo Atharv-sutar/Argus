@@ -1246,20 +1246,22 @@ class MultiCameraPipeline:
                 pass # Standby doesn't need annotation
             
             jpeg_buf = None
-            try:
-                # Resize for UI streaming to save CPU and network bandwidth (matrix view is small anyway)
-                h, w = ann_frame.shape[:2]
-                if w > 800:
-                    scale = 800.0 / w
-                    stream_frame = cv2.resize(ann_frame, (int(w * scale), int(h * scale)))
-                else:
-                    stream_frame = ann_frame
+            should_encode = (role != "standby") or (self._frame_count % 10 == 0)
+            if should_encode:
+                try:
+                    # Resize for UI streaming to save CPU and network bandwidth (matrix view is small anyway)
+                    h, w = ann_frame.shape[:2]
+                    if w > 800:
+                        scale = 800.0 / w
+                        stream_frame = cv2.resize(ann_frame, (int(w * scale), int(h * scale)))
+                    else:
+                        stream_frame = ann_frame
 
-                ret, buf = cv2.imencode(".jpg", stream_frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
-                if ret:
-                    jpeg_buf = buf.tobytes()
-            except Exception:
-                pass
+                    ret, buf = cv2.imencode(".jpg", stream_frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
+                    if ret:
+                        jpeg_buf = buf.tobytes()
+                except Exception:
+                    pass
             return cid, ann_frame, track_res, target if role == "active" else None, jpeg_buf
 
         phase2_futures = []
