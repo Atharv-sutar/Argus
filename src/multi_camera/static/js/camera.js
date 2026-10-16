@@ -103,10 +103,11 @@ class CameraManager {
       }
     } catch (err) {
       if (this.app && this.app._isShuttingDown) return;
-      this.listEl.innerHTML = `<div class="empty-state">Discovery failed: ${err.message}</div>`;
+      const msg = err.name === 'AbortError' ? 'Scan timed out after 15s' : err.message;
+      this.listEl.innerHTML = `<div class="empty-state">Discovery failed: ${msg}</div>`;
       try {
         if (this.app && typeof this.app.showToast === 'function') {
-          this.app.showToast('Discovery failed', 'error');
+          this.app.showToast(`Discovery failed: ${msg}`, 'error');
         }
       } catch (_) {}
     } finally {

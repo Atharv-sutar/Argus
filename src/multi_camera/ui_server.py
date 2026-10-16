@@ -7,6 +7,7 @@ import json
 import logging
 import mimetypes
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -54,54 +55,65 @@ def is_shutdown_requested() -> bool:
     return _SHUTDOWN_EVENT.is_set()
 
 
-def _probe_single_device(idx: int) -> Optional[Dict[str, Any]]:
-    """Probes a single camera index using DirectShow (Windows) or native capture."""
-    if cv2 is None or _SHUTDOWN_EVENT.is_set():
-        return None
-    backend = cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY
-    t0 = time.time()
-    cap = None
-    try:
-        cap = cv2.VideoCapture(idx, backend)
-        if not cap or not cap.isOpened():
-            cap = cv2.VideoCapture(idx, cv2.CAP_ANY)
+_PROBE_CODE = (
+    "import cv2, json, sys\n"
+    "try:\n"
+    "    idx = int(sys.argv[1])\n"
+    "    cap = cv2.VideoCapture(idx)\n"
+    "    if cap and cap.isOpened():\n"
+    "        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640\n"
+    "        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480\n"
+    "        raw_fps = cap.get(cv2.CAP_PROP_FPS)\n"
+    "        fps = int(raw_fps) if (raw_fps and raw_fps > 0) else 30\n"
+    "        ret, frame = cap.read()\n"
+    "        cap.release()\n"
+    "        if ret and frame is not None:\n"
+    "            print(json.dumps({'source': idx, 'width': w, 'height': h, 'fps': fps}))\n"
+    "            sys.exit(0)\n"
+    "    if cap:\n"
+    "        cap.release()\n"
+    "except Exception:\n"
+    "    pass\n"
+    "sys.exit(1)\n"
+)
 
-        if cap and cap.isOpened():
-            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640
-            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
-            raw_fps = cap.get(cv2.CAP_PROP_FPS)
-            fps = int(raw_fps) if (raw_fps and raw_fps > 0) else 30
-            ret, frame = cap.read()
-            cap.release()
-            cap = None
-            elapsed = time.time() - t0
-            if ret and frame is not None:
-                logger.info(f"[PROBE] Webcam index {idx}: SUCCESS ({w}x{h} @ {fps}fps, took {elapsed:.2f}s)")
-                return {
-                    "source": idx,
-                    "name": f"Webcam {idx}",
-                    "source_type": "webcam",
-                    "width": w,
-                    "height": h,
-                    "fps": fps,
-                    "status": "available",
-                }
-            else:
-                logger.debug(f"[PROBE] Webcam index {idx}: opened but read() failed (took {elapsed:.2f}s)")
+
+def _probe_single_device(idx: int, timeout: float = 3.5) -> Optional[Dict[str, Any]]:
+    """Probes a single camera index in an isolated subprocess with strict timeout."""
+    if _SHUTDOWN_EVENT.is_set():
+        return None
+    t0 = time.time()
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", _PROBE_CODE, str(idx)],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        elapsed = time.time() - t0
+        if proc.returncode == 0 and proc.stdout.strip():
+            data = json.loads(proc.stdout.strip())
+            w = data.get("width", 640)
+            h = data.get("height", 480)
+            fps = data.get("fps", 30)
+            logger.info(f"[PROBE] Webcam index {idx}: SUCCESS ({w}x{h} @ {fps}fps, took {elapsed:.2f}s)")
+            return {
+                "source": idx,
+                "name": f"Webcam {idx}",
+                "source_type": "webcam",
+                "width": w,
+                "height": h,
+                "fps": fps,
+                "status": "available",
+            }
         else:
-            elapsed = time.time() - t0
-            logger.debug(f"[PROBE] Webcam index {idx}: could not open / device absent (took {elapsed:.2f}s)")
+            logger.debug(f"[PROBE] Webcam index {idx}: device absent / unreadable (took {elapsed:.2f}s)")
+    except subprocess.TimeoutExpired:
+        elapsed = time.time() - t0
+        logger.debug(f"[PROBE] Webcam index {idx}: probe timed out after {elapsed:.2f}s (device busy or invalid)")
     except Exception as e:
         elapsed = time.time() - t0
-        logger.debug(f"[PROBE] Webcam index {idx}: probe exception (took {elapsed:.2f}s): {e}")
-    finally:
-        if cap is not None:
-            try:
-                cap.release()
-                if sys.platform.startswith("win"):
-                    time.sleep(0.2)
-            except Exception:
-                pass
+        logger.debug(f"[PROBE] Webcam index {idx}: error (took {elapsed:.2f}s): {e}")
     return None
 
 
@@ -109,12 +121,12 @@ def probe_local_webcams(
     start_index: int = 0,
     end_index: int = 4,
     pipeline: Any = None,
-    timeout_per_index: float = 1.5,
+    timeout_per_index: float = 3.5,
     max_indices: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Safe sequential probe of local webcam devices with timeout per index.
-    Skips indices already in use by the live pipeline to prevent flickering.
+    Parallel probe of local webcam devices with strict per-device timeout in isolated subprocesses.
+    Skips indices already in use by the live pipeline to prevent device lockups.
     """
     if _SHUTDOWN_EVENT.is_set():
         return []
@@ -138,11 +150,12 @@ def probe_local_webcams(
                     except (ValueError, TypeError):
                         pass
 
-    if cv2 is not None and not _SHUTDOWN_EVENT.is_set():
+    if not _SHUTDOWN_EVENT.is_set():
+        indices_to_probe: List[int] = []
         for idx in range(start_index, end_index):
             if _SHUTDOWN_EVENT.is_set():
                 break
-            
+
             if idx in in_use_indices:
                 logger.info(f"[TOPOLOGY/PROBE] Skipping index {idx} (already in use by active pipeline)")
                 cameras.append({
@@ -154,14 +167,25 @@ def probe_local_webcams(
                     "fps": 30,
                     "status": "in_use",
                 })
-                continue
-                
-            try:
-                res = _probe_single_device(idx)
-                if res is not None:
-                    cameras.append(res)
-            except Exception as e:
-                logger.debug(f"[TOPOLOGY/PROBE] Error probing index {idx}: {e}")
+            else:
+                indices_to_probe.append(idx)
+
+        if indices_to_probe:
+            max_workers = min(len(indices_to_probe), 8)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_idx = {
+                    executor.submit(_probe_single_device, idx, timeout_per_index): idx
+                    for idx in indices_to_probe
+                }
+                for future in concurrent.futures.as_completed(future_to_idx):
+                    if _SHUTDOWN_EVENT.is_set():
+                        break
+                    try:
+                        res = future.result()
+                        if res is not None:
+                            cameras.append(res)
+                    except Exception as e:
+                        logger.debug(f"[TOPOLOGY/PROBE] Error in probe future: {e}")
 
         # Sort discovered cameras by source index
         cameras.sort(key=lambda c: str(c["source"]))
@@ -1442,23 +1466,43 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
         if cv2 is None:
             return None
 
-        src: Any = source_param
-        if source_type == "webcam":
+        src_str = str(source_param).strip()
+        is_url = src_str.startswith(("http://", "https://", "rtsp://"))
+        if is_url:
+            src = src_str
+        elif source_type == "webcam" or src_str.isdigit():
             try:
-                src = int(source_param)
-            except ValueError:
-                src = 0
+                src = int(src_str)
+            except (ValueError, TypeError):
+                src = src_str
+        else:
+            src = src_str
 
+        # If it's a webcam integer index that is already in use by active pipeline, don't re-open it
+        if isinstance(src, int) and self.runtime_pipeline is not None:
+            for cid, node in getattr(self.runtime_pipeline, "_nodes", {}).items():
+                try:
+                    if int(node.config.source) == src:
+                        jpeg = self.runtime_pipeline.get_camera_frame_jpeg(cid)
+                        if jpeg:
+                            return jpeg
+                except (ValueError, TypeError):
+                    pass
+
+        cap = None
         try:
-            backend = cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY
-            cap = cv2.VideoCapture(src, backend)
-            if not cap.isOpened():
-                cap = cv2.VideoCapture(src, cv2.CAP_ANY)
+            cap = cv2.VideoCapture(src)
+            if hasattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC"):
+                cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 2500)
+            if hasattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC"):
+                cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 2500)
+
             if not cap or not cap.isOpened():
                 return None
 
             ret, frame = cap.read()
             cap.release()
+            cap = None
 
             if not ret or frame is None:
                 return None
@@ -1474,6 +1518,12 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             return buf.tobytes()
         except Exception:
             return None
+        finally:
+            if cap is not None:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
 
 
 class ArgusHTTPServer(ThreadingHTTPServer):

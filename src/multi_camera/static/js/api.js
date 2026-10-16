@@ -94,15 +94,19 @@ const API = {
   },
 
   async discoverCameras(start = 0, end = 4) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
     try {
       const url = `${this.baseUrl}/api/cameras/discover?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeoutId);
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || `Discovery failed (${res.status} ${res.statusText})`);
       }
       return await res.json();
     } catch (err) {
+      clearTimeout(timeoutId);
       console.error('[API] discoverCameras error:', err);
       throw err;
     }
