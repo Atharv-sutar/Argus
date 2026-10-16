@@ -625,6 +625,52 @@ body.theme-dark {
   color: #f87171;
 }
 
+/* Quick Focus Button in Header */
+.tile-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-focus-quick {
+  background: rgba(0, 242, 254, 0.12);
+  border: 1px solid rgba(0, 242, 254, 0.35);
+  color: var(--cyan-bright);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.btn-focus-quick:hover {
+  background: var(--cyan-bright);
+  color: #0b0f19;
+  box-shadow: 0 0 8px var(--cyan-glow);
+  transform: translateY(-1px);
+}
+
+.camera-tile.tile-active .btn-focus-quick {
+  display: none;
+}
+
+/* Direct Tile Cursor States */
+.camera-tile:not(.tile-active) {
+  cursor: pointer;
+}
+
+.camera-tile:not(.tile-active) .camera-tile-video {
+  cursor: pointer;
+}
+
+.camera-tile.tile-active .camera-tile-video {
+  cursor: crosshair;
+}
+
 /* Video Stage inside tile */
 .camera-tile-video {
   flex: 1;
@@ -633,7 +679,6 @@ body.theme-dark {
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: crosshair;
   min-height: 180px;
   overflow: hidden;
 }

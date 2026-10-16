@@ -156,6 +156,8 @@ class MultiCameraPipeline:
 
         # 6. Active tracking state
         self._active_camera_id: Optional[str] = None
+        self._suppressed_handoff_cam: Optional[str] = None
+        self._suppressed_handoff_until: float = 0.0
         self._target_lost_timestamp: float = 0.0
         self._handoff_timestamp: float = 0.0
         self._is_running: bool = True
@@ -609,6 +611,8 @@ class MultiCameraPipeline:
 
         if selected_id is not None:
             self._active_camera_id = camera_id
+            self._suppressed_handoff_cam = None
+            self._suppressed_handoff_until = 0.0
             self.search_manager.reset()
             if camera_id in self._nodes:
                 self._nodes[camera_id].mark_active_target()
@@ -672,6 +676,8 @@ class MultiCameraPipeline:
 
         if selected_id is not None:
             self._active_camera_id = camera_id
+            self._suppressed_handoff_cam = None
+            self._suppressed_handoff_until = 0.0
             self.search_manager.reset()
             if camera_id in self._nodes:
                 self._nodes[camera_id].mark_active_target()
@@ -715,6 +721,8 @@ class MultiCameraPipeline:
         )
         if ok:
             self._active_camera_id = camera_id
+            self._suppressed_handoff_cam = None
+            self._suppressed_handoff_until = 0.0
             self.search_manager.reset()
             if camera_id in self._nodes:
                 self._nodes[camera_id].mark_active_target()
@@ -839,7 +847,13 @@ class MultiCameraPipeline:
         for node in self._nodes.values():
             if node.is_online:
                 node.mark_online()
-        self._active_camera_id = None
+        if not self._active_camera_id or self._active_camera_id not in self._nodes:
+            enabled_ids = [cid for cid in self.graph.all_camera_ids() if cid in self._nodes and self._nodes[cid].config.enabled]
+            self._active_camera_id = enabled_ids[0] if enabled_ids else None
+        if self._active_camera_id and self._active_camera_id in self._nodes:
+            self._nodes[self._active_camera_id].mark_active_target()
+        self._suppressed_handoff_cam = None
+        self._suppressed_handoff_until = 0.0
         self.search_manager.reset()
         self._transit_history.clear()
         if self.route_recorder:
@@ -1203,26 +1217,33 @@ class MultiCameraPipeline:
             if self._active_camera_id in self._nodes:
                 self._nodes[self._active_camera_id].mark_active_target()
         elif target_is_lost and self._active_camera_id:
-            has_adjacent_cams = len(self.graph.get_neighbors(self._active_camera_id, 1)) > 0
-            if not has_adjacent_cams:
+            suppressed_until = getattr(self, "_suppressed_handoff_until", 0.0)
+            if suppressed_until > now:
+                # Operator manually focused on this camera recently; do not trigger automated graph search
                 if self.search_manager.is_searching:
                     self.search_manager.reset()
                     self._deactivate_search_cameras()
-            elif not self.search_manager.is_searching:
-                self._target_lost_timestamp = now
-                search_cams = self.search_manager.on_target_lost(self._active_camera_id)
-                if search_cams:
-                    logger.info(f"[MULTI-CAM] Target LOST on camera '{self._active_camera_id}'. Initiating graph search on {len(search_cams)} adjacent cameras.")
-                    self._activate_search_cameras([cid for cid, _ in search_cams])
             else:
-                elapsed_s = now - self._target_lost_timestamp
-                expansion = self.search_manager.tick(elapsed_s)
-                if expansion is not None and len(expansion) > 0:
-                    self._activate_search_cameras([cid for cid, _ in expansion])
-                elif expansion == []:
-                    logger.warning("[MULTI-CAM] Multi-camera search timed out without recovery. Target LOST_PERMANENTLY.")
-                    self.target_manager.target.state = TargetState.LOST_PERMANENTLY
-                    self._deactivate_search_cameras()
+                has_adjacent_cams = len(self.graph.get_neighbors(self._active_camera_id, 1)) > 0
+                if not has_adjacent_cams:
+                    if self.search_manager.is_searching:
+                        self.search_manager.reset()
+                        self._deactivate_search_cameras()
+                elif not self.search_manager.is_searching:
+                    self._target_lost_timestamp = now
+                    search_cams = self.search_manager.on_target_lost(self._active_camera_id)
+                    if search_cams:
+                        logger.info(f"[MULTI-CAM] Target LOST on camera '{self._active_camera_id}'. Initiating graph search on {len(search_cams)} adjacent cameras.")
+                        self._activate_search_cameras([cid for cid, _ in search_cams])
+                else:
+                    elapsed_s = now - self._target_lost_timestamp
+                    expansion = self.search_manager.tick(elapsed_s)
+                    if expansion is not None and len(expansion) > 0:
+                        self._activate_search_cameras([cid for cid, _ in expansion])
+                    elif expansion == []:
+                        logger.warning("[MULTI-CAM] Multi-camera search timed out without recovery. Target LOST_PERMANENTLY.")
+                        self.target_manager.target.state = TargetState.LOST_PERMANENTLY
+                        self._deactivate_search_cameras()
                     
         # 5. Process Search Cameras Main-Thread Logic
         candidate_recovered_cam = None
@@ -1846,6 +1867,15 @@ class MultiCameraPipeline:
     ) -> None:
         """Executes active camera handoff to the newly recovered camera."""
         old_camera_id = self._active_camera_id
+        suppressed_cam = getattr(self, "_suppressed_handoff_cam", None)
+        suppressed_until = getattr(self, "_suppressed_handoff_until", 0.0)
+        if suppressed_cam == new_camera_id and time.time() < suppressed_until:
+            logger.info(
+                f"[MULTI-CAM HANDOFF] Suppressing auto-handoff back to '{new_camera_id}' "
+                f"because operator explicitly focused on '{self._active_camera_id}'"
+            )
+            return
+
         logger.info(
             f"[MULTI-CAM HANDOFF] Target recovered on '{new_camera_id}'! "
             f"Handing off active camera: '{old_camera_id}' -> '{new_camera_id}'"
@@ -1960,9 +1990,16 @@ class MultiCameraPipeline:
             if old_cam and old_cam in self._nodes and old_cam != camera_id:
                 if self._nodes[old_cam].is_online:
                     self._nodes[old_cam].mark_online()
+                self._suppressed_handoff_cam = old_cam
+                self._suppressed_handoff_until = time.time() + 15.0
 
             self._active_camera_id = camera_id
             self._nodes[camera_id].mark_active_target()
+
+            if hasattr(self, "search_manager") and self.search_manager.is_searching:
+                self.search_manager.reset()
+                self._deactivate_search_cameras()
+
             worker = self._get_or_create_worker(camera_id)
             if worker and worker.camera.is_opened():
                 self._nodes[camera_id].mark_online()

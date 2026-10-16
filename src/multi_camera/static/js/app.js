@@ -1336,7 +1336,10 @@ class SurveillanceApp {
             <span class="tile-cam-name">${cam.name || cam.camera_id}</span>
             <span class="tile-cam-id">[${cam.camera_id}]</span>
           </div>
-          <span class="tile-cam-badge ${badgeClass}" id="badge-${cam.camera_id}">${badgeText}</span>
+          <div class="tile-header-actions">
+            <button class="btn-focus-quick" data-cam="${cam.camera_id}" title="Focus this camera feed">Focus Feed</button>
+            <span class="tile-cam-badge ${badgeClass}" id="badge-${cam.camera_id}">${badgeText}</span>
+          </div>
         </div>
 
         <div class="camera-tile-video" id="stage-${cam.camera_id}">
@@ -1347,7 +1350,7 @@ class SurveillanceApp {
           
           <div class="camera-tile-overlay">
             <button class="tile-overlay-btn btn-focus-cam" data-cam="${cam.camera_id}">Set Active</button>
-            <span style="font-size:10px; color:#94a3b8;">Click: Correct Target | Shift+Click: New Target</span>
+            <span class="tile-overlay-hint" style="font-size:10px; color:#94a3b8;">${isAct ? 'Click: Correct Target | Shift+Click: New Target' : 'Click: Focus this Feed'}</span>
             <button class="tile-overlay-btn btn-snap-cam" data-cam="${cam.camera_id}">+ Angle</button>
           </div>
         </div>
@@ -1356,9 +1359,11 @@ class SurveillanceApp {
       const stage = tile.querySelector('.camera-tile-video');
       const img = tile.querySelector('.camera-feed-img');
       const header = tile.querySelector('.camera-tile-header');
+      const quickFocusBtn = tile.querySelector('.btn-focus-quick');
 
-      // Click on tile header: Instantly focus active camera
-      header.addEventListener('click', async () => {
+      // Direct camera focus helper
+      const switchToThisCam = async (e) => {
+        if (e) e.stopPropagation();
         try {
           await API.setActiveCamera(cam.camera_id);
           this.activeCameraId = cam.camera_id;
@@ -1369,6 +1374,25 @@ class SurveillanceApp {
           this.showToast(`Focused on '${cam.name || cam.camera_id}'`, 'info');
         } catch (err) {
           this.showToast(`Focus error: ${err.message}`, 'error');
+        }
+      };
+
+      // 1. Quick focus button click
+      if (quickFocusBtn) {
+        quickFocusBtn.addEventListener('click', switchToThisCam);
+      }
+
+      // 2. Click on tile header: Instantly focus active camera
+      header.addEventListener('click', (e) => {
+        if (e.target.classList.contains('btn-focus-quick')) return;
+        switchToThisCam(e);
+      });
+
+      // 3. Click on tile card container
+      tile.addEventListener('click', (e) => {
+        const isCurrentlyActive = (cam.camera_id === (this._pendingActiveCameraSwitch || this.activeCameraId));
+        if (!isCurrentlyActive && (e.target === tile || e.target.classList.contains('tile-cam-info') || e.target.classList.contains('tile-cam-name'))) {
+          switchToThisCam(e);
         }
       });
 
@@ -1388,9 +1412,17 @@ class SurveillanceApp {
         }, 2000);
       };
 
-      // Click on tile video stage: Set active camera + select target at coordinates
+      // Click on tile video stage:
+      // If camera is NOT active: clicking anywhere on the feed immediately activates/focuses it!
+      // If camera IS active: click selects / corrects target at pixel coordinates
       stage.addEventListener('click', async (e) => {
         if (e.target.classList.contains('tile-overlay-btn')) return;
+
+        const isCurrentlyActive = (cam.camera_id === (this._pendingActiveCameraSwitch || this.activeCameraId));
+        if (!isCurrentlyActive) {
+          await switchToThisCam(e);
+          return;
+        }
 
         const rect = img.getBoundingClientRect();
         const clickX = e.clientX - rect.left;
@@ -1447,14 +1479,7 @@ class SurveillanceApp {
             this.refreshStatus();
             this.refreshGallery();
           } else {
-            // Simply switch active camera focus
-            await API.setActiveCamera(cam.camera_id);
-            this.activeCameraId = cam.camera_id;
-            this._pendingActiveCameraSwitch = cam.camera_id;
-            this._pendingActiveCameraSwitchTime = Date.now();
-            this.updateActiveTileVisuals();
-            this.refreshStatus();
-            this.showToast(`Active focus set to '${cam.name || cam.camera_id}'`, 'info');
+            this.showToast(`No tracked person at clicked point on ${cam.name || cam.camera_id}`, 'info');
           }
         } catch (err) {
           console.error(err);
@@ -1469,20 +1494,7 @@ class SurveillanceApp {
       });
 
       // Overlay button handlers
-      tile.querySelector('.btn-focus-cam').addEventListener('click', async (e) => {
-        e.stopPropagation();
-        try {
-          await API.setActiveCamera(cam.camera_id);
-          this.activeCameraId = cam.camera_id;
-          this._pendingActiveCameraSwitch = cam.camera_id;
-          this._pendingActiveCameraSwitchTime = Date.now();
-          this.updateActiveTileVisuals();
-          this.refreshStatus();
-          this.showToast(`Focused on '${cam.name || cam.camera_id}'`, 'info');
-        } catch (err) {
-          this.showToast(`Focus error: ${err.message}`, 'error');
-        }
-      });
+      tile.querySelector('.btn-focus-cam').addEventListener('click', switchToThisCam);
 
       tile.querySelector('.btn-snap-cam').addEventListener('click', async (e) => {
         e.stopPropagation();
@@ -1518,6 +1530,11 @@ class SurveillanceApp {
           badge.className = 'tile-cam-badge badge-standby';
           badge.textContent = 'STANDBY';
         }
+      }
+
+      const hint = t.querySelector('.tile-overlay-hint');
+      if (hint) {
+        hint.textContent = isAct ? 'Click: Correct Target | Shift+Click: New Target' : 'Click: Focus this Feed';
       }
 
       // Upgrade active camera to live MJPEG stream if it was using snapshot fallback
@@ -1792,13 +1809,18 @@ class SurveillanceApp {
           const badge = document.getElementById(`badge-${cam.camera_id}`);
           if (!tile || !badge) return;
 
-          const isAct = (cam.camera_id === st.active_camera_id);
+          const isAct = (cam.camera_id === (this._pendingActiveCameraSwitch || st.active_camera_id));
           const isSearch = searchingCams.has(cam.camera_id);
 
           const camStatus = (st.camera_statuses && st.camera_statuses[cam.camera_id]) ? st.camera_statuses[cam.camera_id].toUpperCase() : 'UNKNOWN';
 
           tile.classList.toggle('tile-active', isAct);
           tile.classList.toggle('tile-searching', !isAct && isSearch);
+
+          const hint = tile.querySelector('.tile-overlay-hint');
+          if (hint) {
+            hint.textContent = isAct ? 'Click: Correct Target | Shift+Click: New Target' : 'Click: Focus this Feed';
+          }
 
           if (!cam.enabled || camStatus === 'OFFLINE' || camStatus === 'ERROR') {
             badge.className = 'tile-cam-badge badge-offline';
