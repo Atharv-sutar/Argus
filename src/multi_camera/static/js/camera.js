@@ -69,8 +69,14 @@ class CameraManager {
     let endIdx = 4;
     const startInput = document.getElementById('discover-start');
     const endInput = document.getElementById('discover-end');
-    if (startInput) startIdx = parseInt(startInput.value, 10);
-    if (endInput) endIdx = parseInt(endInput.value, 10);
+    if (startInput) {
+      const parsedStart = parseInt(startInput.value, 10);
+      if (!isNaN(parsedStart) && parsedStart >= 0) startIdx = parsedStart;
+    }
+    if (endInput) {
+      const parsedEnd = parseInt(endInput.value, 10);
+      if (!isNaN(parsedEnd) && parsedEnd > startIdx) endIdx = parsedEnd;
+    }
 
     if (btn1) { btn1.disabled = true; btn1.textContent = 'Scanning...'; }
     if (btn2) { btn2.disabled = true; }
@@ -81,16 +87,30 @@ class CameraManager {
       if (this.app && this.app._isShuttingDown) return;
       this.discoveredCameras = data.cameras || [];
       this.renderList();
-      this.app.showToast(`Detected ${this.discoveredCameras.length} camera source(s)`, 'info');
-      if (this.app.mode === 'matrix') {
-        this.app.loadLiveMatrix();
+      try {
+        if (this.app && typeof this.app.showToast === 'function') {
+          this.app.showToast(`Detected ${this.discoveredCameras.length} camera source(s)`, 'info');
+        }
+      } catch (toastErr) {
+        console.warn('Toast failed:', toastErr);
+      }
+      if (this.app && this.app.mode === 'matrix') {
+        try {
+          this.app.loadLiveMatrix();
+        } catch (matrixErr) {
+          console.warn('Live matrix reload failed:', matrixErr);
+        }
       }
     } catch (err) {
       if (this.app && this.app._isShuttingDown) return;
       this.listEl.innerHTML = `<div class="empty-state">Discovery failed: ${err.message}</div>`;
-      this.app.showToast('Discovery failed', 'error');
+      try {
+        if (this.app && typeof this.app.showToast === 'function') {
+          this.app.showToast('Discovery failed', 'error');
+        }
+      } catch (_) {}
     } finally {
-      if (btn1 && (!this.app || !this.app._isShuttingDown)) { btn1.disabled = false; btn1.textContent = 'Auto-Detect'; }
+      if (btn1 && (!this.app || !this.app._isShuttingDown)) { btn1.disabled = false; btn1.textContent = 'Probe'; }
       if (btn2 && (!this.app || !this.app._isShuttingDown)) { btn2.disabled = false; }
     }
   }

@@ -69,7 +69,8 @@ def _probe_single_device(idx: int) -> Optional[Dict[str, Any]]:
         if cap and cap.isOpened():
             w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640
             h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
-            fps = int(cap.get(cv2.CAP_PROP_FPS)) or 30
+            raw_fps = cap.get(cv2.CAP_PROP_FPS)
+            fps = int(raw_fps) if (raw_fps and raw_fps > 0) else 30
             ret, frame = cap.read()
             cap.release()
             cap = None
@@ -128,11 +129,14 @@ def probe_local_webcams(
     in_use_indices = set()
     if pipeline is not None and getattr(pipeline, "_nodes", None):
         for node in pipeline._nodes.values():
-            if node.config.enabled and node.config.source_type.value == "webcam":
-                try:
-                    in_use_indices.add(int(node.config.source))
-                except ValueError:
-                    pass
+            if getattr(node, "config", None) and getattr(node.config, "enabled", False):
+                st = getattr(node.config, "source_type", None)
+                st_val = st.value if hasattr(st, "value") else str(st).lower().strip()
+                if st_val in ("webcam", "local", "usb"):
+                    try:
+                        in_use_indices.add(int(node.config.source))
+                    except (ValueError, TypeError):
+                        pass
 
     if cv2 is not None and not _SHUTDOWN_EVENT.is_set():
         for idx in range(start_index, end_index):
@@ -239,8 +243,12 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
 
             # --- REST Endpoints ---
             if path == "/api/cameras/discover":
-                start_idx = int(query.get("start", ["0"])[0])
-                end_idx = int(query.get("end", ["4"])[0])
+                try:
+                    start_idx = max(0, int(query.get("start", ["0"])[0]))
+                    end_idx = max(start_idx + 1, int(query.get("end", ["4"])[0]))
+                except (ValueError, TypeError):
+                    start_idx = 0
+                    end_idx = 4
                 logger.info(f"[TOPOLOGY/DISCOVERY] [GET /api/cameras/discover] Hardware scan initiated (indices {start_idx}-{end_idx}) from {self.address_string()}")
                 webcams = probe_local_webcams(start_index=start_idx, end_index=end_idx, pipeline=self.runtime_pipeline)
                 logger.info(f"[TOPOLOGY/DISCOVERY] Returning {len(webcams)} discovered camera(s) to {self.address_string()}")

@@ -93,9 +93,10 @@ const API = {
     }
   },
 
-  async discoverCameras() {
+  async discoverCameras(start = 0, end = 4) {
     try {
-      const res = await fetch(`${this.baseUrl}/api/cameras/discover`);
+      const url = `${this.baseUrl}/api/cameras/discover?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
+      const res = await fetch(url);
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || `Discovery failed (${res.status} ${res.statusText})`);
