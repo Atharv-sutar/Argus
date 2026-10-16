@@ -478,10 +478,69 @@ class SurveillanceApp {
 
     const scrubber = document.getElementById('playback-scrubber');
     if (scrubber) {
-      scrubber.addEventListener('change', async (e) => {
-        const ratio = parseFloat(e.target.value) / 100.0;
+      scrubber.addEventListener('mousedown', () => { this._isDraggingScrubber = true; });
+      scrubber.addEventListener('touchstart', () => { this._isDraggingScrubber = true; }, { passive: true });
+      
+      const doSeek = async (val) => {
+        const ratio = Math.max(0.0, Math.min(1.0, parseFloat(val) / 100.0));
         try {
           await API.playbackSeek(null, ratio);
+        } catch (e) {
+          this.showToast(`Seek error: ${e.message}`, 'error');
+        } finally {
+          setTimeout(() => { this._isDraggingScrubber = false; }, 350);
+        }
+      };
+
+      scrubber.addEventListener('change', (e) => {
+        doSeek(e.target.value);
+      });
+      scrubber.addEventListener('mouseup', (e) => {
+        doSeek(e.target.value);
+      });
+      scrubber.addEventListener('touchend', (e) => {
+        doSeek(e.target.value);
+      });
+    }
+
+    const btnRestart = document.getElementById('btn-playback-restart');
+    if (btnRestart) {
+      btnRestart.addEventListener('click', async () => {
+        try {
+          await API.playbackSeek(0.0, 0.0);
+          if (scrubber) scrubber.value = 0;
+          this.showToast('Rewound to start (00:00)', 'info');
+        } catch (e) {
+          this.showToast(`Seek error: ${e.message}`, 'error');
+        }
+      });
+    }
+
+    const btnBack10 = document.getElementById('btn-playback-back10');
+    if (btnBack10) {
+      btnBack10.addEventListener('click', async () => {
+        try {
+          const st = await API.getStatus();
+          const curr = (st && st.playback) ? (st.playback.current_time_ms || 0.0) : 0.0;
+          const targetMs = Math.max(0.0, curr - 10000.0);
+          await API.playbackSeek(targetMs, null);
+          this.showToast('Rewound -10s', 'info');
+        } catch (e) {
+          this.showToast(`Seek error: ${e.message}`, 'error');
+        }
+      });
+    }
+
+    const btnFwd10 = document.getElementById('btn-playback-fwd10');
+    if (btnFwd10) {
+      btnFwd10.addEventListener('click', async () => {
+        try {
+          const st = await API.getStatus();
+          const curr = (st && st.playback) ? (st.playback.current_time_ms || 0.0) : 0.0;
+          const maxMs = (st && st.playback) ? (st.playback.max_duration_ms || 1e9) : 1e9;
+          const targetMs = Math.min(maxMs, curr + 10000.0);
+          await API.playbackSeek(targetMs, null);
+          this.showToast('Forward +10s', 'info');
         } catch (e) {
           this.showToast(`Seek error: ${e.message}`, 'error');
         }
@@ -1413,16 +1472,11 @@ class SurveillanceApp {
       };
 
       // Click on tile video stage:
-      // If camera is NOT active: clicking anywhere on the feed immediately activates/focuses it!
-      // If camera IS active: click selects / corrects target at pixel coordinates
+      // Clicking on any camera feed:
+      // 1. Immediately switches focus/active camera to that feed.
+      // 2. Selects or corrects target at pixel and normalized coordinates (normX, normY)
       stage.addEventListener('click', async (e) => {
-        if (e.target.classList.contains('tile-overlay-btn')) return;
-
-        const isCurrentlyActive = (cam.camera_id === (this._pendingActiveCameraSwitch || this.activeCameraId));
-        if (!isCurrentlyActive) {
-          await switchToThisCam(e);
-          return;
-        }
+        if (e.target.classList.contains('tile-overlay-btn') || e.target.closest('.tile-overlay-btn')) return;
 
         const rect = img.getBoundingClientRect();
         const clickX = e.clientX - rect.left;
@@ -1437,7 +1491,7 @@ class SurveillanceApp {
         if (!imgH || imgH === 0) {
           imgH = (cam.height && cam.height > 0) ? cam.height : 480;
         }
-        // Fix P-14: Account for object-fit: contain letterboxing offset
+        // Account for object-fit: contain letterboxing offset
         const imgRatio = imgW / imgH;
         const rectRatio = rect.width / rect.height;
         let renderW = rect.width;
@@ -1456,34 +1510,35 @@ class SurveillanceApp {
         const clickOnImgX = clickX - offsetX;
         const clickOnImgY = clickY - offsetY;
 
-        // Ignore clicks on black bars
+        // Ignore clicks on black letterboxing bars
         if (clickOnImgX < 0 || clickOnImgX > renderW || clickOnImgY < 0 || clickOnImgY > renderH) {
           return;
         }
 
-        const scaleX = imgW / renderW;
-        const scaleY = imgH / renderH;
-
-        const targetX = clickOnImgX * scaleX;
-        const targetY = clickOnImgY * scaleY;
+        const normX = Math.max(0.0, Math.min(1.0, clickOnImgX / renderW));
+        const normY = Math.max(0.0, Math.min(1.0, clickOnImgY / renderH));
+        const targetX = normX * imgW;
+        const targetY = normY * imgH;
         const startNew = e.shiftKey;
 
+        // Immediately set visual focus to this camera without blocking selection
+        this.activeCameraId = cam.camera_id;
+        this._pendingActiveCameraSwitch = cam.camera_id;
+        this._pendingActiveCameraSwitchTime = Date.now();
+        this.updateActiveTileVisuals();
+
         try {
-          const res = await API.selectTarget(cam.camera_id, targetX, targetY, null, startNew);
+          const res = await API.selectTarget(cam.camera_id, targetX, targetY, null, startNew, normX, normY);
           if (res && res.selected_id !== null && res.selected_id !== undefined) {
-            this.showToast(`Target ${startNew ? 'selected (New)' : 'corrected'}! Tracker ID: ${res.selected_id} on ${cam.name || cam.camera_id}`, 'success');
-            this.activeCameraId = cam.camera_id;
-            this._pendingActiveCameraSwitch = cam.camera_id;
-            this._pendingActiveCameraSwitchTime = Date.now();
-            this.updateActiveTileVisuals();
+            this.showToast(`Target ${startNew ? 'selected (New)' : 'locked'}! Tracker ID: ${res.selected_id} on ${cam.name || cam.camera_id}`, 'success');
             this.refreshStatus();
             this.refreshGallery();
           } else {
-            this.showToast(`No tracked person at clicked point on ${cam.name || cam.camera_id}`, 'info');
+            this.showToast(`Focused on ${cam.name || cam.camera_id} (No person at clicked point)`, 'info');
           }
         } catch (err) {
           console.error(err);
-          this.showToast(`Camera activation error: ${err.message}`, 'error');
+          this.showToast(`Target selection error: ${err.message}`, 'error');
         }
       });
 
@@ -1745,7 +1800,14 @@ class SurveillanceApp {
         if (hasVideo && st.playback) {
           const scrubber = document.getElementById('playback-scrubber');
           if (scrubber && !this._isDraggingScrubber && st.playback.max_duration_ms > 0) {
-            scrubber.value = Math.min(100, (st.playback.current_time_ms / st.playback.max_duration_ms) * 100);
+            scrubber.value = Math.min(100, Math.max(0, (st.playback.current_time_ms / st.playback.max_duration_ms) * 100));
+          }
+          const timeDisplay = document.getElementById('playback-time-display');
+          if (timeDisplay) {
+            const curS = Math.floor((st.playback.current_time_ms || 0) / 1000);
+            const maxS = Math.floor((st.playback.max_duration_ms || 0) / 1000);
+            const fmt = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+            timeDisplay.textContent = `${fmt(curS)} / ${fmt(maxS)}`;
           }
           const btnPlayPause = document.getElementById('btn-play-pause');
           if (btnPlayPause) {

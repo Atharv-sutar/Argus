@@ -22,7 +22,7 @@ from src.core.multi_camera_types import (
     SourceType,
     HandoffDecision,
 )
-from src.core.types import BoundingBox, DetectionResult, Embedding, Target, TargetState, Track, TrackResult, PipelineTelemetry
+from src.core.types import BoundingBox, DetectionResult, Embedding, Target, TargetState, Track, TrackState, TrackResult, PipelineTelemetry
 from src.detection.yolo_detector import YOLODetector
 from src.multi_camera.camera_graph import CameraGraph
 from src.multi_camera.camera_node import CameraNode
@@ -136,7 +136,8 @@ class MultiCameraPipeline:
 
         # 3. Factories
         self.playback_controller = playback_controller
-        self.route_recorder = route_recorder
+        from src.playback.route_recorder import RouteRecorder
+        self.route_recorder = route_recorder or RouteRecorder()
         self._shared_detector = shared_detector
         self._detector_factory = detector_factory or self._default_detector_factory
         self._tracker_factory = tracker_factory or self._default_tracker_factory
@@ -560,10 +561,10 @@ class MultiCameraPipeline:
         return self.search_manager.get_progress()
 
     def select_target_on_camera(
-        self, camera_id: str, x: float, y: float
+        self, camera_id: str, x: float, y: float, norm_x: Optional[float] = None, norm_y: Optional[float] = None
     ) -> Optional[int]:
         """
-        Manually select target at pixel coordinates (x, y) on the specified camera.
+        Manually select target at pixel or normalized coordinates on the specified camera.
         Resets gallery and seeds it with the newly clicked person crop.
         """
         self._sync_nodes_with_graph()
@@ -573,41 +574,110 @@ class MultiCameraPipeline:
             logger.warning(f"Cannot select target: camera '{camera_id}' unavailable")
             return None
 
-        # Ensure we have a fresh processed frame with detections and tracks
-        frame_to_process = None
-        if worker.camera.is_opened():
+        # 1. Obtain best frame without advancing a paused video stream
+        frame_to_process = worker._last_frame
+        if frame_to_process is None and worker.camera.is_opened():
             success, frame, ts_ms = worker.read_frame()
             if success and frame is not None:
                 frame_to_process = frame
-            elif worker._last_frame is not None:
-                frame_to_process = worker._last_frame
+                worker._last_frame = frame
 
-        if frame_to_process is not None:
+        if frame_to_process is None:
+            return None
+
+        frame_h, frame_w = frame_to_process.shape[:2]
+
+        # 2. Convert normalized coordinates if provided or if (x, y) in [0.0, 1.0]
+        if norm_x is not None and norm_y is not None:
+            real_x = float(norm_x * frame_w)
+            real_y = float(norm_y * frame_h)
+        elif 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0 and frame_w > 1 and frame_h > 1:
+            real_x = float(x * frame_w)
+            real_y = float(y * frame_h)
+        else:
+            real_x = float(x)
+            real_y = float(y)
+
+        # 3. First attempt: match against existing active tracks with generous tolerance
+        selected_id = None
+        if worker._last_track_result is not None and worker._last_track_result.tracks:
+            selected_id = self.target_manager.start_new_investigation_by_point(
+                x=real_x,
+                y=real_y,
+                track_result=worker._last_track_result,
+                frame=frame_to_process,
+                camera_id=camera_id,
+                proximity_tolerance=70.0,
+            )
+
+        # 4. Fallback: if no active track matches, run detection directly on frame
+        if selected_id is None:
             ts_ms = time.time() * 1000.0
+            if self.playback_controller:
+                ts_ms = self.playback_controller.current_time_ms
+            elif worker._last_track_result:
+                ts_ms = worker._last_track_result.timestamp_ms
+
+            det_res = None
             try:
                 if hasattr(worker, "detector"):
                     det_res = worker.detector.detect(frame_to_process, timestamp_ms=ts_ms)
                 elif self._shared_detector is not None:
-                    batch_res = self._shared_detector.detect_batch([frame_to_process], timestamps_ms=[ts_ms]) # type: ignore
+                    batch_res = self._shared_detector.detect_batch([frame_to_process], timestamps_ms=[ts_ms])  # type: ignore
                     det_res = batch_res[0] if batch_res else None
                 else:
                     det_res = self._default_detector_factory().detect(frame_to_process, timestamp_ms=ts_ms)
-                
-                if det_res is not None:
-                    worker.process_frame(frame_to_process, ts_ms, det_res)
             except Exception as e:
                 logger.error(f"[MULTI-CAM] Detection failure: {e}")
 
-        if worker._last_track_result is None or worker._last_frame is None:
-            return None
+            if det_res is not None and det_res.detections:
+                best_det = None
+                best_dist = float("inf")
+                for det in det_res.detections:
+                    b = det.box
+                    if b.x1 <= real_x <= b.x2 and b.y1 <= real_y <= b.y2:
+                        best_det = det
+                        best_dist = 0.0
+                        break
+                    elif (b.x1 - 70.0) <= real_x <= (b.x2 + 70.0) and (b.y1 - 70.0) <= real_y <= (b.y2 + 70.0):
+                        cx = (b.x1 + b.x2) / 2.0
+                        cy = (b.y1 + b.y2) / 2.0
+                        dist = ((real_x - cx) ** 2 + (real_y - cy) ** 2) ** 0.5
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_det = det
 
-        selected_id = self.target_manager.start_new_investigation_by_point(
-            x=x,
-            y=y,
-            track_result=worker._last_track_result,
-            frame=worker._last_frame,
-            camera_id=camera_id,
-        )
+                if best_det is not None:
+                    track_res = worker.process_frame(frame_to_process, ts_ms, det_res)
+                    selected_id = self.target_manager.start_new_investigation_by_point(
+                        x=real_x,
+                        y=real_y,
+                        track_result=track_res,
+                        frame=frame_to_process,
+                        camera_id=camera_id,
+                        proximity_tolerance=70.0,
+                    )
+                    if selected_id is None:
+                        synth_id = 1
+                        synth_track = Track(
+                            track_id=synth_id,
+                            box=best_det.box,
+                            state=TrackState.CONFIRMED,
+                            confidence=best_det.confidence,
+                        )
+                        synth_res = TrackResult(
+                            tracks=[synth_track],
+                            frame_id=getattr(track_res, "frame_id", 1),
+                            timestamp_ms=ts_ms,
+                        )
+                        worker._last_track_result = synth_res
+                        self.target_manager.start_new_investigation(
+                            track_id=synth_id,
+                            track_result=synth_res,
+                            frame=frame_to_process,
+                            camera_id=camera_id,
+                        )
+                        selected_id = synth_id
 
         if selected_id is not None:
             self._active_camera_id = camera_id
@@ -623,13 +693,33 @@ class MultiCameraPipeline:
                 "track_id": selected_id,
             })
             self.forensic_recorder.start_recording(selected_id, camera_id)
+
+            if self.route_recorder:
+                stream_ts = 0.0
+                if self.playback_controller:
+                    stream_ts = self.playback_controller.current_time_ms
+                elif worker._last_track_result:
+                    stream_ts = worker._last_track_result.timestamp_ms
+                else:
+                    stream_ts = time.time() * 1000.0
+
+                b = (0, 0, 0, 0)
+                if worker._last_track_result:
+                    for t in worker._last_track_result.tracks:
+                        if t.track_id == selected_id:
+                            b = (int(t.box.x1), int(t.box.y1), int(t.box.width), int(t.box.height))
+                            break
+                self.route_recorder.log_event(camera_id, selected_id, stream_ts, "enter", b, 1.0, False)
+
             logger.info(
                 f"[MULTI-CAM] Target selected on camera '{camera_id}' | Tracker={selected_id} | Gallery seeded."
             )
             return selected_id
         return None
 
-    def correct_target_on_camera(self, camera_id: str, x: float, y: float) -> Optional[int]:
+    def correct_target_on_camera(
+        self, camera_id: str, x: float, y: float, norm_x: Optional[float] = None, norm_y: Optional[float] = None
+    ) -> Optional[int]:
         """
         Corrects target by clicking on coordinates. Preserves existing gallery.
         """
@@ -638,41 +728,106 @@ class MultiCameraPipeline:
         if worker is None:
             return None
 
-        # Same frame processing logic
-        frame_to_process = None
-        if worker._last_track_result is None:
+        frame_to_process = worker._last_frame
+        if frame_to_process is None and worker.camera.is_opened():
             success, frame, ts_ms = worker.read_frame()
             if success and frame is not None:
                 frame_to_process = frame
-            elif worker._last_frame is not None:
-                frame_to_process = worker._last_frame
+                worker._last_frame = frame
 
-        if frame_to_process is not None:
+        if frame_to_process is None:
+            return None
+
+        frame_h, frame_w = frame_to_process.shape[:2]
+
+        if norm_x is not None and norm_y is not None:
+            real_x = float(norm_x * frame_w)
+            real_y = float(norm_y * frame_h)
+        elif 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0 and frame_w > 1 and frame_h > 1:
+            real_x = float(x * frame_w)
+            real_y = float(y * frame_h)
+        else:
+            real_x = float(x)
+            real_y = float(y)
+
+        selected_id = None
+        if worker._last_track_result is not None and worker._last_track_result.tracks:
+            selected_id = self.target_manager.correct_target_by_point(
+                x=real_x,
+                y=real_y,
+                track_result=worker._last_track_result,
+                frame=frame_to_process,
+                camera_id=camera_id,
+                proximity_tolerance=70.0,
+            )
+
+        if selected_id is None:
             ts_ms = time.time() * 1000.0
+            if self.playback_controller:
+                ts_ms = self.playback_controller.current_time_ms
+            elif worker._last_track_result:
+                ts_ms = worker._last_track_result.timestamp_ms
+
+            det_res = None
             try:
                 if hasattr(worker, "detector"):
                     det_res = worker.detector.detect(frame_to_process, timestamp_ms=ts_ms)
                 elif self._shared_detector is not None:
-                    batch_res = self._shared_detector.detect_batch([frame_to_process], timestamps_ms=[ts_ms]) # type: ignore
+                    batch_res = self._shared_detector.detect_batch([frame_to_process], timestamps_ms=[ts_ms])
                     det_res = batch_res[0] if batch_res else None
                 else:
                     det_res = self._default_detector_factory().detect(frame_to_process, timestamp_ms=ts_ms)
-                
-                if det_res is not None:
-                    worker.process_frame(frame_to_process, ts_ms, det_res)
             except Exception as e:
                 logger.error(f"[MULTI-CAM] Detection failure: {e}")
 
-        if worker._last_track_result is None or worker._last_frame is None:
-            return None
+            if det_res is not None and det_res.detections:
+                best_det = None
+                best_dist = float("inf")
+                for det in det_res.detections:
+                    b = det.box
+                    if b.x1 <= real_x <= b.x2 and b.y1 <= real_y <= b.y2:
+                        best_det = det
+                        best_dist = 0.0
+                        break
+                    elif (b.x1 - 70.0) <= real_x <= (b.x2 + 70.0) and (b.y1 - 70.0) <= real_y <= (b.y2 + 70.0):
+                        cx = (b.x1 + b.x2) / 2.0
+                        cy = (b.y1 + b.y2) / 2.0
+                        dist = ((real_x - cx) ** 2 + (real_y - cy) ** 2) ** 0.5
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_det = det
 
-        selected_id = self.target_manager.correct_target_by_point(
-            x=x,
-            y=y,
-            track_result=worker._last_track_result,
-            frame=worker._last_frame,
-            camera_id=camera_id,
-        )
+                if best_det is not None:
+                    track_res = worker.process_frame(frame_to_process, ts_ms, det_res)
+                    selected_id = self.target_manager.correct_target_by_point(
+                        x=real_x,
+                        y=real_y,
+                        track_result=track_res,
+                        frame=frame_to_process,
+                        camera_id=camera_id,
+                        proximity_tolerance=70.0,
+                    )
+                    if selected_id is None:
+                        synth_id = 1
+                        synth_track = Track(
+                            track_id=synth_id,
+                            box=best_det.box,
+                            state=TrackState.CONFIRMED,
+                            confidence=best_det.confidence,
+                        )
+                        synth_res = TrackResult(
+                            tracks=[synth_track],
+                            frame_id=getattr(track_res, "frame_id", 1),
+                            timestamp_ms=ts_ms,
+                        )
+                        worker._last_track_result = synth_res
+                        self.target_manager.correct_target(
+                            track_id=synth_id,
+                            track_result=synth_res,
+                            frame=frame_to_process,
+                            camera_id=camera_id,
+                        )
+                        selected_id = synth_id
 
         if selected_id is not None:
             self._active_camera_id = camera_id
@@ -687,6 +842,23 @@ class MultiCameraPipeline:
                 "event": "TARGET_CORRECTED",
                 "track_id": selected_id,
             })
+            if self.route_recorder:
+                stream_ts = 0.0
+                if self.playback_controller:
+                    stream_ts = self.playback_controller.current_time_ms
+                elif worker._last_track_result:
+                    stream_ts = worker._last_track_result.timestamp_ms
+                else:
+                    stream_ts = time.time() * 1000.0
+
+                b = (0, 0, 0, 0)
+                if worker._last_track_result:
+                    for t in worker._last_track_result.tracks:
+                        if t.track_id == selected_id:
+                            b = (int(t.box.x1), int(t.box.y1), int(t.box.width), int(t.box.height))
+                            break
+                self.route_recorder.log_event(camera_id, selected_id, stream_ts, "correction", b, 1.0, True)
+
             logger.info(
                 f"[MULTI-CAM] Target corrected on camera '{camera_id}' | Tracker={selected_id} | Gallery preserved."
             )
@@ -1930,12 +2102,20 @@ class MultiCameraPipeline:
         
         if self.route_recorder:
             b = (int(recovered_track.box.x1), int(recovered_track.box.y1), int(recovered_track.box.width), int(recovered_track.box.height))
-            # First log exit from old camera
+            # Determine true stream timestamp rather than wall clock
+            stream_ts = 0.0
+            if self.playback_controller:
+                stream_ts = self.playback_controller.current_time_ms
+            elif new_camera_id in self._workers and self._workers[new_camera_id]._last_track_result:
+                stream_ts = self._workers[new_camera_id]._last_track_result.timestamp_ms
+            elif old_camera_id and old_camera_id in self._workers and self._workers[old_camera_id]._last_track_result:
+                stream_ts = self._workers[old_camera_id]._last_track_result.timestamp_ms
+            else:
+                stream_ts = time.time() * 1000.0
+
             if old_camera_id:
-                # Approximate timestamp since we don't have the exact old frame's ts here
-                self.route_recorder.log_event(old_camera_id, recovered_track.track_id, time.time() * 1000.0, "exit", (0,0,0,0), 1.0, False)
-            # Log handoff to new camera
-            self.route_recorder.log_event(new_camera_id, recovered_track.track_id, time.time() * 1000.0, "handoff", b, 1.0, False)
+                self.route_recorder.log_event(old_camera_id, recovered_track.track_id, stream_ts, "exit", (0,0,0,0), 1.0, False)
+            self.route_recorder.log_event(new_camera_id, recovered_track.track_id, stream_ts, "handoff", b, 1.0, False)
 
         self.search_manager.reset()
         self._deactivate_search_cameras()
@@ -2338,6 +2518,18 @@ class MultiCameraPipeline:
             except Exception:
                 pass
                 
+            if self.playback_controller:
+                try:
+                    self.playback_controller.release_all()
+                except Exception:
+                    pass
+
+            if getattr(self, "recording_manager", None):
+                try:
+                    self.recording_manager.stop_all()
+                except Exception:
+                    pass
+
             # Persist target gallery on graceful shutdown
             if getattr(self.config, "storage", None) and self.config.storage.enabled:
                 try:

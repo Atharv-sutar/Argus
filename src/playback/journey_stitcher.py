@@ -37,7 +37,7 @@ class JourneyStitcher:
         self.resolution = resolution
         self.w, self.h = resolution
 
-    def stitch_journey(self, events: List[RouteEvent]) -> bool:
+    def stitch_journey(self, events: List[RouteEvent], final_time_ms: Optional[float] = None) -> bool:
         """
         Parses the sequence of RouteEvents and generates the stitched video.
         Returns True on success, False otherwise.
@@ -49,7 +49,7 @@ class JourneyStitcher:
         logger.info(f"[STITCHER] Starting journey stitch. Output: {self.output_path}")
 
         # Group events into continuous segments per camera
-        segments = self._build_segments(events)
+        segments = self._build_segments(events, final_time_ms=final_time_ms)
 
         if not segments:
             logger.warning("[STITCHER] No valid continuous segments found in route events.")
@@ -96,7 +96,7 @@ class JourneyStitcher:
                 out.release()
             return False
 
-    def _build_segments(self, events: List[RouteEvent]) -> List[Dict]:
+    def _build_segments(self, events: List[RouteEvent], final_time_ms: Optional[float] = None) -> List[Dict]:
         """Converts discrete events into continuous time segments per camera."""
         segments = []
         current_seg = None
@@ -104,26 +104,36 @@ class JourneyStitcher:
         for event in sorted(events, key=lambda e: e.timestamp_ms):
             if event.event_type in ("enter", "correction", "handoff"):
                 if current_seg is not None:
-                    # Previous segment didn't have an explicit exit. Close it.
-                    current_seg["end_ms"] = event.timestamp_ms
+                    # Close previous segment
+                    current_seg["end_ms"] = max(event.timestamp_ms, current_seg["start_ms"] + 1500)
                     segments.append(current_seg)
 
                 current_seg = {
                     "camera_id": event.camera_id,
                     "start_ms": event.timestamp_ms,
-                    "end_ms": event.timestamp_ms + 5000  # fallback end
+                    "end_ms": event.timestamp_ms + 5000  # initial estimate
                 }
             elif event.event_type in ("exit", "lost"):
                 if current_seg is not None and current_seg["camera_id"] == event.camera_id:
-                    current_seg["end_ms"] = event.timestamp_ms
+                    current_seg["end_ms"] = max(event.timestamp_ms, current_seg["start_ms"] + 1500)
                     segments.append(current_seg)
                     current_seg = None
 
         # Flush final segment if open
         if current_seg is not None:
+            if final_time_ms is not None and final_time_ms > current_seg["start_ms"]:
+                current_seg["end_ms"] = max(final_time_ms, current_seg["start_ms"] + 1500)
             segments.append(current_seg)
 
-        return segments
+        # Merge adjacent segments for the same camera if contiguous
+        merged = []
+        for s in segments:
+            if merged and merged[-1]["camera_id"] == s["camera_id"] and abs(s["start_ms"] - merged[-1]["end_ms"]) < 1000:
+                merged[-1]["end_ms"] = max(merged[-1]["end_ms"], s["end_ms"])
+            else:
+                merged.append(s)
+
+        return merged
 
     def _render_transit_card(self, out: cv2.VideoWriter, from_cam: str, to_cam: str, duration_ms: float) -> None:
         """Renders an 'IN TRANSIT' title card and writes it to the video."""
@@ -157,40 +167,46 @@ class JourneyStitcher:
             logger.error(f"[STITCHER] Source file not found for {cam_id}: {source_path}")
             return False
 
-        cap = cv2.VideoCapture(source_path)
+        cap = cv2.VideoCapture(str(source_path))
         if not cap.isOpened():
             logger.error(f"[STITCHER] Failed to open source video: {source_path}")
             return False
 
-        # Seek to start
+        source_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+
+        # Calculate start and end frames for robust seeking across all codecs
+        start_frame = max(0, int((start_ms / 1000.0) * source_fps))
+        end_frame = int((end_ms / 1000.0) * source_fps)
+        if total_frames > 0:
+            end_frame = min(end_frame, total_frames)
+        if end_frame <= start_frame:
+            end_frame = start_frame + int(source_fps * 3.0)  # at least 3 seconds
+
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
         cap.set(cv2.CAP_PROP_POS_MSEC, start_ms)
-        source_fps = cap.get(cv2.CAP_PROP_FPS)
-        if source_fps <= 0:
-            source_fps = 30.0
 
-        # Calculate frame step for fps conversion
-        frame_interval_ms = 1000.0 / self.target_fps
-        current_target_ms = start_ms
+        current_frame_idx = start_frame
+        frames_written = 0
 
-        while True:
-            pos_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
-            if pos_ms > end_ms:
-                break
-
+        while current_frame_idx <= end_frame:
             ret, frame = cap.read()
             if not ret or frame is None:
                 break
 
-            # If we need to drop/duplicate frames to match target_fps
-            if pos_ms >= current_target_ms:
-                # Resize and overlay
-                resized = cv2.resize(frame, self.resolution)
-                self._apply_overlay(resized, cam_id, pos_ms)
-                out.write(resized)
-                current_target_ms += frame_interval_ms
+            pos_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
+            if pos_ms <= 0.0 or pos_ms < start_ms:
+                pos_ms = (current_frame_idx / source_fps) * 1000.0
+
+            resized = cv2.resize(frame, self.resolution)
+            self._apply_overlay(resized, cam_id, pos_ms)
+            out.write(resized)
+            frames_written += 1
+            current_frame_idx += 1
 
         cap.release()
-        return True
+        logger.info(f"[STITCHER] Extracted {frames_written} frames for camera '{cam_id}' ({start_ms:.1f}ms -> {end_ms:.1f}ms)")
+        return frames_written > 0
 
     def _apply_overlay(self, frame: np.ndarray, cam_id: str, pos_ms: float) -> None:
         """Applies timestamp and camera ID overlay to the frame."""

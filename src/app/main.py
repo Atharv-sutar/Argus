@@ -401,6 +401,19 @@ def run_multi_camera_app(
         logger.info(f"Surveillance Operations Center web UI available at http://127.0.0.1:{ui_port}")
         _launch_browser_when_ready(ui_port)
 
+    # Register OS termination signals for clean shutdown
+    import signal
+    def _sig_handler(signum, frame):
+        logger.info(f"Shutdown signal received ({signum}). Terminating Argus...")
+        pipeline.stop()
+        if "PYTEST_CURRENT_TEST" not in os.environ:
+            os._exit(0)
+
+    try:
+        signal.signal(signal.SIGINT, _sig_handler)
+        signal.signal(signal.SIGTERM, _sig_handler)
+    except Exception:
+        pass
 
     show_window = not no_gui and config.visualization.show_window and (cv2 is not None)
     window_name = "Argus Multi-Camera Surveillance"
@@ -473,6 +486,15 @@ def run_multi_camera_app(
 
     try:
         while pipeline.is_running and not is_shutdown_requested():
+            if show_window and cv2 is not None:
+                # If operator closed the OpenCV window via 'X' button, initiate clean shutdown
+                try:
+                    if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
+                        logger.info(f"[UI] GUI window '{window_name}' closed by operator. Initiating clean exit...")
+                        break
+                except Exception:
+                    break
+
             if not show_window:
                 if not pipeline.is_running or is_shutdown_requested():
                     break
@@ -690,7 +712,14 @@ def run_map_ui(
     """Launches the interactive Camera Mapping Web UI server."""
     logger.info(f"Opening Argus Camera Mapping UI at http://127.0.0.1:{port}")
     _launch_browser_when_ready(port)
-    run_ui_server(port=port, graph_file=graph_path, pipeline=None, block=True)
+    try:
+        run_ui_server(port=port, graph_file=graph_path, pipeline=None, block=True)
+    except KeyboardInterrupt:
+        logger.info("Camera Mapping UI interrupted.")
+    finally:
+        if "PYTEST_CURRENT_TEST" not in os.environ:
+            time.sleep(0.1)
+            os._exit(0)
 
 
 def run_app(
@@ -812,7 +841,13 @@ def run_app(
     finally:
         pipeline.stop()
         if show_window:
-            cv2.destroyAllWindows()
+            try:
+                cv2.destroyAllWindows()
+            except Exception:
+                pass
+        if "PYTEST_CURRENT_TEST" not in os.environ:
+            time.sleep(0.1)
+            os._exit(0)
 
 
 def main() -> None:

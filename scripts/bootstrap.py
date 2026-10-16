@@ -61,7 +61,16 @@ def check_and_switch_venv() -> None:
     if venv_python.is_file():
         print(f"[ARGUS] Switching to project virtual environment: {venv_python}")
         cmd = [str(venv_python), str(__file__)] + sys.argv[1:]
-        sys.exit(subprocess.call(cmd))
+        proc = subprocess.Popen(cmd)
+        try:
+            sys.exit(proc.wait())
+        except KeyboardInterrupt:
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except Exception:
+                proc.kill()
+            sys.exit(0)
 
     # Otherwise, create .venv automatically
     print(f"[ARGUS] Virtual environment not found at '{venv_dir}'.")
@@ -70,7 +79,16 @@ def check_and_switch_venv() -> None:
         subprocess.check_call([sys.executable, "-m", "venv", str(venv_dir)])
         print("[ARGUS] Virtual environment created successfully.")
         cmd = [str(venv_python), str(__file__)] + sys.argv[1:]
-        sys.exit(subprocess.call(cmd))
+        proc = subprocess.Popen(cmd)
+        try:
+            sys.exit(proc.wait())
+        except KeyboardInterrupt:
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except Exception:
+                proc.kill()
+            sys.exit(0)
     except Exception as e:
         print(f"[WARNING] Could not create virtual environment automatically ({e}). Continuing with current Python: {sys.executable}")
 

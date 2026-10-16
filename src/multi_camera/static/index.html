@@ -463,13 +463,17 @@
 
           <!-- Playback Toolbar -->
           <div id="playback-toolbar" class="matrix-toolbar" style="display: none; border-top: 1px solid var(--border-color);">
-            <div class="matrix-title-group" style="gap: 15px;">
+            <div class="matrix-title-group" style="gap: 10px; display: flex; align-items: center; flex-wrap: wrap;">
               <span class="badge-pill" style="background: var(--amber-glow); color: #fff;">PLAYBACK MODE</span>
+              <button id="btn-playback-restart" class="btn btn-secondary btn-sm" title="Restart from beginning (00:00)">⏮ Restart</button>
+              <button id="btn-playback-back10" class="btn btn-secondary btn-sm" title="Rewind 10 seconds">⏪ -10s</button>
               <button id="btn-play-pause" class="btn btn-primary btn-sm">Pause</button>
+              <button id="btn-playback-fwd10" class="btn btn-secondary btn-sm" title="Forward 10 seconds">⏩ +10s</button>
               <button id="btn-speed-up" class="btn btn-secondary btn-sm">Speed: 1x</button>
             </div>
-            <div class="matrix-grid-controls" style="flex: 1; margin: 0 20px;">
-               <input type="range" id="playback-scrubber" min="0" max="100" value="0" style="width: 100%;" />
+            <div class="matrix-grid-controls" style="flex: 1; margin: 0 15px; display: flex; align-items: center; gap: 10px;">
+               <input type="range" id="playback-scrubber" min="0" max="100" value="0" style="flex: 1;" />
+               <span id="playback-time-display" style="font-family: monospace; font-size: 11px; color: var(--text-muted); min-width: 95px; text-align: right;">00:00 / 00:00</span>
             </div>
             <div class="matrix-grid-controls">
                <button id="btn-finish-playback" class="btn btn-quit btn-sm">Complete Route</button>

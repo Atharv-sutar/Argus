@@ -86,6 +86,11 @@ class PlaybackController:
         """Starts or resumes playback."""
         with self._lock:
             if not self.is_playing:
+                # If already at end of video, automatically restart from beginning
+                if self.max_duration_ms > 0 and self.current_time_ms >= (self.max_duration_ms - 50.0):
+                    self.current_time_ms = 0.0
+                    for cam in self.cameras.values():
+                        cam.seek(0.0)
                 self.is_playing = True
                 self._last_tick_time = time.time()
                 logger.info("Playback started.")
@@ -104,6 +109,10 @@ class PlaybackController:
                 self.is_playing = False
                 logger.info(f"Playback paused at {self.current_time_ms:.1f}ms.")
             else:
+                if self.max_duration_ms > 0 and self.current_time_ms >= (self.max_duration_ms - 50.0):
+                    self.current_time_ms = 0.0
+                    for cam in self.cameras.values():
+                        cam.seek(0.0)
                 self.is_playing = True
                 self._last_tick_time = time.time()
                 logger.info("Playback resumed.")
@@ -111,13 +120,13 @@ class PlaybackController:
     def seek(self, timestamp_ms: float) -> None:
         """Seeks all cameras to a specific timestamp."""
         with self._lock:
-            target_ms = max(0.0, min(timestamp_ms, self.max_duration_ms))
+            max_d = self.max_duration_ms if self.max_duration_ms > 0 else 1e9
+            target_ms = max(0.0, min(timestamp_ms, max_d))
             self.current_time_ms = target_ms
             logger.info(f"Seeked to {self.current_time_ms:.1f}ms.")
             for cam in self.cameras.values():
                 cam.seek(self.current_time_ms)
-            if self.is_playing:
-                self._last_tick_time = time.time()
+            self._last_tick_time = time.time()
 
     def set_speed(self, speed: float) -> None:
         """Sets the playback speed multiplier."""

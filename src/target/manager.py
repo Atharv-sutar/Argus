@@ -262,7 +262,7 @@ class TargetManager:
         track_result: TrackResult,
         frame: Optional[np.ndarray] = None,
         camera_id: str = "camera_0",
-        proximity_tolerance: float = 40.0,
+        proximity_tolerance: float = 70.0,
     ) -> Optional[int]:
         """
         Start new investigation by clicking on pixel coordinates (x, y).
@@ -299,7 +299,7 @@ class TargetManager:
         track_result: TrackResult,
         frame: Optional[np.ndarray] = None,
         camera_id: str = "camera_0",
-        proximity_tolerance: float = 40.0,
+        proximity_tolerance: float = 70.0,
     ) -> Optional[int]:
         """
         Correct target by clicking on pixel coordinates (x, y).

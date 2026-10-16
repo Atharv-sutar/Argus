@@ -1170,14 +1170,27 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                                 from src.playback.journey_stitcher import JourneyStitcher
                                 video_sources = {}
                                 for cid, node in self.runtime_pipeline._nodes.items():
-                                    if node.config.source_type == "video":
+                                    if node.config.source_type in ("video", "video_file"):
                                         video_sources[cid] = node.config.source
                                 
-                                if video_sources:
-                                    events = self.runtime_pipeline.route_recorder.get_events()
-                                    out_path = str(case_dir / f"journey_{case_id}.mp4")
+                                events = self.runtime_pipeline.route_recorder.get_events()
+                                out_path = str(case_dir / f"journey_{case_id}.mp4")
+                                stitched = False
+
+                                final_ts = None
+                                if getattr(self.runtime_pipeline, 'playback_controller', None):
+                                    final_ts = self.runtime_pipeline.playback_controller.current_time_ms
+
+                                if video_sources and events:
                                     stitcher = JourneyStitcher(video_sources, output_path=out_path)
-                                    stitcher.stitch_journey(events)
+                                    stitched = stitcher.stitch_journey(events, final_time_ms=final_ts)
+
+                                # If stitcher produced no output (e.g. webcams/live feeds), fall back to forensic clip recorder
+                                if not stitched and hasattr(self.runtime_pipeline, 'forensic_recorder') and self.runtime_pipeline.forensic_recorder.is_recording:
+                                    try:
+                                        self.runtime_pipeline.export_forensic_clip(out_path)
+                                    except Exception as ex:
+                                        logger.warning(f"Forensic clip fallback export failed: {ex}")
                                 
                                 # 3. Generate Report
                                 from src.playback.report import RouteReporter
@@ -1249,11 +1262,17 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     else:
                         ok = self.runtime_pipeline.select_target_by_id(cam_id, int(track_id))
                     selected_id = int(track_id) if ok else None
-                elif x is not None and y is not None:
+                elif (x is not None and y is not None) or ("norm_x" in payload and "norm_y" in payload):
+                    norm_x = payload.get("norm_x")
+                    norm_y = payload.get("norm_y")
+                    norm_x = float(norm_x) if norm_x is not None else None
+                    norm_y = float(norm_y) if norm_y is not None else None
+                    px_x = float(x) if x is not None else 0.0
+                    px_y = float(y) if y is not None else 0.0
                     if is_correction:
-                        selected_id = self.runtime_pipeline.correct_target_on_camera(cam_id, float(x), float(y))
+                        selected_id = self.runtime_pipeline.correct_target_on_camera(cam_id, px_x, px_y, norm_x=norm_x, norm_y=norm_y)
                     else:
-                        selected_id = self.runtime_pipeline.select_target_on_camera(cam_id, float(x), float(y))
+                        selected_id = self.runtime_pipeline.select_target_on_camera(cam_id, px_x, px_y, norm_x=norm_x, norm_y=norm_y)
 
                 logger.info(f"[TARGET] Target locked: ID={selected_id}, ActiveCam='{self.runtime_pipeline.active_camera_id}', Correction={is_correction}")
                 if selected_id is not None:
@@ -1615,6 +1634,9 @@ def run_ui_server(
                 server.server_close()
             except Exception:
                 pass
+            if "PYTEST_CURRENT_TEST" not in os.environ:
+                time.sleep(0.1)
+                os._exit(0)
     else:
         def _serve_loop():
             try:

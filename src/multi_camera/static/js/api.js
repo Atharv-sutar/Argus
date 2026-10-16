@@ -168,11 +168,15 @@ const API = {
     }
   },
 
-  async selectTarget(cameraId, x = null, y = null, trackId = null, startNew = false) {
+  async selectTarget(cameraId, x = null, y = null, trackId = null, startNew = false, normX = null, normY = null) {
     const payload = { camera_id: cameraId, start_new: startNew };
     if (x !== null && y !== null) {
       payload.x = x;
       payload.y = y;
+    }
+    if (normX !== null && normY !== null && !isNaN(normX) && !isNaN(normY)) {
+      payload.norm_x = parseFloat(normX);
+      payload.norm_y = parseFloat(normY);
     }
     if (trackId !== null) {
       payload.track_id = trackId;

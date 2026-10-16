@@ -91,29 +91,53 @@ class VideoFileCamera(BaseCamera):
                 
             success, frame = self._cap.read()
             if not success or frame is None:
+                self._eof = True
                 return False, None, pos_msec
             
+            self._eof = False
             return True, frame, pos_msec
 
     def seek(self, timestamp_ms: float) -> bool:
         """
         Seeks to a specific timestamp in the video file.
+        Recovers from EOF state by setting both frame index and millisecond position,
+        re-opening the capture stream if Windows OpenCV demuxer became unseekable.
         """
-        if not self.is_opened():
+        if self._is_closed:
             return False
 
         with self._lock:
-            if self._cap is None:
-                return False
+            if self._cap is None or not self._cap.isOpened():
+                self._open_stream()
+                if self._cap is None or not self._cap.isOpened():
+                    return False
             
             # Ensure within bounds
-            target_ms = max(0.0, min(timestamp_ms, self.duration_ms))
+            max_d = self.duration_ms if self.duration_ms > 0 else 1e9
+            target_ms = max(0.0, min(timestamp_ms, max_d))
+            fps = self.fps or 30.0
+            target_frame = max(0, int((target_ms / 1000.0) * fps))
+            if self.total_frames > 0:
+                target_frame = min(target_frame, max(0, self.total_frames - 1))
+
             try:
+                # Seek via frames first (robust on Windows MSMF/FFMPEG), then MSEC
+                self._cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
                 self._cap.set(cv2.CAP_PROP_POS_MSEC, target_ms)
+                self._eof = False
                 return True
             except Exception as e:
                 logger.debug(f"Seek failed for {self.file_path}: {e}")
-                return False
+                try:
+                    # Fallback for Windows demuxer EOF lock
+                    self._cap.release()
+                    self._cap = cv2.VideoCapture(self.file_path)
+                    self._cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+                    self._cap.set(cv2.CAP_PROP_POS_MSEC, target_ms)
+                    self._eof = False
+                    return True
+                except Exception:
+                    return False
 
     def catch_up(self, target_ms: float) -> None:
         """Fast-forwards sequentially until the camera reaches the target timestamp, safely under lock."""

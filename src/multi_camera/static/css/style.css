@@ -727,6 +727,11 @@ body.theme-dark {
   transform: translateY(6px);
   transition: all 0.2s ease;
   z-index: 5;
+  pointer-events: none;
+}
+
+.camera-tile-overlay button {
+  pointer-events: auto;
 }
 
 .camera-tile:hover .camera-tile-overlay {
