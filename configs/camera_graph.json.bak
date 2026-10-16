@@ -2,43 +2,19 @@
   "schema_version": 2,
   "cameras": [
     {
-      "camera_id": "cam_0",
-      "name": "Webcam 0 (In Use)",
-      "source": 0,
-      "source_type": "webcam",
+      "camera_id": "IP_CAM",
+      "name": "a",
+      "source": "http://192.168.29.15:8080/video",
+      "source_type": "rtsp",
       "enabled": true,
-      "position_x": 183.274760657739,
-      "position_y": 131.4613969034267,
-      "floor": null,
-      "zone": null,
-      "group": null,
-      "description": null
-    },
-    {
-      "camera_id": "cam_1",
-      "name": "Webcam 1",
-      "source": 1,
-      "source_type": "webcam",
-      "enabled": true,
-      "position_x": 302.6059154884849,
-      "position_y": 61.73094403026556,
+      "position_x": -48.33094035780937,
+      "position_y": -22.13962874155169,
       "floor": null,
       "zone": null,
       "group": null,
       "description": null
     }
   ],
-  "edges": [
-    {
-      "source_camera_id": "cam_0",
-      "target_camera_id": "cam_1",
-      "edge_type": "adjacent",
-      "direction": "bidirectional",
-      "enabled": true,
-      "expected_min_transition_s": null,
-      "expected_typical_transition_s": null,
-      "expected_max_transition_s": null
-    }
-  ],
+  "edges": [],
   "background_map": null
 }

@@ -509,9 +509,9 @@ class MultiCameraPipeline:
         # Compute FPS
         now = time.time()
         elapsed = now - self._last_fps_time
-        if elapsed >= 1.0:
+        if elapsed >= 1.0 or (self._current_fps == 0.0 and self._frame_count > 0 and elapsed >= 0.1):
             frames_since = self._frame_count - self._last_fps_frames
-            self._current_fps = frames_since / elapsed
+            self._current_fps = frames_since / max(elapsed, 1e-4)
             self._last_fps_time = now
             self._last_fps_frames = self._frame_count
 

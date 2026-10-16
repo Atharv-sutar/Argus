@@ -95,7 +95,7 @@ const API = {
 
   async discoverCameras(start = 0, end = 4) {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
     try {
       const url = `${this.baseUrl}/api/cameras/discover?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
       const res = await fetch(url, { signal: controller.signal });

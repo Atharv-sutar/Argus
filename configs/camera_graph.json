@@ -2,65 +2,75 @@
   "schema_version": 2,
   "cameras": [
     {
-      "camera_id": "cam_0",
-      "name": "Webcam 0 (In Use)",
-      "source": 0,
-      "source_type": "webcam",
+      "camera_id": "campus4_c0",
+      "name": "Campus4 C0",
+      "source": "E:/MAJOR_PROJECT/Project/test_footage/EPFL campus/campus4-c0.avi",
+      "source_type": "video_file",
       "enabled": true,
-      "position_x": 183.274760657739,
-      "position_y": 131.4613969034267,
+      "position_x": 180.0,
+      "position_y": 140.0,
       "floor": null,
       "zone": null,
       "group": null,
-      "description": null
+      "description": "Auto-loaded from campus4-c0.avi"
     },
     {
-      "camera_id": "cam_1",
-      "name": "Webcam 1",
-      "source": 1,
-      "source_type": "webcam",
+      "camera_id": "campus4_c1",
+      "name": "Campus4 C1",
+      "source": "E:/MAJOR_PROJECT/Project/test_footage/EPFL campus/campus4-c1.avi",
+      "source_type": "video_file",
       "enabled": true,
-      "position_x": 302.6059154884849,
-      "position_y": 61.73094403026556,
+      "position_x": 460.0,
+      "position_y": 140.0,
       "floor": null,
       "zone": null,
       "group": null,
-      "description": null
+      "description": "Auto-loaded from campus4-c1.avi"
     },
     {
-      "camera_id": "camPhone",
-      "name": "p",
-      "source": "https://10.230.181.165:8080/video",
-      "source_type": "rtsp",
+      "camera_id": "campus4_c2",
+      "name": "Campus4 C2",
+      "source": "E:/MAJOR_PROJECT/Project/test_footage/EPFL campus/campus4-c2.avi",
+      "source_type": "video_file",
       "enabled": true,
-      "position_x": 290.7098411318609,
-      "position_y": 229.08074790458267,
+      "position_x": 740.0,
+      "position_y": 140.0,
       "floor": null,
       "zone": null,
       "group": null,
-      "description": null
+      "description": "Auto-loaded from campus4-c2.avi"
     }
   ],
   "edges": [
     {
-      "source_camera_id": "cam_0",
-      "target_camera_id": "cam_1",
+      "source_camera_id": "campus4_c0",
+      "target_camera_id": "campus4_c1",
       "edge_type": "adjacent",
       "direction": "bidirectional",
       "enabled": true,
-      "expected_min_transition_s": null,
-      "expected_typical_transition_s": null,
-      "expected_max_transition_s": null
+      "expected_min_transition_s": 0.0,
+      "expected_typical_transition_s": 5.0,
+      "expected_max_transition_s": 60.0
     },
     {
-      "source_camera_id": "cam_0",
-      "target_camera_id": "camPhone",
+      "source_camera_id": "campus4_c0",
+      "target_camera_id": "campus4_c2",
       "edge_type": "adjacent",
       "direction": "bidirectional",
       "enabled": true,
-      "expected_min_transition_s": null,
-      "expected_typical_transition_s": null,
-      "expected_max_transition_s": null
+      "expected_min_transition_s": 0.0,
+      "expected_typical_transition_s": 5.0,
+      "expected_max_transition_s": 60.0
+    },
+    {
+      "source_camera_id": "campus4_c1",
+      "target_camera_id": "campus4_c2",
+      "edge_type": "adjacent",
+      "direction": "bidirectional",
+      "enabled": true,
+      "expected_min_transition_s": 0.0,
+      "expected_typical_transition_s": 5.0,
+      "expected_max_transition_s": 60.0
     }
   ],
   "background_map": null

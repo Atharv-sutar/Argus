@@ -69,9 +69,13 @@ class OpenCVCamera(BaseCamera):
 
         with self._cap_lock:
             try:
-                # On Windows, use Media Foundation (cv2.CAP_MSMF) for webcam indices to avoid DirectShow driver hangs
+                # On Windows, try Media Foundation (MSMF) first, fallback to DirectShow (DSHOW) or default
                 if isinstance(src, int) and sys.platform.startswith("win"):
                     self._cap = cv2.VideoCapture(src, cv2.CAP_MSMF)
+                    if not self._cap or not self._cap.isOpened():
+                        self._cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)
+                    if not self._cap or not self._cap.isOpened():
+                        self._cap = cv2.VideoCapture(src)
                 else:
                     self._cap = cv2.VideoCapture(src)
                     # Auto-detect Android IP Webcam root URLs (e.g. http://<ip>:8080/ -> http://<ip>:8080/video)
@@ -216,6 +220,10 @@ class OpenCVCamera(BaseCamera):
 
                 if isinstance(src, int) and sys.platform.startswith("win"):
                     self._cap = cv2.VideoCapture(src, cv2.CAP_MSMF)
+                    if not self._cap or not self._cap.isOpened():
+                        self._cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)
+                    if not self._cap or not self._cap.isOpened():
+                        self._cap = cv2.VideoCapture(src)
                 else:
                     self._cap = cv2.VideoCapture(src)
                     if (not self._cap or not self._cap.isOpened()) and isinstance(src, str) and src.startswith(("http://", "https://")):

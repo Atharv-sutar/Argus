@@ -47,6 +47,26 @@ def test_probe_local_webcams_bounded_and_logged(tmp_path):
     assert "[TOPOLOGY/PROBE]" in content
 
 
+def test_probe_single_device_robust_json_parsing(monkeypatch):
+    """Verify _probe_single_device handles extraneous stdout lines gracefully."""
+    from unittest.mock import MagicMock
+    import subprocess
+    from src.multi_camera.ui_server import _probe_single_device
+
+    # Mock subprocess.run returning noisy output before JSON
+    fake_stdout = "[WARN:0@0.002] global cap_ffmpeg: OpenCV warning\n{\"source\": 0, \"width\": 1280, \"height\": 720, \"fps\": 30}\n"
+    mock_proc = MagicMock(returncode=0, stdout=fake_stdout)
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: mock_proc)
+
+    res = _probe_single_device(0, timeout=1.0)
+    assert res is not None
+    assert res["source"] == 0
+    assert res["width"] == 1280
+    assert res["height"] == 720
+    assert res["fps"] == 30
+    assert res["status"] == "available"
+
+
 def test_topology_save_and_live_matrix_logging(tmp_path):
     """Verify topology save and live matrix operations write detailed entries to log file."""
     log_file = tmp_path / "topology_matrix_test.log"

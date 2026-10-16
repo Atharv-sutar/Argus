@@ -56,30 +56,37 @@ def is_shutdown_requested() -> bool:
 
 
 _PROBE_CODE = (
-    "import cv2, json, sys\n"
+    "import cv2, json, os, sys\n"
+    "os.environ['OPENCV_LOG_LEVEL'] = 'SILENT'\n"
     "try:\n"
+    "    if hasattr(cv2, 'setLogLevel'):\n"
+    "        cv2.setLogLevel(0)\n"
     "    idx = int(sys.argv[1])\n"
-    "    backend = cv2.CAP_MSMF if sys.platform.startswith('win') else cv2.CAP_ANY\n"
-    "    cap = cv2.VideoCapture(idx, backend)\n"
-    "    if cap and cap.isOpened():\n"
-    "        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640\n"
-    "        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480\n"
-    "        raw_fps = cap.get(cv2.CAP_PROP_FPS)\n"
-    "        fps = int(raw_fps) if (raw_fps and raw_fps > 0) else 30\n"
-    "        ret, frame = cap.read()\n"
-    "        cap.release()\n"
-    "        if ret and frame is not None:\n"
-    "            print(json.dumps({'source': idx, 'width': w, 'height': h, 'fps': fps}))\n"
-    "            sys.exit(0)\n"
-    "    if cap:\n"
-    "        cap.release()\n"
+    "    backends = [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY] if sys.platform.startswith('win') else [cv2.CAP_ANY]\n"
+    "    for backend in backends:\n"
+    "        try:\n"
+    "            cap = cv2.VideoCapture(idx, backend) if backend is not None else cv2.VideoCapture(idx)\n"
+    "            if cap and cap.isOpened():\n"
+    "                w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640\n"
+    "                h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480\n"
+    "                raw_fps = cap.get(cv2.CAP_PROP_FPS)\n"
+    "                fps = int(raw_fps) if (raw_fps and raw_fps > 0) else 30\n"
+    "                ret, frame = cap.read()\n"
+    "                cap.release()\n"
+    "                if ret and frame is not None and frame.size > 0:\n"
+    "                    print(json.dumps({'source': idx, 'width': w, 'height': h, 'fps': fps}))\n"
+    "                    sys.exit(0)\n"
+    "            if cap:\n"
+    "                cap.release()\n"
+    "        except Exception:\n"
+    "            pass\n"
     "except Exception:\n"
     "    pass\n"
     "sys.exit(1)\n"
 )
 
 
-def _probe_single_device(idx: int, timeout: float = 3.5) -> Optional[Dict[str, Any]]:
+def _probe_single_device(idx: int, timeout: float = 6.0) -> Optional[Dict[str, Any]]:
     """Probes a single camera index in an isolated subprocess with strict timeout."""
     if _SHUTDOWN_EVENT.is_set():
         return None
@@ -93,20 +100,31 @@ def _probe_single_device(idx: int, timeout: float = 3.5) -> Optional[Dict[str, A
         )
         elapsed = time.time() - t0
         if proc.returncode == 0 and proc.stdout.strip():
-            data = json.loads(proc.stdout.strip())
-            w = data.get("width", 640)
-            h = data.get("height", 480)
-            fps = data.get("fps", 30)
-            logger.info(f"[PROBE] Webcam index {idx}: SUCCESS ({w}x{h} @ {fps}fps, took {elapsed:.2f}s)")
-            return {
-                "source": idx,
-                "name": f"Webcam {idx}",
-                "source_type": "webcam",
-                "width": w,
-                "height": h,
-                "fps": fps,
-                "status": "available",
-            }
+            data = None
+            for line in proc.stdout.strip().splitlines():
+                line = line.strip()
+                if line.startswith("{") and line.endswith("}"):
+                    try:
+                        data = json.loads(line)
+                        break
+                    except json.JSONDecodeError:
+                        continue
+            if data is not None:
+                w = data.get("width", 640)
+                h = data.get("height", 480)
+                fps = data.get("fps", 30)
+                logger.info(f"[PROBE] Webcam index {idx}: SUCCESS ({w}x{h} @ {fps}fps, took {elapsed:.2f}s)")
+                return {
+                    "source": idx,
+                    "name": f"Webcam {idx}",
+                    "source_type": "webcam",
+                    "width": w,
+                    "height": h,
+                    "fps": fps,
+                    "status": "available",
+                }
+            else:
+                logger.debug(f"[PROBE] Webcam index {idx}: output was not valid JSON (took {elapsed:.2f}s): {proc.stdout.strip()}")
         else:
             logger.debug(f"[PROBE] Webcam index {idx}: device absent / unreadable (took {elapsed:.2f}s)")
     except subprocess.TimeoutExpired:
@@ -122,7 +140,7 @@ def probe_local_webcams(
     start_index: int = 0,
     end_index: int = 4,
     pipeline: Any = None,
-    timeout_per_index: float = 3.5,
+    timeout_per_index: float = 6.0,
     max_indices: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
@@ -172,7 +190,9 @@ def probe_local_webcams(
                 indices_to_probe.append(idx)
 
         if indices_to_probe:
-            max_workers = min(len(indices_to_probe), 8)
+            # On Windows, keep workers <= 2 to prevent COM/DirectShow hardware driver contention hangs
+            worker_limit = 2 if sys.platform.startswith("win") else 4
+            max_workers = min(len(indices_to_probe), worker_limit)
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_to_idx = {
                     executor.submit(_probe_single_device, idx, timeout_per_index): idx
@@ -188,8 +208,8 @@ def probe_local_webcams(
                     except Exception as e:
                         logger.debug(f"[TOPOLOGY/PROBE] Error in probe future: {e}")
 
-        # Sort discovered cameras by source index
-        cameras.sort(key=lambda c: str(c["source"]))
+        # Sort discovered cameras by integer source index
+        cameras.sort(key=lambda c: int(c["source"]) if isinstance(c["source"], int) or str(c["source"]).isdigit() else str(c["source"]))
 
     total_elapsed = time.time() - t_start
     cam_names = [c["name"] for c in cameras]
@@ -1499,7 +1519,11 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
         cap = None
         try:
             if isinstance(src, int) and sys.platform.startswith("win"):
-                cap = cv2.VideoCapture(src, cv2.CAP_MSMF)
+                cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)
+                if not cap or not cap.isOpened():
+                    cap = cv2.VideoCapture(src, cv2.CAP_MSMF)
+                if not cap or not cap.isOpened():
+                    cap = cv2.VideoCapture(src)
             else:
                 cap = cv2.VideoCapture(src)
                 # Auto-detect IP Webcam endpoint for HTTP/HTTPS roots
