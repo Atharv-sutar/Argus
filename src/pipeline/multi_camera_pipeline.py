@@ -1922,16 +1922,17 @@ class MultiCameraPipeline:
             if camera_id in self._latest_jpegs:
                 return self._latest_jpegs[camera_id]
 
-        # 2. Live camera fallback removed to prevent hardware thread contention
-        # 3. Fallback to cached frames if available
+        # Fallback to cached frames or active camera reader if available
         frame = None
-        if frame is None:
-            node = self._nodes.get(camera_id)
-            frame = node.last_frame if node is not None else None
+        node = self._nodes.get(camera_id)
+        if node is not None:
+            frame = node.last_frame
             
         worker = self._workers.get(camera_id)
         if frame is None and worker is not None:
             frame = worker._last_frame
+            if frame is None and getattr(worker, "camera", None) is not None:
+                frame = getattr(worker.camera, "_latest_frame", None)
 
         if frame is not None:
             try:
@@ -2127,12 +2128,11 @@ class MultiCameraPipeline:
         try:
             with self._pipeline_lock:
                 self.release_all_cameras()
-                time.sleep(0.25)  # allow OS/DirectShow to fully release hardware locks
-                with self._frame_lock:
-                    self._sync_nodes_with_graph()
-                    for cid, node in self._nodes.items():
-                        if node.config.enabled:
-                            self._get_or_create_worker(cid)
+                time.sleep(0.5)  # allow OS driver to fully release hardware locks
+                self._sync_nodes_with_graph()
+                for cid, node in list(self._nodes.items()):
+                    if node.config.enabled:
+                        self._get_or_create_worker(cid)
             logger.info(f"[MULTI-CAM] All cameras restarted. Re-initialized {len(self._workers)} camera workers.")
         finally:
             self._is_paused = False

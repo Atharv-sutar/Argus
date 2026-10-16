@@ -59,7 +59,8 @@ _PROBE_CODE = (
     "import cv2, json, sys\n"
     "try:\n"
     "    idx = int(sys.argv[1])\n"
-    "    cap = cv2.VideoCapture(idx)\n"
+    "    backend = cv2.CAP_MSMF if sys.platform.startswith('win') else cv2.CAP_ANY\n"
+    "    cap = cv2.VideoCapture(idx, backend)\n"
     "    if cap and cap.isOpened():\n"
     "        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640\n"
     "        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480\n"
@@ -1491,7 +1492,10 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
 
         cap = None
         try:
-            cap = cv2.VideoCapture(src)
+            if isinstance(src, int) and sys.platform.startswith("win"):
+                cap = cv2.VideoCapture(src, cv2.CAP_MSMF)
+            else:
+                cap = cv2.VideoCapture(src)
             if hasattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC"):
                 cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 2500)
             if hasattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC"):

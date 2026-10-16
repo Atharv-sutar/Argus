@@ -69,9 +69,9 @@ class OpenCVCamera(BaseCamera):
 
         with self._cap_lock:
             try:
-                # On Windows, try DirectShow (cv2.CAP_DSHOW) first for webcam indices
+                # On Windows, use Media Foundation (cv2.CAP_MSMF) first for webcam indices to avoid DirectShow driver hangs
                 if isinstance(src, int) and sys.platform.startswith("win"):
-                    self._cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)
+                    self._cap = cv2.VideoCapture(src, cv2.CAP_MSMF)
                     if not self._cap or not self._cap.isOpened():
                         self._cap = cv2.VideoCapture(src, cv2.CAP_ANY)
                 else:
@@ -111,10 +111,10 @@ class OpenCVCamera(BaseCamera):
             self._thread = threading.Thread(target=self._capture_loop, daemon=True)
             self._thread.start()
 
-            # Non-blocking short wait for initial frame arrival (max 0.2s)
-            deadline = time.time() + 0.2
+            # Non-blocking wait for initial frame arrival (max 1.5s for hardware init)
+            deadline = time.time() + 1.5
             while self._latest_frame is None and time.time() < deadline and not self._is_closed:
-                time.sleep(0.005)
+                time.sleep(0.01)
 
     def _capture_loop(self) -> None:
         """Background thread continuously pulling frames to prevent driver buffer buildup."""
@@ -152,14 +152,14 @@ class OpenCVCamera(BaseCamera):
                     time.sleep(0.01)
                     continue
 
-                if self._consecutive_failures >= 30:
+                if self._consecutive_failures >= 60:
                     if self._running and not self._is_closed:
                         logger.warning(f"Camera '{self.source}' stream read failure count={self._consecutive_failures}. Reconnecting...")
                         self._reopen_stream()
-                    time.sleep(0.2)
+                    time.sleep(0.5)
                     continue
 
-                time.sleep(0.01)
+                time.sleep(0.05)
                 continue
 
             self._consecutive_failures = 0
@@ -210,7 +210,7 @@ class OpenCVCamera(BaseCamera):
                     src = int(src)
 
                 if isinstance(src, int) and sys.platform.startswith("win"):
-                    self._cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)
+                    self._cap = cv2.VideoCapture(src, cv2.CAP_MSMF)
                     if not self._cap or not self._cap.isOpened():
                         self._cap = cv2.VideoCapture(src, cv2.CAP_ANY)
                 else:
