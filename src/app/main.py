@@ -677,6 +677,9 @@ def run_multi_camera_app(
                 server.server_close()
             except Exception:
                 pass
+        if "PYTEST_CURRENT_TEST" not in os.environ:
+            time.sleep(0.1)
+            os._exit(0)
 
 
 

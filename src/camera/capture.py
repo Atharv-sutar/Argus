@@ -69,20 +69,14 @@ class OpenCVCamera(BaseCamera):
 
         with self._cap_lock:
             try:
-                # On Windows, use Media Foundation (cv2.CAP_MSMF) first for webcam indices to avoid DirectShow driver hangs
+                # On Windows, use Media Foundation (cv2.CAP_MSMF) for webcam indices to avoid DirectShow driver hangs
                 if isinstance(src, int) and sys.platform.startswith("win"):
                     self._cap = cv2.VideoCapture(src, cv2.CAP_MSMF)
-                    if not self._cap or not self._cap.isOpened():
-                        self._cap = cv2.VideoCapture(src, cv2.CAP_ANY)
                 else:
                     self._cap = cv2.VideoCapture(src)
 
                 if not self._cap or not self._cap.isOpened():
-                    # Fallback to default if initial open failed
-                    self._cap = cv2.VideoCapture(src, cv2.CAP_ANY)
-
-                if not self._cap or not self._cap.isOpened():
-                    logger.error(f"Failed to open video source: {self.source}")
+                    logger.warning(f"Failed to open video source: {self.source}")
                     self._is_closed = True
                     return
 
@@ -211,8 +205,6 @@ class OpenCVCamera(BaseCamera):
 
                 if isinstance(src, int) and sys.platform.startswith("win"):
                     self._cap = cv2.VideoCapture(src, cv2.CAP_MSMF)
-                    if not self._cap or not self._cap.isOpened():
-                        self._cap = cv2.VideoCapture(src, cv2.CAP_ANY)
                 else:
                     self._cap = cv2.VideoCapture(src)
 
@@ -279,7 +271,7 @@ class OpenCVCamera(BaseCamera):
         thread = self._thread
         self._thread = None
         if thread is not None and thread.is_alive() and thread is not threading.current_thread():
-            thread.join(timeout=0.3)
+            thread.join(timeout=1.5)
 
         with self._cap_lock:
             if self._cap is not None:

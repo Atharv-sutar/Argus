@@ -161,6 +161,7 @@ class MultiCameraPipeline:
         self._is_running: bool = True
         self._is_paused: bool = False
         self._pipeline_lock: threading.RLock = threading.RLock()
+        self._worker_lock: threading.Lock = threading.Lock()
         import collections
         self._transit_history: collections.deque = collections.deque(maxlen=500)
         self._frame_count: int = 0
@@ -171,6 +172,8 @@ class MultiCameraPipeline:
         self._last_candidate_scores: Dict[int, float] = {}
         self._switch_consensus: Dict[int, int] = {}
         self._current_track_misses: int = 0
+        self._initializing_workers: set = set()
+        self._failed_worker_times: Dict[str, float] = {}
         self._pipeline_start_time: float = time.time()
         self._last_fps_time: float = time.time()
         self._last_fps_frames: int = 0
@@ -237,6 +240,9 @@ class MultiCameraPipeline:
 
         # Sync nodes from graph
         self._sync_nodes_with_graph()
+
+        # Pre-initialize enabled camera workers so live feeds start without delay
+        self._initialize_enabled_workers()
 
     @property
     def is_running(self) -> bool:
@@ -399,19 +405,54 @@ class MultiCameraPipeline:
                     font_scale=self.config.visualization.font_scale,
                 )
 
+    def _initialize_enabled_workers(self) -> None:
+        """Pre-initializes workers for all enabled cameras in parallel background tasks so startup is instantaneous."""
+        for cid, node in list(self._nodes.items()):
+            if node.config.enabled:
+                self._async_init_worker(cid)
+
+    def _async_init_worker(self, camera_id: str) -> None:
+        """Schedules camera worker initialization on the thread pool if not already running or recently failed."""
+        if not self._is_running:
+            return
+        with self._worker_lock:
+            if camera_id in self._workers or camera_id in self._initializing_workers:
+                return
+            # Failure cooldown: do not hammer failing hardware (10s backoff)
+            last_fail = self._failed_worker_times.get(camera_id, 0.0)
+            if time.time() - last_fail < 10.0:
+                return
+            self._initializing_workers.add(camera_id)
+
+        def _do_init():
+            try:
+                if self._is_running:
+                    self._get_or_create_worker(camera_id)
+            finally:
+                with self._worker_lock:
+                    self._initializing_workers.discard(camera_id)
+
+        try:
+            self._executor.submit(_do_init)
+        except RuntimeError:
+            with self._worker_lock:
+                self._initializing_workers.discard(camera_id)
+
     def _get_or_create_pipeline(self, camera_id: str) -> Optional[CameraWorker]:
         """Backward-compatible alias for _get_or_create_worker."""
         return self._get_or_create_worker(camera_id)
 
     def _get_or_create_worker(self, camera_id: str) -> Optional[CameraWorker]:
-        """Lazy-instantiates CameraWorker for a given camera node."""
-        if camera_id in self._workers:
-            return self._workers[camera_id]
+        """Lazy-instantiates CameraWorker for a given camera node without holding lock during I/O."""
+        with self._worker_lock:
+            if camera_id in self._workers:
+                return self._workers[camera_id]
 
-        node = self._nodes.get(camera_id)
-        if node is None or not node.config.enabled:
-            return None
+            node = self._nodes.get(camera_id)
+            if node is None or not node.config.enabled:
+                return None
 
+        # Instantiate camera hardware OUTSIDE the lock so step() and other threads never freeze!
         try:
             camera = self._camera_factory(node.config)
             tracker = self._tracker_factory()
@@ -423,9 +464,25 @@ class MultiCameraPipeline:
                 annotator=annotator,
                 camera_id=camera_id,
             )
+        except Exception as e:
+            logger.warning(f"[MULTI-CAM] Failed to initialize worker for camera '{camera_id}': {e}")
+            with self._worker_lock:
+                self._failed_worker_times[camera_id] = time.time()
+            node.mark_offline()
+            return None
+
+        with self._worker_lock:
+            if camera_id in self._workers:
+                try:
+                    worker.stop()
+                except Exception:
+                    pass
+                return self._workers[camera_id]
+
             self._workers[camera_id] = worker
             if camera.is_opened():
                 node.mark_online()
+                self._failed_worker_times.pop(camera_id, None)
                 if getattr(self, "recording_manager", None) and self.recording_manager.enabled:
                     fps = float(getattr(node.config, "fps", None) or getattr(self.config.camera, "fps", 20.0) or 20.0)
                     width = int(getattr(node.config, "width", None) or getattr(self.config.camera, "width", 1280) or 1280)
@@ -437,13 +494,10 @@ class MultiCameraPipeline:
                         fps=fps,
                     )
             else:
+                self._failed_worker_times[camera_id] = time.time()
                 node.mark_offline()
             logger.info(f"[MULTI-CAM] Initialized camera worker for '{camera_id}' (source={node.config.source}, opened={camera.is_opened()})")
             return worker
-        except Exception as e:
-            logger.warning(f"[MULTI-CAM] Failed to initialize worker for camera '{camera_id}': {e}")
-            node.mark_offline()
-            return None
 
 
     def get_telemetry(self) -> 'PipelineTelemetry':
@@ -854,7 +908,9 @@ class MultiCameraPipeline:
         # 2. Gather Phase 1 Tasks: I/O and AI Inference
         tasks = []
         active_cam_id = self._active_camera_id
-        active_worker = self._get_or_create_worker(active_cam_id) if active_cam_id else None
+        active_worker = self._workers.get(active_cam_id) if active_cam_id else None
+        if active_worker is None and active_cam_id:
+            self._async_init_worker(active_cam_id)
 
         if active_cam_id and active_worker and active_worker.camera.is_opened():
             tasks.append((active_cam_id, active_worker, "active"))
@@ -868,16 +924,20 @@ class MultiCameraPipeline:
         for search_cam_id in search_cams_to_process:
             if search_cam_id == active_cam_id:
                 continue
-            s_worker = self._get_or_create_worker(search_cam_id)
-            if s_worker and s_worker.camera.is_opened():
+            s_worker = self._workers.get(search_cam_id)
+            if s_worker is None:
+                self._async_init_worker(search_cam_id)
+            elif s_worker.camera.is_opened():
                 tasks.append((search_cam_id, s_worker, "search"))
 
         active_and_search = {t[0] for t in tasks}
 
         for cid, node in self._nodes.items():
             if cid not in active_and_search and node.config.enabled:
-                worker = self._get_or_create_worker(cid)
-                if worker and worker.camera.is_opened():
+                worker = self._workers.get(cid)
+                if worker is None:
+                    self._async_init_worker(cid)
+                elif worker.camera.is_opened():
                     tasks.append((cid, worker, "standby"))
 
         def _task_acquire(cid: str, worker: CameraWorker, role: str):
@@ -920,7 +980,7 @@ class MultiCameraPipeline:
         for cid in ordered_cids:
             _, role, frame, ts_ms = acquired_results[cid]
             if frame is not None and role in ("active", "search"):
-                worker = self._get_or_create_worker(cid)
+                worker = self._workers.get(cid)
                 if worker and hasattr(worker, "detector"):
                     # Testing backdoor: if a mock detector is attached to the worker, use it directly
                     det_map[cid] = worker.detector.detect(frame, self._frame_count, ts_ms)
@@ -958,7 +1018,7 @@ class MultiCameraPipeline:
             crop_mapping: List[Tuple[str, int]] = []
 
             for cid, det_res in det_map.items():
-                worker = self._get_or_create_worker(cid)
+                worker = self._workers.get(cid)
                 if worker and getattr(worker.tracker, "reid_extractor", None) is None:
                     continue
                 _, _, frame, _ = acquired_results.get(cid, (None, None, None, 0.0))
@@ -999,7 +1059,7 @@ class MultiCameraPipeline:
         track_futures = {}
         for cid, (_, role, frame, ts_ms) in acquired_results.items():
             if role in ("active", "search") and frame is not None:
-                worker = self._get_or_create_worker(cid)
+                worker = self._workers.get(cid)
                 det_res = det_map.get(cid)
                 if worker and det_res:
                     det_embs = cam_det_embeddings.get(cid)
@@ -1040,7 +1100,7 @@ class MultiCameraPipeline:
             
             for cid, (r_cid, role, frame, ts_ms, track_res) in phase1_results.items():
                 if frame is not None and track_res is not None and role in ("active", "search"):
-                    worker = self._get_or_create_worker(cid)
+                    worker = self._workers.get(cid)
                     if worker:
                         # Pre-calculate spatial constraints for search cameras
                         is_camera_spatially_valid = True
@@ -1172,7 +1232,7 @@ class MultiCameraPipeline:
 
         for cid, (_, role, frame, ts_ms, track_res) in phase1_results.items():
             if role == "search" and frame is not None and track_res is not None:
-                s_worker = self._get_or_create_worker(cid)
+                s_worker = self._workers.get(cid)
                 if not s_worker:
                     continue
                 if cid in self._nodes:
@@ -1242,7 +1302,7 @@ class MultiCameraPipeline:
                 pass # Standby doesn't need annotation
             
             jpeg_buf = None
-            should_encode = (role != "standby") or (self._frame_count % 10 == 0)
+            should_encode = True
             if should_encode:
                 try:
                     # Resize for UI streaming to save CPU and network bandwidth (matrix view is small anyway)
@@ -1263,7 +1323,7 @@ class MultiCameraPipeline:
         phase2_futures = []
         for cid, (_, role, frame, ts_ms, track_res) in phase1_results.items():
             if frame is not None:
-                worker = self._get_or_create_worker(cid)
+                worker = self._workers.get(cid)
                 if worker:
                     if role == "standby" and cid in self._nodes:
                         self._nodes[cid].last_frame = frame
@@ -2121,6 +2181,10 @@ class MultiCameraPipeline:
             for node in self._nodes.values():
                 node.last_frame = None
 
+        with self._worker_lock:
+            self._initializing_workers.clear()
+            self._failed_worker_times.clear()
+
     def restart_cameras(self) -> None:
         """Safely shuts down all camera handles, waits for hardware release, and re-initializes enabled camera workers."""
         logger.info("[MULTI-CAM] Executing full camera shutdown and restart sequence...")
@@ -2132,7 +2196,7 @@ class MultiCameraPipeline:
                 self._sync_nodes_with_graph()
                 for cid, node in list(self._nodes.items()):
                     if node.config.enabled:
-                        self._get_or_create_worker(cid)
+                        self._async_init_worker(cid)
             logger.info(f"[MULTI-CAM] All cameras restarted. Re-initialized {len(self._workers)} camera workers.")
         finally:
             self._is_paused = False
@@ -2204,34 +2268,45 @@ class MultiCameraPipeline:
         return self.forensic_recorder.stop_and_export(output_path)
 
     def stop(self) -> None:
-        """Stop all camera workers and release resources."""
-        self._is_running = False
-        self._is_paused = False
-
-        # Stop continuous recording writers and retention daemon
-        if getattr(self, "recording_manager", None):
-            self.recording_manager.stop_all()
-
-        # Discard any in-progress forensic recording
-        if self.forensic_recorder.is_recording:
-            self.forensic_recorder.discard()
-
+        """Stop all camera workers and release resources safely without deadlock."""
         with self._pipeline_lock:
+            if not self._is_running and len(self._workers) == 0:
+                return
+            self._is_running = False
+            self._is_paused = False
+
+            # Stop continuous recording writers and retention daemon
+            if getattr(self, "recording_manager", None):
+                try:
+                    self.recording_manager.stop_all()
+                except Exception as e:
+                    logger.debug(f"Error stopping recording manager: {e}")
+
+            # Discard any in-progress forensic recording
+            if self.forensic_recorder.is_recording:
+                try:
+                    self.forensic_recorder.discard()
+                except Exception:
+                    pass
+
             for worker in list(self._workers.values()):
                 try:
                     worker.stop()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Error stopping worker during pipeline stop: {e}")
             self._workers.clear()
             
             try:
-                self._executor.shutdown(wait=False)
+                self._executor.shutdown(wait=False, cancel_futures=True)
             except Exception:
                 pass
                 
             # Persist target gallery on graceful shutdown
             if getattr(self.config, "storage", None) and self.config.storage.enabled:
-                self.identity.save_to_db(self.config.storage.db_path)
+                try:
+                    self.identity.save_to_db(self.config.storage.db_path)
+                except Exception:
+                    pass
 
         trim_gpu_memory()
         logger.info("[MULTI-CAM] Pipeline stopped.")

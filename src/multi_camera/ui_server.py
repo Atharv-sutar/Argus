@@ -1439,7 +1439,15 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 if "PYTEST_CURRENT_TEST" not in os.environ:
                     os._exit(0)
 
+            # Hard watchdog timer to guarantee process never stays alive in background
+            def _watchdog():
+                time.sleep(3.0)
+                if "PYTEST_CURRENT_TEST" not in os.environ:
+                    logger.warning("[SERVER] Watchdog timeout reached during shutdown. Forcing exit.")
+                    os._exit(0)
+
             threading.Thread(target=_instant_shutdown, daemon=True, name="shutdown_thread").start()
+            threading.Thread(target=_watchdog, daemon=True, name="shutdown_watchdog").start()
             return
 
         self.send_error(HTTPStatus.NOT_FOUND, "Endpoint not found")
@@ -1484,9 +1492,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             for cid, node in getattr(self.runtime_pipeline, "_nodes", {}).items():
                 try:
                     if int(node.config.source) == src:
-                        jpeg = self.runtime_pipeline.get_camera_frame_jpeg(cid)
-                        if jpeg:
-                            return jpeg
+                        return self.runtime_pipeline.get_camera_frame_jpeg(cid)
                 except (ValueError, TypeError):
                     pass
 
