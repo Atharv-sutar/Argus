@@ -36,10 +36,32 @@ class CameraManager {
       e.preventDefault();
       const id = document.getElementById('custom-cam-id').value.trim();
       const name = document.getElementById('custom-cam-name').value.trim();
-      const type = document.getElementById('custom-cam-type').value;
-      const source = document.getElementById('custom-cam-source').value.trim();
+      let type = document.getElementById('custom-cam-type').value;
+      let source = document.getElementById('custom-cam-source').value.trim();
 
       if (!id || !name || !source) return;
+
+      // Auto-detect and normalize HTTP/HTTPS network streams (e.g. Android IP Webcam)
+      if (/^https?:\/\//i.test(source)) {
+        if (type === 'webcam') {
+          type = 'rtsp';
+        }
+        try {
+          const parsed = new URL(source);
+          if (parsed.pathname === '/' || parsed.pathname === '') {
+            parsed.pathname = '/video';
+            source = parsed.toString();
+          }
+        } catch (_) {
+          if (source.endsWith(':8080') || source.endsWith(':8080/')) {
+            source = source.replace(/\/?$/, '/video');
+          }
+        }
+      } else if (/^rtsp:\/\//i.test(source)) {
+        if (type === 'webcam') {
+          type = 'rtsp';
+        }
+      }
 
       if (!this.app.graphCanvas) {
         this.app.graphCanvas = new GraphCanvas(this.app, 'graph-canvas');
@@ -48,7 +70,7 @@ class CameraManager {
       this.app.graphCanvas.addNode({
         camera_id: id,
         name: name,
-        source: isNaN(source) ? source : parseInt(source, 10),
+        source: (source !== '' && !isNaN(source) && String(parseInt(source, 10)) === source) ? parseInt(source, 10) : source,
         source_type: type,
         enabled: true,
         position_x: 200 + Math.random() * 100,

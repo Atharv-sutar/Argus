@@ -560,14 +560,17 @@
                     <label>Source Type</label>
                     <select id="custom-cam-type">
                       <option value="webcam">Webcam (Device Index)</option>
-                      <option value="rtsp">RTSP Stream</option>
+                      <option value="rtsp">Network Stream (RTSP / HTTP IP Webcam)</option>
                       <option value="video_file">Video File</option>
                       <option value="synthetic">Synthetic Test Generator</option>
                     </select>
                   </div>
                   <div class="form-row">
                     <label>Source URI / Index</label>
-                    <input type="text" id="custom-cam-source" placeholder="0 or rtsp://... or path/to/video.mp4" required>
+                    <input type="text" id="custom-cam-source" placeholder="0 or http://<ip>:8080/video or rtsp://..." required>
+                    <span style="font-size: 10px; color: var(--text-muted); margin-top: 3px; display: block;">
+                      Tip: For Android IP Webcam, use <code>http://&lt;ip&gt;:8080/video</code> (HTTP/HTTPS supported)
+                    </span>
                   </div>
                   <button type="submit" class="btn btn-primary btn-sm w-full">+ Add Camera to Canvas</button>
                 </form>
@@ -637,7 +640,7 @@
                       <label>Source Type</label>
                       <select id="prop-cam-type">
                         <option value="webcam">Webcam</option>
-                        <option value="rtsp">RTSP Stream</option>
+                        <option value="rtsp">Network Stream (RTSP / HTTP IP Webcam)</option>
                         <option value="video_file">Video File</option>
                         <option value="synthetic">Synthetic</option>
                       </select>

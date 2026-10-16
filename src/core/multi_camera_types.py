@@ -111,6 +111,18 @@ class CameraNodeConfig:
         else:
             src_val = raw_source
 
+        # Auto-detect IP Webcam and network streams (RTSP, HTTP, HTTPS)
+        if isinstance(src_val, str) and src_val.startswith(("http://", "https://", "rtsp://")):
+            st = SourceType.RTSP
+            if src_val.startswith(("http://", "https://")):
+                import urllib.parse
+                try:
+                    parsed = urllib.parse.urlparse(src_val)
+                    if parsed.path in ("", "/"):
+                        src_val = src_val.rstrip("/") + "/video"
+                except Exception:
+                    pass
+
         return cls(
             camera_id=data["camera_id"],
             name=data.get("name", data["camera_id"]),

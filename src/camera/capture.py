@@ -74,6 +74,17 @@ class OpenCVCamera(BaseCamera):
                     self._cap = cv2.VideoCapture(src, cv2.CAP_MSMF)
                 else:
                     self._cap = cv2.VideoCapture(src)
+                    # Auto-detect Android IP Webcam root URLs (e.g. http://<ip>:8080/ -> http://<ip>:8080/video)
+                    if (not self._cap or not self._cap.isOpened()) and isinstance(src, str) and src.startswith(("http://", "https://")):
+                        import urllib.parse
+                        parsed = urllib.parse.urlparse(src)
+                        if parsed.path in ("", "/"):
+                            candidate = src.rstrip("/") + "/video"
+                            logger.info(f"Retrying HTTP camera with IP Webcam stream endpoint: {candidate}")
+                            alt_cap = cv2.VideoCapture(candidate)
+                            if alt_cap and alt_cap.isOpened():
+                                self._cap = alt_cap
+                                self.source = candidate
 
                 if not self._cap or not self._cap.isOpened():
                     logger.warning(f"Failed to open video source: {self.source}")
@@ -207,6 +218,15 @@ class OpenCVCamera(BaseCamera):
                     self._cap = cv2.VideoCapture(src, cv2.CAP_MSMF)
                 else:
                     self._cap = cv2.VideoCapture(src)
+                    if (not self._cap or not self._cap.isOpened()) and isinstance(src, str) and src.startswith(("http://", "https://")):
+                        import urllib.parse
+                        parsed = urllib.parse.urlparse(src)
+                        if parsed.path in ("", "/"):
+                            candidate = src.rstrip("/") + "/video"
+                            alt_cap = cv2.VideoCapture(candidate)
+                            if alt_cap and alt_cap.isOpened():
+                                self._cap = alt_cap
+                                self.source = candidate
 
                 if self._cap and self._cap.isOpened():
                     try:

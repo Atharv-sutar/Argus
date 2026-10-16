@@ -1502,6 +1502,19 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 cap = cv2.VideoCapture(src, cv2.CAP_MSMF)
             else:
                 cap = cv2.VideoCapture(src)
+                # Auto-detect IP Webcam endpoint for HTTP/HTTPS roots
+                if (not cap or not cap.isOpened()) and isinstance(src, str) and src.startswith(("http://", "https://")):
+                    import urllib.parse
+                    try:
+                        parsed = urllib.parse.urlparse(src)
+                        if parsed.path in ("", "/"):
+                            candidate = src.rstrip("/") + "/video"
+                            alt_cap = cv2.VideoCapture(candidate)
+                            if alt_cap and alt_cap.isOpened():
+                                cap = alt_cap
+                                src = candidate
+                    except Exception:
+                        pass
             if hasattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC"):
                 cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 2500)
             if hasattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC"):

@@ -26,8 +26,26 @@ class Inspector {
         this.currentNode.floor = document.getElementById('prop-cam-floor').value.trim() || null;
         this.currentNode.zone = document.getElementById('prop-cam-zone').value.trim() || null;
         this.currentNode.group = document.getElementById('prop-cam-group').value.trim() || null;
-        this.currentNode.source_type = document.getElementById('prop-cam-type').value;
-        const src = document.getElementById('prop-cam-source').value.trim();
+        let stype = document.getElementById('prop-cam-type').value;
+        let src = document.getElementById('prop-cam-source').value.trim();
+        if (/^https?:\/\//i.test(src)) {
+          if (stype === 'webcam') stype = 'rtsp';
+          try {
+            const parsed = new URL(src);
+            if (parsed.pathname === '/' || parsed.pathname === '') {
+              parsed.pathname = '/video';
+              src = parsed.toString();
+            }
+          } catch (_) {
+            if (src.endsWith(':8080') || src.endsWith(':8080/')) {
+              src = src.replace(/\/?$/, '/video');
+            }
+          }
+        } else if (/^rtsp:\/\//i.test(src)) {
+          if (stype === 'webcam') stype = 'rtsp';
+        }
+
+        this.currentNode.source_type = stype;
         this.currentNode.source = (src !== '' && !isNaN(src) && String(parseInt(src, 10)) === src) ? parseInt(src, 10) : src;
         this.currentNode.enabled = document.getElementById('prop-cam-enabled').checked;
 
