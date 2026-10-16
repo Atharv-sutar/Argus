@@ -86,7 +86,43 @@ _PROBE_CODE = (
 )
 
 
-def _probe_single_device(idx: int, timeout: float = 6.0) -> Optional[Dict[str, Any]]:
+_CACHED_CAMERA_NAMES: Optional[List[str]] = None
+_CACHE_TIMESTAMP: float = 0.0
+
+
+def _get_windows_camera_friendly_names() -> List[str]:
+    """Retrieves hardware friendly names of connected cameras on Windows, ordered by USB physical then virtual."""
+    global _CACHED_CAMERA_NAMES, _CACHE_TIMESTAMP
+    now = time.time()
+    if _CACHED_CAMERA_NAMES is not None and (now - _CACHE_TIMESTAMP) < 15.0:
+        return _CACHED_CAMERA_NAMES
+
+    if not sys.platform.startswith("win"):
+        return []
+
+    try:
+        cmd = [
+            "powershell", "-NoProfile", "-NonInteractive", "-Command",
+            "Get-PnpDevice -Class Camera | Select-Object FriendlyName, Status, InstanceId | ConvertTo-Json"
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=4.0)
+        if res.returncode == 0 and res.stdout.strip():
+            raw = json.loads(res.stdout)
+            if isinstance(raw, dict):
+                raw = [raw]
+            ok_devs = [d for d in raw if d.get("Status") == "OK" and d.get("FriendlyName")]
+            # Sort physical USB devices first (matching DirectShow index 0..N), then virtual/network devices
+            ok_devs.sort(key=lambda d: 0 if d.get("InstanceId", "").startswith("USB") else 1)
+            names = [d["FriendlyName"].strip() for d in ok_devs]
+            _CACHED_CAMERA_NAMES = names
+            _CACHE_TIMESTAMP = now
+            return names
+    except Exception as e:
+        logger.debug(f"[PROBE] Could not retrieve Windows camera friendly names: {e}")
+    return []
+
+
+def _probe_single_device(idx: int, timeout: float = 6.0, friendly_names: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
     """Probes a single camera index in an isolated subprocess with strict timeout."""
     if _SHUTDOWN_EVENT.is_set():
         return None
@@ -113,10 +149,14 @@ def _probe_single_device(idx: int, timeout: float = 6.0) -> Optional[Dict[str, A
                 w = data.get("width", 640)
                 h = data.get("height", 480)
                 fps = data.get("fps", 30)
-                logger.info(f"[PROBE] Webcam index {idx}: SUCCESS ({w}x{h} @ {fps}fps, took {elapsed:.2f}s)")
+                if friendly_names and idx < len(friendly_names):
+                    cam_name = friendly_names[idx]
+                else:
+                    cam_name = f"Webcam {idx}"
+                logger.info(f"[PROBE] Webcam index {idx} ('{cam_name}'): SUCCESS ({w}x{h} @ {fps}fps, took {elapsed:.2f}s)")
                 return {
                     "source": idx,
-                    "name": f"Webcam {idx}",
+                    "name": cam_name,
                     "source_type": "webcam",
                     "width": w,
                     "height": h,
@@ -145,7 +185,7 @@ def probe_local_webcams(
 ) -> List[Dict[str, Any]]:
     """
     Parallel probe of local webcam devices with strict per-device timeout in isolated subprocesses.
-    Skips indices already in use by the live pipeline to prevent device lockups.
+    Skips indices already in use by the live pipeline to prevent device lockups while retrieving their active properties.
     """
     if _SHUTDOWN_EVENT.is_set():
         return []
@@ -156,6 +196,10 @@ def probe_local_webcams(
     cameras: List[Dict[str, Any]] = []
     t_start = time.time()
     logger.info(f"[TOPOLOGY/PROBE] Starting hardware camera probe (indices {start_index}..{end_index - 1})...")
+
+    friendly_names = _get_windows_camera_friendly_names()
+    if friendly_names:
+        logger.info(f"[TOPOLOGY/PROBE] Windows camera device inventory: {friendly_names}")
 
     in_use_indices = set()
     if pipeline is not None and getattr(pipeline, "_nodes", None):
@@ -176,15 +220,30 @@ def probe_local_webcams(
                 break
 
             if idx in in_use_indices:
-                logger.info(f"[TOPOLOGY/PROBE] Skipping index {idx} (already in use by active pipeline)")
+                logger.info(f"[TOPOLOGY/PROBE] Index {idx} is active in live pipeline")
+                base_name = friendly_names[idx] if (friendly_names and idx < len(friendly_names)) else f"Webcam {idx}"
+                w, h = 640, 480
+                if pipeline is not None and getattr(pipeline, "_nodes", None):
+                    for node in pipeline._nodes.values():
+                        try:
+                            if int(node.config.source) == idx:
+                                if getattr(node.config, "name", None):
+                                    base_name = node.config.name
+                                if getattr(node.config, "width", None):
+                                    w = node.config.width
+                                if getattr(node.config, "height", None):
+                                    h = node.config.height
+                                break
+                        except (ValueError, TypeError):
+                            pass
                 cameras.append({
                     "source": idx,
-                    "name": f"Webcam {idx} (In Use)",
+                    "name": f"{base_name} (Active)",
                     "source_type": "webcam",
-                    "width": 640,
-                    "height": 480,
+                    "width": w,
+                    "height": h,
                     "fps": 30,
-                    "status": "in_use",
+                    "status": "active",
                 })
             else:
                 indices_to_probe.append(idx)
@@ -195,7 +254,7 @@ def probe_local_webcams(
             max_workers = min(len(indices_to_probe), worker_limit)
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_to_idx = {
-                    executor.submit(_probe_single_device, idx, timeout_per_index): idx
+                    executor.submit(_probe_single_device, idx, timeout_per_index, friendly_names): idx
                     for idx in indices_to_probe
                 }
                 for future in concurrent.futures.as_completed(future_to_idx):
@@ -1386,6 +1445,68 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": False, "error": str(e)}, status=HTTPStatus.BAD_REQUEST)
             return
 
+        elif path == "/api/cameras/apply_discovered":
+            raw_cams = payload.get("cameras")
+            if not raw_cams:
+                raw_cams = probe_local_webcams(pipeline=self.runtime_pipeline)
+            if not raw_cams:
+                self._send_json({"success": False, "error": "No cameras discovered to apply"}, status=HTTPStatus.BAD_REQUEST)
+                return
+
+            try:
+                new_graph = CameraGraph()
+                added_cams = []
+                for idx, c in enumerate(raw_cams):
+                    raw_src = c.get("source", idx)
+                    try:
+                        src_val = int(raw_src)
+                    except (ValueError, TypeError):
+                        src_val = raw_src
+
+                    clean_name = str(c.get("name", f"Camera {idx}")).replace(" (Active)", "").replace(" (In Use)", "").replace(" (Offline / In Use)", "").strip()
+                    cid = f"cam_{idx}"
+                    node_cfg = CameraNodeConfig(
+                        camera_id=cid,
+                        name=clean_name,
+                        source=src_val,
+                        source_type=SourceType.WEBCAM if isinstance(src_val, int) else SourceType.RTSP,
+                        enabled=True,
+                        width=c.get("width", 1280),
+                        height=c.get("height", 720),
+                        fps=c.get("fps", 30),
+                        position_x=220.0 + (idx * 260.0),
+                        position_y=160.0,
+                    )
+                    new_graph.add_node(node_cfg)
+                    added_cams.append(cid)
+
+                # Connect all added cameras bidirectionally
+                if len(added_cams) >= 2:
+                    for i in range(len(added_cams)):
+                        for j in range(i + 1, len(added_cams)):
+                            new_graph.add_edge(added_cams[i], added_cams[j], bidirectional=True)
+
+                with self.graph_lock:
+                    new_graph.save(self.graph_file)
+
+                if self.runtime_pipeline is not None:
+                    self.runtime_pipeline.update_graph(new_graph)
+                    if added_cams:
+                        self.runtime_pipeline.set_active_camera(added_cams[0])
+
+                self._audit(AuditEventType.CONFIG_CHANGE, f"Applied {len(added_cams)} discovered hardware cameras to live topology")
+                logger.info(f"[SERVER] Applied {len(added_cams)} discovered cameras to live topology: {added_cams}")
+                self._send_json({
+                    "success": True,
+                    "applied": len(added_cams),
+                    "cameras": added_cams,
+                    "active_camera": added_cams[0] if added_cams else None
+                })
+            except Exception as e:
+                logger.exception(f"[SERVER] Failed to apply discovered cameras: {e}")
+                self._send_json({"success": False, "error": str(e)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
         elif path == "/api/system/switch_source":
             if self.runtime_pipeline is None:
                 self._send_json({"success": False, "error": "Runtime pipeline not active"}, status=HTTPStatus.BAD_REQUEST)
@@ -1418,6 +1539,50 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     logger.info(f"[SERVER] Switched system to video directory {file_path} ({len(all_cams)} cameras)")
                     self._send_json({"success": True, "mode": mode, "updated": all_cams, "count": len(all_cams)})
                     return
+
+                if mode == "live":
+                    # Check if graph currently has video file cameras that should be replaced with live webcams
+                    with self.graph_lock:
+                        curr_graph = CameraGraph.load(self.graph_file) if self.graph_file.is_file() else None
+                    has_video_nodes = False
+                    if curr_graph:
+                        for n in curr_graph.nodes.values():
+                            if n.source_type == SourceType.VIDEO_FILE or str(n.source).lower().endswith(('.mp4', '.avi', '.mkv')):
+                                has_video_nodes = True
+                                break
+                    if has_video_nodes:
+                        # Cleanly purge video files and reinstate live hardware webcams
+                        probed = probe_local_webcams(pipeline=self.runtime_pipeline)
+                        if probed:
+                            new_graph = CameraGraph()
+                            for idx, c in enumerate(probed):
+                                cid = f"cam_{idx}"
+                                clean_name = str(c.get("name", f"Webcam {idx}")).replace(" (Active)", "").replace(" (In Use)", "").strip()
+                                new_graph.add_node(CameraNodeConfig(
+                                    camera_id=cid,
+                                    name=clean_name,
+                                    source=int(c.get("source", idx)),
+                                    source_type=SourceType.WEBCAM,
+                                    enabled=True,
+                                    width=c.get("width", 1280),
+                                    height=c.get("height", 720),
+                                    fps=c.get("fps", 30),
+                                    position_x=220.0 + (idx * 260.0),
+                                    position_y=160.0,
+                                ))
+                            if new_graph.node_count() >= 2:
+                                ids = list(new_graph.all_camera_ids())
+                                for i in range(len(ids)):
+                                    for j in range(i + 1, len(ids)):
+                                        new_graph.add_edge(ids[i], ids[j], bidirectional=True)
+                            with self.graph_lock:
+                                new_graph.save(self.graph_file)
+                            self.runtime_pipeline.update_graph(new_graph)
+                            all_cams = list(new_graph.all_camera_ids())
+                            if all_cams:
+                                self.runtime_pipeline.set_active_camera(all_cams[0])
+                            self._send_json({"success": True, "mode": "live", "updated": all_cams})
+                            return
 
                 with self.graph_lock:
                     if not self.graph_file.is_file():

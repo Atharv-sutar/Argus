@@ -112,6 +112,22 @@ const API = {
     }
   },
 
+  async applyDiscoveredCameras(cameras = null) {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/cameras/apply_discovered`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cameras }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Failed to apply cameras (${res.status})`);
+      return data;
+    } catch (err) {
+      console.error('[API] applyDiscoveredCameras error:', err);
+      throw err;
+    }
+  },
+
   async getLiveCameras() {
     try {
       const res = await fetch(`${this.baseUrl}/api/cameras/live`);

@@ -2,75 +2,43 @@
   "schema_version": 2,
   "cameras": [
     {
-      "camera_id": "campus4_c0",
-      "name": "Campus4 C0",
-      "source": "E:/MAJOR_PROJECT/Project/test_footage/EPFL campus/campus4-c0.avi",
-      "source_type": "video_file",
+      "camera_id": "cam_0",
+      "name": "ACER HD User Facing",
+      "source": 0,
+      "source_type": "webcam",
       "enabled": true,
-      "position_x": 180.0,
-      "position_y": 140.0,
+      "position_x": 280.0,
+      "position_y": 160.0,
       "floor": null,
       "zone": null,
       "group": null,
-      "description": "Auto-loaded from campus4-c0.avi"
+      "description": "Default Built-in Webcam"
     },
     {
-      "camera_id": "campus4_c1",
-      "name": "Campus4 C1",
-      "source": "E:/MAJOR_PROJECT/Project/test_footage/EPFL campus/campus4-c1.avi",
-      "source_type": "video_file",
+      "camera_id": "cam_1",
+      "name": "EOS Webcam Utility",
+      "source": 1,
+      "source_type": "webcam",
       "enabled": true,
-      "position_x": 460.0,
-      "position_y": 140.0,
+      "position_x": 540.0,
+      "position_y": 160.0,
       "floor": null,
       "zone": null,
       "group": null,
-      "description": "Auto-loaded from campus4-c1.avi"
-    },
-    {
-      "camera_id": "campus4_c2",
-      "name": "Campus4 C2",
-      "source": "E:/MAJOR_PROJECT/Project/test_footage/EPFL campus/campus4-c2.avi",
-      "source_type": "video_file",
-      "enabled": true,
-      "position_x": 740.0,
-      "position_y": 140.0,
-      "floor": null,
-      "zone": null,
-      "group": null,
-      "description": "Auto-loaded from campus4-c2.avi"
+      "description": "Canon EOS Camera"
     }
   ],
   "edges": [
     {
-      "source_camera_id": "campus4_c0",
-      "target_camera_id": "campus4_c1",
-      "edge_type": "adjacent",
+      "source": "cam_0",
+      "target": "cam_1",
       "direction": "bidirectional",
-      "enabled": true,
-      "expected_min_transition_s": 0.0,
-      "expected_typical_transition_s": 5.0,
-      "expected_max_transition_s": 60.0
-    },
-    {
-      "source_camera_id": "campus4_c0",
-      "target_camera_id": "campus4_c2",
       "edge_type": "adjacent",
-      "direction": "bidirectional",
-      "enabled": true,
-      "expected_min_transition_s": 0.0,
-      "expected_typical_transition_s": 5.0,
-      "expected_max_transition_s": 60.0
-    },
-    {
-      "source_camera_id": "campus4_c1",
-      "target_camera_id": "campus4_c2",
-      "edge_type": "adjacent",
-      "direction": "bidirectional",
-      "enabled": true,
-      "expected_min_transition_s": 0.0,
-      "expected_typical_transition_s": 5.0,
-      "expected_max_transition_s": 60.0
+      "weight": 1.0,
+      "expected_transit_time": 5.0,
+      "probability": 1.0,
+      "min_transit_time": 1.0,
+      "max_transit_time": 30.0
     }
   ],
   "background_map": null

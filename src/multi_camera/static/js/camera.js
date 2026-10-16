@@ -116,13 +116,6 @@ class CameraManager {
       } catch (toastErr) {
         console.warn('Toast failed:', toastErr);
       }
-      if (this.app && this.app.mode === 'matrix') {
-        try {
-          this.app.loadLiveMatrix();
-        } catch (matrixErr) {
-          console.warn('Live matrix reload failed:', matrixErr);
-        }
-      }
     } catch (err) {
       if (this.app && this.app._isShuttingDown) return;
       const msg = err.name === 'AbortError' ? 'Scan timed out after 15s' : err.message;
@@ -145,6 +138,48 @@ class CameraManager {
     }
 
     this.listEl.innerHTML = '';
+
+    // Quick Action Bar: Apply all discovered cameras to live surveillance
+    const headerAction = document.createElement('div');
+    headerAction.className = 'discovered-actions-bar';
+    headerAction.style.cssText = 'padding: 0 0 10px 0; display: flex; flex-direction: column; gap: 6px;';
+    headerAction.innerHTML = `
+      <button class="btn-apply-all-cams" style="width: 100%; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 6px; background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%); color: #020617; border: none; padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; transition: opacity 0.2s;">
+        <span>⚡</span> Apply Discovered (${this.discoveredCameras.length}) to Live Matrix
+      </button>
+    `;
+    headerAction.querySelector('.btn-apply-all-cams').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      btn.textContent = 'Applying to Live Matrix...';
+      try {
+        const res = await API.applyDiscoveredCameras(this.discoveredCameras);
+        if (res && res.success) {
+          if (this.app && typeof this.app.showToast === 'function') {
+            this.app.showToast(`Applied ${res.applied || this.discoveredCameras.length} hardware camera(s) to Live Matrix!`, 'success');
+          }
+          if (this.app && typeof this.app.setMode === 'function') {
+            this.app.setMode('matrix');
+          }
+          if (this.app && typeof this.app.loadLiveMatrix === 'function') {
+            await this.app.loadLiveMatrix();
+          }
+          if (this.app && this.app.graphCanvas) {
+            const graphData = await API.getGraph();
+            this.app.graphCanvas.loadGraph(graphData);
+          }
+        }
+      } catch (err) {
+        if (this.app && typeof this.app.showToast === 'function') {
+          this.app.showToast(`Failed to apply cameras: ${err.message}`, 'error');
+        }
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = `<span>⚡</span> Apply Discovered (${this.discoveredCameras.length}) to Live Matrix`;
+      }
+    });
+    this.listEl.appendChild(headerAction);
     this.discoveredCameras.forEach((cam) => {
       const card = document.createElement('div');
       card.className = 'camera-card';

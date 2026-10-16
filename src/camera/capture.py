@@ -19,6 +19,9 @@ from src.core.interfaces import BaseCamera
 logger = logging.getLogger(__name__)
 
 
+_HARDWARE_OPEN_LOCK = threading.Lock()
+
+
 class OpenCVCamera(BaseCamera):
     """
     Acquires video frames from a webcam, video file, or RTSP stream using OpenCV.
@@ -67,13 +70,14 @@ class OpenCVCamera(BaseCamera):
         if isinstance(src, str) and src.isdigit():
             src = int(src)
 
-        with self._cap_lock:
+        with _HARDWARE_OPEN_LOCK, self._cap_lock:
             try:
-                # On Windows, try Media Foundation (MSMF) first, fallback to DirectShow (DSHOW) or default
+                # On Windows, use DirectShow (DSHOW) first for webcam indices to maintain consistent
+                # device indexing matching Windows PnP enumeration, fallback to MSMF or default
                 if isinstance(src, int) and sys.platform.startswith("win"):
-                    self._cap = cv2.VideoCapture(src, cv2.CAP_MSMF)
+                    self._cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)
                     if not self._cap or not self._cap.isOpened():
-                        self._cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)
+                        self._cap = cv2.VideoCapture(src, cv2.CAP_MSMF)
                     if not self._cap or not self._cap.isOpened():
                         self._cap = cv2.VideoCapture(src)
                 else:
