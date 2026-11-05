@@ -45,5 +45,13 @@ pythonpath = ["."]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-
-
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::FutureWarning",
+]
+markers = [
+    "unit: Fast unit tests with isolated components",
+    "integration: Multi-module integration tests",
+    "benchmark: Performance and latency benchmark tests",
+    "gpu: Tests requiring GPU compute",
+]

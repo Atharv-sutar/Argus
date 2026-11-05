@@ -1,5 +1,18 @@
 # Bug Tracking Rules
 
-- **Volatile Bug Register:** Every bug or problem found during development MUST be registered in a volatile space, specifically a file named `BUGS.md` in the root directory. 
-- **Bug Resolution:** Once a bug is successfully fixed, it MUST be removed from `BUGS.md`. The file should only contain active, unresolved issues.
-- **Regression Prevention:** You MUST ensure that problems that have been fixed NEVER occur again (e.g., camera FPS drops, topology issues, memory leaks). When modifying code, review the context of past fixes and ensure your new changes do not undo them or reintroduce old bugs.
+## 1. Volatile Bug Register (`BUGS.md`)
+- Every unresolved bug, regression, or failure identified during development or testing **MUST** be recorded in `BUGS.md` in the project root.
+- Structure each entry with:
+  - **Bug ID / Title**: Short summary.
+  - **Symptom**: Observable failure or error log.
+  - **Affected Module**: File or component responsible.
+  - **Status**: `[OPEN]` or `[INVESTIGATING]`.
+
+## 2. Bug Resolution
+- Once a bug is verified and resolved with passing tests, remove its entry from `BUGS.md`.
+- `BUGS.md` should only contain active, open issues. If all known issues are resolved, `BUGS.md` should clearly state that there are no active bugs.
+
+## 3. Regression Prevention
+- Review past fixes before implementing non-trivial architectural changes.
+- Ensure that past critical issues (e.g., dual webcam DirectShow indexing, memory leaks in video loops, ReID gallery contamination, SSE disconnection hangs) are not re-introduced.
+- Write or update a regression test in `tests/unit/` whenever fixing a recurring or complex defect.

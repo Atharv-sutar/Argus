@@ -33,7 +33,10 @@ venv.bak/
 # Testing & Coverage
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
+pytestdebug.log
+*.log
 
 # IDE
 .vscode/
@@ -48,12 +51,17 @@ data/
 logs/
 *.mp4
 *.avi
+*.mkv
 
-# Test Artifacts
+# Databases & Runtime Artifacts
+*.sqlite
+*.sqlite3
+*.db
+cases/CASE_*/
+cases/**/audit.db
+test_annotations.sqlite
 test_cases_export/
 test_exports/
-*.sqlite
-test_annotations.sqlite
 diagnostics/epfl_crops/
 
 recordings/
