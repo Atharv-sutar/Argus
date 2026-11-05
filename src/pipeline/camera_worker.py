@@ -7,7 +7,7 @@ import time
 from typing import Optional, Tuple
 import numpy as np
 
-from src.core.interfaces import BaseCamera, BaseDetector, BaseTracker
+from src.core.interfaces import BaseCamera, BaseTracker
 from src.core.types import BoundingBox, DetectionResult, Target, TargetState, TrackResult
 from src.visualization.annotator import FrameAnnotator
 

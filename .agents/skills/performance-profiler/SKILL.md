@@ -48,3 +48,4 @@ Returns recommended ReID model: `osnet_x0_25` (low VRAM) or `osnet_x1_0` (high c
 2. **Batch ReID inferences**: Prefer batch extraction on candidate crops over individual sequential calls.
 3. **Target-Aware Processing**: Run expensive ReID only when candidate bounding box meets minimum quality/aspect-ratio criteria (`src/reid/quality.py`).
 4. **Measure Before and After**: Always record baseline metrics before applying performance changes.
+

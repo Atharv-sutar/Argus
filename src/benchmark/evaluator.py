@@ -3,22 +3,17 @@
 from __future__ import annotations
 
 import logging
-import time
-from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
-import cv2
-import numpy as np
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from src.benchmark.types import (
     EvaluationMetrics,
     FrameEvaluationResult,
     GroundTruthDataset,
-    GroundTruthObservation,
 )
 from src.camera.capture import OpenCVCamera
 from src.core.config import AppConfig
 from src.core.interfaces import BaseDetector, BaseReID, BaseTracker
-from src.core.multi_camera_types import CameraNodeConfig, SourceType
+from src.core.multi_camera_types import CameraNodeConfig
 from src.core.types import BoundingBox, TargetState
 from src.multi_camera.camera_graph import CameraGraph
 from src.pipeline.multi_camera_pipeline import MultiCameraPipeline

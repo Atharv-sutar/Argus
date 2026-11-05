@@ -23,3 +23,4 @@ git push
 - Keep commits cohesive and focused on the logical task at hand.
 - Do not bundle unrelated refactorings or file renames into a feature/bugfix commit.
 - Never commit runtime test databases (`*.db`, `*.sqlite`), temporary video dumps, or unversioned model artifacts.
+

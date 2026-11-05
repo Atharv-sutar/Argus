@@ -12,3 +12,4 @@
 - Telemetry SSE stream (`/api/stream/events`) transmits updates at ~10Hz. Client update handlers must be lightweight to prevent browser main-thread frame drops.
 - Video feeds are delivered via MJPEG streams (`/api/camera/<id>/stream`). Camera tiles not currently active or visible should be throttled or rendered on-demand to conserve bandwidth and CPU decode overhead.
 - Canvas renderings and export utilities (e.g. flowchart exporter, topology canvas) must use high DPI scaling and avoid blocking user interaction.
+

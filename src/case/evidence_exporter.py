@@ -6,7 +6,6 @@ import shutil
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, Optional
 
 from src.case.types import Case
 from src.audit.logger import AuditLogger

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from typing import Dict, List, Tuple
-import numpy as np
 
 from src.core.interfaces import BaseVectorStore
 from src.core.types import Embedding

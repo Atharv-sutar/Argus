@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from src.core.interfaces import BaseTracker, BaseReID
-from src.core.types import BoundingBox, Detection, DetectionResult, Track, TrackResult, TrackState, Embedding
+from src.core.types import Detection, DetectionResult, Track, TrackResult, TrackState, Embedding
 
 logger = logging.getLogger(__name__)
 

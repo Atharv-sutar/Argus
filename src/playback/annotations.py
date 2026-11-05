@@ -1,9 +1,7 @@
 import logging
 import sqlite3
-import uuid
 import json
 from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
 from typing import List, Optional, Tuple, Dict, Any
 
 logger = logging.getLogger(__name__)

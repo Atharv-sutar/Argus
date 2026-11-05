@@ -7,8 +7,6 @@ import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
-import sqlite3
-import pickle
 
 from src.core.interfaces import BaseReID, BaseVectorStore
 from src.core.types import (
@@ -19,7 +17,6 @@ from src.core.types import (
     VerifiedIdentityDecision,
     ViewCluster,
 )
-from src.identity.store import InMemoryVectorStore
 from src.identity.faiss_store import FaissVectorStore
 from src.identity.evidence import EvidenceEngine
 from src.reid.quality import CropQualityEvaluator

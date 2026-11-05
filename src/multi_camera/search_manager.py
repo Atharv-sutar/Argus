@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from src.core.config import SearchConfig
 from src.core.multi_camera_types import SearchProgress, SearchState, HandoffDecision

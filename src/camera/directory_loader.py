@@ -6,7 +6,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import List, Optional, Set, Union
+from typing import List, Set, Union
 
 from src.core.multi_camera_types import (
     CameraEdgeConfig,

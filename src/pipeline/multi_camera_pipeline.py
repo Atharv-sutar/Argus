@@ -12,17 +12,16 @@ import numpy as np
 import concurrent.futures
 
 from src.camera.capture import OpenCVCamera, SyntheticCamera
-from src.core.config import AppConfig, SearchConfig
+from src.core.config import AppConfig
 from src.core.interfaces import BaseCamera, BaseDetector, BaseTracker
 from src.core.multi_camera_types import (
     CameraNodeConfig,
     CameraStatus,
     SearchProgress,
-    SearchState,
     SourceType,
     HandoffDecision,
 )
-from src.core.types import BoundingBox, DetectionResult, Embedding, Target, TargetState, Track, TrackState, TrackResult, PipelineTelemetry
+from src.core.types import DetectionResult, Embedding, Target, TargetState, Track, TrackState, TrackResult, PipelineTelemetry
 from src.detection.yolo_detector import YOLODetector
 from src.multi_camera.camera_graph import CameraGraph
 from src.multi_camera.camera_node import CameraNode
@@ -34,7 +33,6 @@ from src.camera.video_file import VideoFileCamera
 from src.pipeline.camera_worker import CameraWorker
 from src.identity.manager import IdentityManager
 from src.reid.extractor import PyTorchReIDExtractor
-from src.reid.quality import ReIDCropQuality
 from src.target.manager import TargetManager
 from src.tracking import ByteTracker, BoTSORTTracker
 from src.visualization.annotator import FrameAnnotator

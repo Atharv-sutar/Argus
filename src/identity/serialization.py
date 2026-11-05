@@ -2,7 +2,7 @@
 
 import base64
 import numpy as np
-from typing import Optional, Dict, Any, Tuple
+from typing import Dict, Any, Tuple
 
 from src.core.types import Embedding, Identity, TargetIdentityAnchor, ViewCluster
 

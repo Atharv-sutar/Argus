@@ -7,7 +7,7 @@ import logging
 import heapq
 from collections import defaultdict, deque
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Dict, List, Optional, Set, Tuple, Union
 
 from src.core.multi_camera_types import (
     CameraEdgeConfig,

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 import numpy as np
 
-from src.core.types import BoundingBox, Embedding, GalleryEntry, Target, TargetState, Track, TrackResult, VerifiedIdentityDecision
+from src.core.types import BoundingBox, Embedding, Target, TargetState, Track, TrackResult, VerifiedIdentityDecision
 from src.identity.manager import IdentityManager
 from src.audit.logger import AuditLogger, AuditEventType
 from src.core.undo_stack import UndoStack, UndoableAction

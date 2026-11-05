@@ -13,3 +13,4 @@
 - Queues between capture threads and inference workers must be strictly bounded (`maxsize <= 2`).
 - If an inference worker falls behind capture rate, obsolete frames must be dropped rather than buffered. High processing freshness is prioritized over stale historical backlog.
 - Minimize CPU↔GPU memory copies. Keep frames in numpy arrays until tensor batching is required.
+

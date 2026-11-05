@@ -38,8 +38,6 @@ from src.playback.annotations import Annotation, AnnotationStore
 from src.case.manager import CaseManager
 from src.audit.logger import AuditLogger, AuditEventType
 from src.case.evidence_exporter import EvidenceExporter
-import threading
-import os
 import uuid
 from datetime import datetime, timezone
 

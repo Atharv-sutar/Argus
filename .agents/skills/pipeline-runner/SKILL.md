@@ -60,3 +60,4 @@ Useful for automated testing and CI where no physical camera hardware is connect
 - Web UI opens at `http://127.0.0.1:8798` without port collision.
 - Telemetry SSE connection is established (`status-uptime` ticks upward).
 - Camera tiles stream video or show `STANDBY` when idle.
+

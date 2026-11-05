@@ -9,7 +9,6 @@ import numpy as np
 
 from src.core.types import (
     BoundingBox,
-    Embedding,
     MatchDecisionState,
     Track,
     VerifiedIdentityDecision,
