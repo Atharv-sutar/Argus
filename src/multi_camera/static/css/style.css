@@ -1124,6 +1124,117 @@ body.theme-dark {
   font-size: 11px;
 }
 
+/* Sidebar Forensic Transit Trail (Relocated from bottom dock) */
+.sidebar-transit-trail {
+  flex: 1;
+  min-height: 150px;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--bg-dark);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.trail-step-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 5px 8px;
+  transition: all 0.2s ease;
+}
+
+.trail-step-card:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.trail-step-card.active {
+  background: rgba(0, 242, 254, 0.09);
+  border-color: rgba(0, 242, 254, 0.5);
+  box-shadow: 0 0 8px rgba(0, 242, 254, 0.15);
+}
+
+.trail-step-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.trail-node-badge {
+  font-weight: 700;
+  font-size: 11px;
+  color: var(--cyan-bright);
+}
+
+.trail-event-tag {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.tag-selected {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.4);
+}
+
+.tag-handoff {
+  background: rgba(0, 242, 254, 0.15);
+  color: #00f2fe;
+  border: 1px solid rgba(0, 242, 254, 0.4);
+}
+
+.tag-corrected {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+}
+
+.trail-step-time {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.trail-connector-vertical {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 1px 0;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.trail-connector-arrow {
+  color: var(--cyan-bright);
+  font-size: 11px;
+}
+
+.sidebar-transit-trail::-webkit-scrollbar {
+  width: 4px;
+}
+
+.sidebar-transit-trail::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-transit-trail::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 2px;
+}
+
 /* ==========================================================================
    RIGHT PANEL: VERTICAL TARGET GALLERY COLUMN (REQUIREMENT #2)
    ========================================================================== */

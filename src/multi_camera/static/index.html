@@ -690,11 +690,11 @@
                 </div>
               </div>
       
-        <!-- Event Log Panel -->
+        <!-- Topology Event Log Panel -->
         <div class="gallery-section-subhead" style="margin-top: 15px; border-top: 1px solid var(--border-color); padding-top: 15px;">
             <span>OPERATIONAL EVENT LOG</span>
         </div>
-        <div id="event-log-container" style="flex: 1; min-height: 150px; max-height: 250px; overflow-y: auto; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 4px; padding: 10px; font-family: 'JetBrains Mono', monospace; font-size: 11px; margin-bottom: 10px;">
+        <div id="topo-event-log-container" style="flex: 1; min-height: 150px; max-height: 250px; overflow-y: auto; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 4px; padding: 10px; font-family: 'JetBrains Mono', monospace; font-size: 11px; margin-bottom: 10px;">
             <div style="color: var(--text-dim);">System initialized. Waiting for events...</div>
         </div>
       </aside>
@@ -743,7 +743,7 @@
           </div>
         </section>
 
-        <!-- Bottom Dynamic Search & Forensic Trail Bar -->
+        <!-- Bottom Dynamic Search Dock -->
         <footer class="live-search-dock">
           <div class="search-dock-left">
             <span class="dock-title">SEARCH RADII</span>
@@ -759,10 +759,10 @@
           </div>
 
           <div class="search-dock-right">
-            <span class="dock-title">FORENSIC TRANSIT TRAIL</span>
-            <div id="transit-trail-display" class="trail-chain">
-              <span class="trail-empty">No cross-camera movement recorded yet</span>
-            </div>
+            <span class="dock-title" style="display: flex; align-items: center; gap: 8px;">
+              <span class="live-pulse" style="width: 7px; height: 7px;"></span>
+              MULTI-CAMERA GRAPH SEARCH
+            </span>
           </div>
         </footer>
 
@@ -828,12 +828,22 @@
           </div>
         </div>
 
-        <!-- Event Log Panel -->
-        <div class="gallery-section-subhead" style="margin-top: 15px; border-top: 1px solid var(--border-color); padding-top: 15px;">
-            <span>OPERATIONAL EVENT LOG</span>
+        <!-- Forensic Transit Trail Panel (Relocated from bottom dock) -->
+        <div class="gallery-section-subhead" style="margin-top: 15px; border-top: 1px solid var(--border-color); padding-top: 12px; display: flex; justify-content: space-between; align-items: center;">
+          <span style="display: flex; align-items: center; gap: 6px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="6" cy="6" r="3"></circle>
+              <circle cx="18" cy="18" r="3"></circle>
+              <path d="M6 9v6a3 3 0 0 0 3 3h6"></path>
+            </svg>
+            FORENSIC TRANSIT TRAIL
+          </span>
+          <button id="btn-export-trail" class="btn btn-secondary btn-xs" title="Export target journey as flowchart diagram image" style="display: inline-flex; align-items: center; gap: 4px; font-size: 10px; padding: 2px 8px; border-color: rgba(0, 242, 254, 0.4); color: var(--cyan-bright);">
+            <span>📊</span> Export Trail
+          </button>
         </div>
-        <div id="event-log-container" style="flex: 1; min-height: 150px; max-height: 250px; overflow-y: auto; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 4px; padding: 10px; font-family: 'JetBrains Mono', monospace; font-size: 11px; margin-bottom: 10px;">
-            <div style="color: var(--text-dim);">System initialized. Waiting for events...</div>
+        <div id="transit-trail-display" class="sidebar-transit-trail">
+          <div class="trail-empty">No cross-camera movement recorded yet</div>
         </div>
       </aside>
 

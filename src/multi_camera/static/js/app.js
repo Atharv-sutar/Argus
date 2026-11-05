@@ -48,6 +48,7 @@ class SurveillanceApp {
 
     // Forensic & Radius Dock
     this.transitTrailEl = document.getElementById('transit-trail-display');
+    this.btnExportTrail = document.getElementById('btn-export-trail');
 
     // Annotations
 
@@ -670,6 +671,18 @@ class SurveillanceApp {
           this.showToast(`Forensic export error: ${err.message}`, 'error');
           this.resetForensicBtn();
         }
+      });
+    }
+
+    // Export Transit Trail Flowchart
+    if (this.btnExportTrail) {
+      this.btnExportTrail.addEventListener('click', () => {
+        const trail = (this.currentStatus && this.currentStatus.transit_history) ? this.currentStatus.transit_history : [];
+        if (!trail || trail.length === 0) {
+          this.showToast('No cross-camera movement recorded yet to export.', 'warning');
+          return;
+        }
+        this.exportTransitTrailFlowchart(trail, this.currentStatus);
       });
     }
 
@@ -1681,7 +1694,7 @@ class SurveillanceApp {
     try {
       const res = await API.getAuditLogs(50, 0);
       if (res && res.success && res.logs) {
-        const container = document.getElementById('event-log-container');
+        const container = document.getElementById('topo-event-log-container') || document.getElementById('event-log-container');
         if (!container) return;
         
         if (res.logs.length === 0) {
@@ -1736,6 +1749,7 @@ class SurveillanceApp {
         st = await API.getStatus();
       }
       if (!st) return;
+      this.currentStatus = st;
 
       const pendingGraceMs = 2000;
       if (this._pendingActiveCameraSwitch && (Date.now() - this._pendingActiveCameraSwitchTime) < pendingGraceMs) {
@@ -1837,15 +1851,78 @@ class SurveillanceApp {
       // Update Bottom Radius Stepper
       this.updateRadiusStepper(rad, searchSt);
 
-      // Update Forensic Trail
+      // Update Forensic Transit Trail (Sidebar Vertical Flow)
       const trail = st.transit_history || [];
-      if (trail.length === 0) {
-        this.transitTrailEl.innerHTML = '<span class="trail-empty">No cross-camera movement recorded yet</span>';
-      } else {
-        this.transitTrailEl.innerHTML = trail.map((t, idx) => `
-          <span class="step-pill step-active">${t.camera_id || t}</span>
-          ${idx < trail.length - 1 ? '<span class="step-arrow">&rarr;</span>' : ''}
-        `).join('');
+      if (!this.transitTrailEl) {
+        this.transitTrailEl = document.getElementById('transit-trail-display');
+      }
+      if (this.transitTrailEl) {
+        if (trail.length === 0) {
+          this.transitTrailEl.innerHTML = `
+            <div class="trail-empty" style="padding: 20px 8px; text-align: center; color: var(--text-muted); font-size: 11px; line-height: 1.5;">
+              <span style="font-size: 14px;">🚶</span><br>
+              <span>No cross-camera transit recorded yet.</span><br>
+              <span style="font-size: 9.5px; color: var(--text-dim);">Lock a target to trace movements across cameras.</span>
+            </div>`;
+        } else {
+          const activeCam = st.active_camera_id;
+          let html = '';
+          for (let i = 0; i < trail.length; i++) {
+            const item = trail[i];
+            const camId = item.camera_id || item;
+            const eventType = item.event || (i === 0 ? 'TARGET_SELECTED' : 'HANDOFF');
+            const isActive = (camId === activeCam && i === trail.length - 1);
+
+            // Format time
+            let timeStr = '';
+            if (item.timestamp) {
+              const d = new Date(item.timestamp * 1000);
+              timeStr = d.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            }
+
+            // Tag badge style
+            let tagClass = 'tag-handoff';
+            let tagLabel = 'HANDOFF';
+            if (eventType.includes('SELECTED') || eventType === 'enter') {
+              tagClass = 'tag-selected';
+              tagLabel = 'ORIGIN';
+            } else if (eventType.includes('CORRECT')) {
+              tagClass = 'tag-corrected';
+              tagLabel = 'CORRECTED';
+            }
+
+            if (isActive) {
+              tagLabel += ' • LIVE';
+            }
+
+            html += `
+              <div class="trail-step-card ${isActive ? 'active' : ''}">
+                <div class="trail-step-left">
+                  <span class="trail-node-badge">📷 ${camId}</span>
+                  <span class="trail-event-tag ${tagClass}">${tagLabel}</span>
+                </div>
+                <span class="trail-step-time">${timeStr}</span>
+              </div>
+            `;
+
+            // Draw transition connector if not the last item
+            if (i < trail.length - 1) {
+              const nextItem = trail[i + 1];
+              let durationStr = '';
+              if (item.timestamp && nextItem.timestamp) {
+                const diffSec = Math.max(0, nextItem.timestamp - item.timestamp);
+                durationStr = `${diffSec.toFixed(1)}s transit`;
+              }
+              html += `
+                <div class="trail-connector-vertical">
+                  <span class="trail-connector-arrow">↓</span>
+                  ${durationStr ? `<span style="font-size: 9.5px; color: var(--text-dim);">${durationStr}</span>` : ''}
+                </div>
+              `;
+            }
+          }
+          this.transitTrailEl.innerHTML = html;
+        }
       }
 
       // Update Forensic Indicator
@@ -2020,6 +2097,325 @@ class SurveillanceApp {
       });
     } catch (e) {
       console.debug('Gallery poll error', e);
+    }
+  }
+
+  exportTransitTrailFlowchart(trail, st = null) {
+    if (!trail || trail.length === 0) {
+      this.showToast('No cross-camera movement recorded yet to export.', 'warning');
+      return;
+    }
+
+    try {
+      const activeCam = st?.active_camera_id || (trail.length > 0 ? (trail[trail.length - 1].camera_id || trail[trail.length - 1]) : 'None');
+      const targetId = st?.target_track_id != null ? `#${st.target_track_id}` : (trail[0]?.track_id != null ? `#${trail[0].track_id}` : 'FOCUS-TARGET');
+      const targetState = st?.target_state || 'TRACKING';
+
+      // Dimensions
+      const nodeWidth = 720;
+      const nodeHeight = 84;
+      const arrowHeight = 56;
+      const headerHeight = 170;
+      const footerHeight = 80;
+      const canvasWidth = 1040;
+      const totalHeight = headerHeight + (trail.length * nodeHeight) + (Math.max(0, trail.length - 1) * arrowHeight) + footerHeight;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = canvasWidth;
+      canvas.height = Math.max(640, totalHeight);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        throw new Error('Canvas 2D context not available');
+      }
+
+      // Background gradient
+      const bgGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      bgGrad.addColorStop(0, '#0a0e17');
+      bgGrad.addColorStop(0.5, '#0f172a');
+      bgGrad.addColorStop(1, '#090d16');
+      ctx.fillStyle = bgGrad;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Subtle background grid pattern
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.025)';
+      ctx.lineWidth = 1;
+      for (let x = 0; x < canvas.width; x += 40) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, canvas.height);
+        ctx.stroke();
+      }
+      for (let y = 0; y < canvas.height; y += 40) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.stroke();
+      }
+
+      // Glowing top accent line
+      const topGrad = ctx.createLinearGradient(0, 0, canvas.width, 0);
+      topGrad.addColorStop(0, '#00f2fe');
+      topGrad.addColorStop(0.5, '#4facfe');
+      topGrad.addColorStop(1, '#00f2fe');
+      ctx.fillStyle = topGrad;
+      ctx.fillRect(0, 0, canvas.width, 4);
+
+      // Header Section
+      ctx.font = 'bold 12px "JetBrains Mono", monospace';
+      ctx.fillStyle = '#00f2fe';
+      ctx.fillText('ARGUS SURVEILLANCE // FORENSIC INTELLIGENCE ENGINE', 60, 48);
+
+      // Main Title
+      ctx.font = 'bold 26px "Inter", sans-serif';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText('TARGET CROSS-CAMERA TRANSIT TRAIL', 60, 84);
+
+      // Report Metadata Box
+      const now = new Date();
+      const dateStr = now.toLocaleString();
+      const metaBoxY = 104;
+      const metaBoxWidth = canvas.width - 120;
+      const metaBoxHeight = 44;
+
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.04)';
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+      ctx.lineWidth = 1;
+      this._drawRoundRect(ctx, 60, metaBoxY, metaBoxWidth, metaBoxHeight, 6);
+      ctx.fill();
+      ctx.stroke();
+
+      // Meta chips text
+      ctx.font = '12px "JetBrains Mono", monospace';
+      ctx.fillStyle = '#94a3b8';
+      ctx.fillText(`TARGET: `, 80, metaBoxY + 27);
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = 'bold 12px "JetBrains Mono", monospace';
+      ctx.fillText(`${targetId}`, 140, metaBoxY + 27);
+
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '12px "JetBrains Mono", monospace';
+      ctx.fillText(`STATE: `, 240, metaBoxY + 27);
+      ctx.fillStyle = '#10b981';
+      ctx.font = 'bold 12px "JetBrains Mono", monospace';
+      ctx.fillText(`${targetState}`, 290, metaBoxY + 27);
+
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '12px "JetBrains Mono", monospace';
+      ctx.fillText(`TRANSITS: `, 420, metaBoxY + 27);
+      ctx.fillStyle = '#fbbf24';
+      ctx.font = 'bold 12px "JetBrains Mono", monospace';
+      ctx.fillText(`${trail.length} Cameras`, 495, metaBoxY + 27);
+
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '12px "JetBrains Mono", monospace';
+      ctx.fillText(`EXPORTED: `, 650, metaBoxY + 27);
+      ctx.fillStyle = '#e2e8f0';
+      ctx.font = '12px "JetBrains Mono", monospace';
+      ctx.fillText(`${dateStr}`, 735, metaBoxY + 27);
+
+      // Render Flowchart Nodes
+      const startX = (canvas.width - nodeWidth) / 2;
+      let currentY = headerHeight;
+
+      for (let i = 0; i < trail.length; i++) {
+        const item = trail[i];
+        const camId = item.camera_id || item;
+        const eventType = item.event || (i === 0 ? 'TARGET_SELECTED' : 'HANDOFF');
+        const isLive = (camId === activeCam && i === trail.length - 1);
+
+        // Color coding by event
+        let borderColor = 'rgba(0, 242, 254, 0.5)';
+        let badgeBg = 'rgba(0, 242, 254, 0.15)';
+        let badgeText = '#00f2fe';
+        let badgeLabel = 'HANDOFF MATCH';
+
+        if (eventType.includes('SELECTED') || eventType === 'enter') {
+          borderColor = 'rgba(16, 185, 129, 0.6)';
+          badgeBg = 'rgba(16, 185, 129, 0.15)';
+          badgeText = '#10b981';
+          badgeLabel = 'ORIGIN / SEED';
+        } else if (eventType.includes('CORRECT')) {
+          borderColor = 'rgba(245, 158, 11, 0.6)';
+          badgeBg = 'rgba(245, 158, 11, 0.15)';
+          badgeText = '#f59e0b';
+          badgeLabel = 'HUMAN CORRECTED';
+        }
+
+        if (isLive) {
+          borderColor = '#00f2fe';
+          badgeLabel += ' • LIVE POSITION';
+        }
+
+        // Card background
+        ctx.fillStyle = isLive ? 'rgba(0, 242, 254, 0.08)' : 'rgba(15, 23, 42, 0.85)';
+        ctx.strokeStyle = borderColor;
+        ctx.lineWidth = isLive ? 2.5 : 1.5;
+        this._drawRoundRect(ctx, startX, currentY, nodeWidth, nodeHeight, 8);
+        ctx.fill();
+        ctx.stroke();
+
+        // Step number indicator circle
+        const circleX = startX + 38;
+        const circleY = currentY + nodeHeight / 2;
+        ctx.beginPath();
+        ctx.arc(circleX, circleY, 18, 0, Math.PI * 2);
+        ctx.fillStyle = isLive ? '#00f2fe' : 'rgba(255, 255, 255, 0.08)';
+        ctx.fill();
+        ctx.strokeStyle = borderColor;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        ctx.font = 'bold 13px "JetBrains Mono", monospace';
+        ctx.fillStyle = isLive ? '#000000' : '#e2e8f0';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`${i + 1}`, circleX, circleY);
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'alphabetic';
+
+        // Camera name & details
+        ctx.font = 'bold 17px "Inter", sans-serif';
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(`CAMERA: ${camId}`, startX + 75, currentY + 35);
+
+        // Event badge pill
+        ctx.font = 'bold 10px "JetBrains Mono", monospace';
+        const badgeWidth = ctx.measureText(badgeLabel).width + 16;
+        const badgeX = startX + nodeWidth - badgeWidth - 20;
+        const badgeY = currentY + 18;
+
+        ctx.fillStyle = badgeBg;
+        ctx.strokeStyle = borderColor;
+        ctx.lineWidth = 1;
+        this._drawRoundRect(ctx, badgeX, badgeY, badgeWidth, 22, 4);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = badgeText;
+        ctx.fillText(badgeLabel, badgeX + 8, badgeY + 15);
+
+        // Timestamp & details line
+        let timeFormatted = 'Live active';
+        if (item.timestamp) {
+          const d = new Date(item.timestamp * 1000);
+          timeFormatted = d.toLocaleString();
+        }
+        const trackStr = item.track_id != null ? `Tracker ID: #${item.track_id}` : `Target: ${targetId}`;
+
+        ctx.font = '11.5px "JetBrains Mono", monospace';
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText(`🕒 Timestamp: ${timeFormatted}   |   🎯 ${trackStr}`, startX + 75, currentY + 63);
+
+        // Connecting arrow to next node
+        if (i < trail.length - 1) {
+          const arrowStartY = currentY + nodeHeight;
+          const arrowEndY = arrowStartY + arrowHeight;
+          const arrowX = startX + nodeWidth / 2;
+
+          // Arrow line
+          ctx.strokeStyle = 'rgba(0, 242, 254, 0.7)';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(arrowX, arrowStartY);
+          ctx.lineTo(arrowX, arrowEndY);
+          ctx.stroke();
+
+          // Arrowhead
+          ctx.fillStyle = '#00f2fe';
+          ctx.beginPath();
+          ctx.moveTo(arrowX - 6, arrowEndY - 8);
+          ctx.lineTo(arrowX + 6, arrowEndY - 8);
+          ctx.lineTo(arrowX, arrowEndY);
+          ctx.closePath();
+          ctx.fill();
+
+          // Duration pill on arrow
+          const nextItem = trail[i + 1];
+          let transitInfo = 'Transit Handoff';
+          if (item.timestamp && nextItem.timestamp) {
+            const diff = Math.max(0, nextItem.timestamp - item.timestamp);
+            transitInfo = `Transit: ${diff.toFixed(1)}s`;
+          }
+
+          ctx.font = '10px "JetBrains Mono", monospace';
+          const pillW = ctx.measureText(transitInfo).width + 16;
+          const pillX = arrowX - pillW / 2;
+          const pillY = arrowStartY + (arrowHeight / 2) - 10;
+
+          ctx.fillStyle = '#0f172a';
+          ctx.strokeStyle = 'rgba(0, 242, 254, 0.4)';
+          ctx.lineWidth = 1;
+          this._drawRoundRect(ctx, pillX, pillY, pillW, 20, 10);
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.fillStyle = '#38bdf8';
+          ctx.fillText(transitInfo, pillX + 8, pillY + 14);
+
+          currentY = arrowEndY;
+        } else {
+          currentY += nodeHeight;
+        }
+      }
+
+      // Footer Section
+      const footerY = currentY + 35;
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(60, footerY);
+      ctx.lineTo(canvas.width - 60, footerY);
+      ctx.stroke();
+
+      ctx.font = '11px "JetBrains Mono", monospace';
+      ctx.fillStyle = '#64748b';
+      ctx.fillText('ARGUS MULTI-CAMERA SURVEILLANCE • FORENSIC CHAIN OF CUSTODY VERIFIED', 60, footerY + 25);
+
+      const reportId = `REP-${Date.now().toString(36).toUpperCase()}`;
+      ctx.textAlign = 'right';
+      ctx.fillText(`REPORT ID: ${reportId} • CONFIDENTIAL`, canvas.width - 60, footerY + 25);
+      ctx.textAlign = 'left';
+
+      // Convert to blob and trigger download
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          throw new Error('Canvas conversion to blob failed');
+        }
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const cleanTarget = targetId.replace(/[^a-zA-Z0-9_-]/g, '');
+        const fileTime = new Date().toISOString().replace(/[:.]/g, '-');
+        a.download = `argus_transit_flowchart_${cleanTarget}_${fileTime}.png`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+
+        this.showToast('Forensic transit trail flowchart exported successfully!', 'success');
+      }, 'image/png');
+    } catch (err) {
+      console.error('[TRAIL EXPORT] Failed to export flowchart diagram:', err);
+      this.showToast(`Failed to export trail: ${err.message}`, 'error');
+    }
+  }
+
+  _drawRoundRect(ctx, x, y, width, height, radius) {
+    if (ctx.roundRect) {
+      ctx.beginPath();
+      ctx.roundRect(x, y, width, height, radius);
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(x + radius, y);
+      ctx.lineTo(x + width - radius, y);
+      ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+      ctx.lineTo(x + width, y + height - radius);
+      ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+      ctx.lineTo(x + radius, y + height);
+      ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+      ctx.lineTo(x, y + radius);
+      ctx.quadraticCurveTo(x, y, x + radius, y);
+      ctx.closePath();
     }
   }
 
