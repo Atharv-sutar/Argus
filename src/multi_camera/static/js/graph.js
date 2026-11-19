@@ -497,7 +497,7 @@ class GraphCanvas {
     if (!cameraId) return false;
     const status = this.cameraStatuses ? this.cameraStatuses[cameraId] : null;
     if (status && String(status).toLowerCase() === 'searching') return true;
-    if (this.searchProgress) {
+    if (this.searchProgress && this.searchProgress.state === 'searching') {
       const activeCams = this.searchProgress.active_cameras || this.searchProgress.active_search_camera_ids;
       if (Array.isArray(activeCams) && activeCams.includes(cameraId)) return true;
     }
@@ -674,10 +674,12 @@ class GraphCanvas {
 
   drawFovCones() {
     const now = Date.now();
+    const isTargetLocked = this.targetState && this.targetState !== 'UNSELECTED';
     for (const node of this.nodes) {
-      const isActive = (this.activeCameraId === node.camera_id);
+      const isFocused = (this.activeCameraId === node.camera_id);
+      const isActive = isFocused && isTargetLocked;
       const isSearching = this.isSearchingNode(node.camera_id);
-      if (!isActive && !isSearching) continue;
+      if (!isFocused && !isSearching) continue;
 
       // Find average vector direction to connected neighbors
       let dirAngle = 0;
@@ -870,7 +872,9 @@ class GraphCanvas {
     const now = Date.now();
 
     const status = this.cameraStatuses[node.camera_id] || (node.enabled ? 'online' : 'disabled');
-    const isActiveTarget = (this.activeCameraId === node.camera_id);
+    const isTargetLocked = Boolean(this.targetState && this.targetState !== 'UNSELECTED');
+    const isFocusedFeed = (this.activeCameraId === node.camera_id);
+    const isActiveTarget = isFocusedFeed && isTargetLocked;
     const isSearching = this.isSearchingNode(node.camera_id);
 
     if (this.filterReidOnly && !isActiveTarget && !isSearching) {
@@ -972,6 +976,28 @@ class GraphCanvas {
       this.ctx.strokeRect(x - tagW / 2, y - bPad - 16, tagW, 16);
       this.ctx.fillStyle = targetGlowColor;
       this.ctx.fillText(lockTag, x, y - bPad - 4);
+
+    } else if (isFocusedFeed) {
+      // 1B. FOCUSED FEED (No Active Target Locked)
+      this.ctx.beginPath();
+      this.ctx.arc(x, y, r + 6, 0, Math.PI * 2);
+      this.ctx.strokeStyle = 'rgba(0, 240, 255, 0.6)';
+      this.ctx.lineWidth = 2;
+      this.ctx.stroke();
+
+      // Clean Focused Camera Tag
+      const feedTag = 'ACTIVE FEED // STANDBY';
+      this.ctx.font = 'bold 8.5px "JetBrains Mono", monospace';
+      this.ctx.textAlign = 'center';
+      this.ctx.textBaseline = 'bottom';
+      const tagW = this.ctx.measureText(feedTag).width + 12;
+      this.ctx.fillStyle = 'rgba(10, 14, 22, 0.9)';
+      this.ctx.fillRect(x - tagW / 2, y - r - 20, tagW, 15);
+      this.ctx.strokeStyle = 'rgba(0, 240, 255, 0.35)';
+      this.ctx.lineWidth = 1;
+      this.ctx.strokeRect(x - tagW / 2, y - r - 20, tagW, 15);
+      this.ctx.fillStyle = '#00f0ff';
+      this.ctx.fillText(feedTag, x, y - r - 8);
 
     } else if (isSearching) {
       // 2. SEARCHING / LOOKING CAMERAS: Animated Amber Radar Sweep Fan & Dashed Pulse

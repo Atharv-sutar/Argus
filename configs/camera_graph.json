@@ -7,8 +7,8 @@
       "source": 0,
       "source_type": "webcam",
       "enabled": true,
-      "position_x": 280.0,
-      "position_y": 160.0,
+      "position_x": 257.5,
+      "position_y": 89.16666666666667,
       "floor": null,
       "zone": null,
       "group": null,
@@ -20,12 +20,25 @@
       "source": 1,
       "source_type": "webcam",
       "enabled": true,
-      "position_x": 540.0,
-      "position_y": 160.0,
+      "position_x": 626.3139880338896,
+      "position_y": 98.47364417853089,
       "floor": null,
       "zone": null,
       "group": null,
       "description": "Canon EOS Camera"
+    },
+    {
+      "camera_id": "cam_sim_1",
+      "name": "Synthetic Corridor",
+      "source": "synthetic:hallway",
+      "source_type": "synthetic",
+      "enabled": true,
+      "position_x": -136.35284368358276,
+      "position_y": 87.82083350510923,
+      "floor": null,
+      "zone": null,
+      "group": null,
+      "description": null
     }
   ],
   "edges": [
@@ -40,6 +53,18 @@
       "expected_min_transition_s": 1.0,
       "expected_typical_transition_s": 5.0,
       "expected_max_transition_s": 30.0
+    },
+    {
+      "source_camera_id": "cam_sim_1",
+      "target_camera_id": "cam_0",
+      "source": "cam_sim_1",
+      "target": "cam_0",
+      "edge_type": "adjacent",
+      "direction": "bidirectional",
+      "enabled": true,
+      "expected_min_transition_s": null,
+      "expected_typical_transition_s": null,
+      "expected_max_transition_s": null
     }
   ],
   "background_map": null

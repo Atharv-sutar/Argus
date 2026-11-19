@@ -358,10 +358,38 @@ class SurveillanceApp {
         e.stopPropagation();
       }
       try {
+        this.targetState = 'UNSELECTED';
         if (this.currentStatus) {
           this.currentStatus.transit_history = [];
           this.currentStatus.target_track_id = null;
           this.currentStatus.target_state = 'UNSELECTED';
+          this.currentStatus.candidate_scores = {};
+          if (this.currentStatus.search_progress) {
+            this.currentStatus.search_progress.state = 'idle';
+            this.currentStatus.search_progress.active_cameras = [];
+            this.currentStatus.search_progress.search_radius = 0;
+          }
+        }
+        if (this.hdrTargetState) {
+          this.hdrTargetState.textContent = 'UNSELECTED';
+          this.hdrTargetState.className = 'chip-val chip-badge state-unselected';
+          this.hdrTargetState.style.background = '';
+          this.hdrTargetState.style.color = '';
+        }
+        if (this.cardTargetId) this.cardTargetId.textContent = 'UNSELECTED';
+        if (this.cardTargetState) {
+          this.cardTargetState.textContent = 'UNSELECTED';
+          this.cardTargetState.className = 'state-tag state-unselected';
+        }
+        if (this.cardTargetSamples) this.cardTargetSamples.textContent = '0 manual / 0 auto';
+        if (this.galleryCountBadge) this.galleryCountBadge.textContent = '0 / 100';
+        if (this.galleryCardsList) {
+          this.galleryCardsList.innerHTML = `
+            <div class="gallery-empty-state">
+              <div class="empty-icon">&#128100;</div>
+              <div class="empty-text">No target locked</div>
+              <div class="empty-hint">Shift+Click on any person in a feed to start tracking.</div>
+            </div>`;
         }
         if (this.transitTrailEl) {
           this.transitTrailEl.innerHTML = `
@@ -371,6 +399,19 @@ class SurveillanceApp {
               <span style="font-size: 9.5px; color: var(--text-dim);">Lock a target to trace movements across cameras.</span>
             </div>`;
         }
+        if (this.graphCanvas) {
+          this.graphCanvas.targetState = 'UNSELECTED';
+          if (this.graphCanvas.searchProgress) {
+            this.graphCanvas.searchProgress.state = 'idle';
+            this.graphCanvas.searchProgress.active_cameras = [];
+            this.graphCanvas.searchProgress.search_radius = 0;
+          }
+          this.graphCanvas.render();
+        }
+
+        // Suppress stale in-flight telemetry frames
+        this._suppressTelemetryUntil = Date.now() + 1200;
+
         await API.clearTarget();
         this.showToast('Focus target cleared and gallery purged', 'info');
         await this.refreshStatus();
@@ -419,11 +460,11 @@ class SurveillanceApp {
     document.getElementById('btn-source-video')?.addEventListener('click', () => handleSwitchSource('video'));
 
 
-    document.getElementById('btn-add-sample-global').addEventListener('click', addSampleFn);
-    document.getElementById('btn-card-add-sample').addEventListener('click', addSampleFn);
+    document.getElementById('btn-add-sample-global')?.addEventListener('click', addSampleFn);
+    document.getElementById('btn-card-add-sample')?.addEventListener('click', addSampleFn);
 
-    document.getElementById('btn-clear-target-global').addEventListener('click', clearTargetFn);
-    document.getElementById('btn-card-clear').addEventListener('click', clearTargetFn);
+    document.getElementById('btn-clear-target-global')?.addEventListener('click', clearTargetFn);
+    document.getElementById('btn-card-clear')?.addEventListener('click', clearTargetFn);
 
     // Undo / Redo Actions
     const undoFn = async () => {
@@ -1138,10 +1179,40 @@ class SurveillanceApp {
       });
     }
 
-    // Global Keyboard Shortcuts (Issue 2)
+    // Global Keyboard Shortcuts (Unified Surveillance System UX)
     window.addEventListener('keydown', (e) => {
-      if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
+      // Disregard keyboard shortcuts if the operator is typing in an input field
+      if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName) || e.target.isContentEditable) return;
+
       const key = e.key.toLowerCase();
+
+      // Escape: Close any active modal overlay, or clear target if no modal open
+      if (key === 'escape') {
+        e.preventDefault();
+        const openModal = document.querySelector(
+          '#shortcuts-overlay[style*="display: flex"], #settings-overlay[style*="display: flex"], #case-overlay[style*="display: flex"], #annotation-overlay[style*="display: flex"], #video-dir-modal[style*="display: flex"], #bulk-import-overlay[style*="display: flex"], #handoff-overlay[style*="display: flex"]'
+        );
+        if (openModal) {
+          openModal.style.display = 'none';
+        } else {
+          clearTargetFn();
+        }
+        return;
+      }
+
+      // Mode switching: 1 = Matrix, 2 = Topology
+      if ((key === '1' || e.code === 'Digit1' || e.code === 'Numpad1') && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        e.preventDefault();
+        this.setMode('matrix');
+        return;
+      }
+      if ((key === '2' || e.code === 'Digit2' || e.code === 'Numpad2') && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        e.preventDefault();
+        this.setMode('topology');
+        return;
+      }
+
+      // Undo / Redo
       if ((e.ctrlKey || e.metaKey) && key === 'z') {
         e.preventDefault();
         if (e.shiftKey) {
@@ -1149,38 +1220,87 @@ class SurveillanceApp {
         } else {
           if (this.undoFn) this.undoFn();
         }
+        return;
       } else if ((e.ctrlKey || e.metaKey) && key === 'y') {
         e.preventDefault();
         if (this.redoFn) this.redoFn();
-      } else if (e.code === 'Space') {
+        return;
+      }
+
+      // Playback / Spacebar
+      if (e.code === 'Space') {
         const btnPlayPause = document.getElementById('btn-play-pause');
         const toolbar = document.getElementById('playback-toolbar');
         if (toolbar && toolbar.style.display !== 'none' && btnPlayPause) {
           e.preventDefault();
           btnPlayPause.click();
+        } else {
+          // If in live surveillance mode without playback toolbar, Space captures an angle (alias for 'A')
+          e.preventDefault();
+          addSampleFn();
         }
-      } else if (key === 'n' && !e.ctrlKey) {
+        return;
+      }
+
+      // Fast Scan (F)
+      if (key === 'f' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        e.preventDefault();
+        if (this.fastScanOverlay && this.fastScanOverlay.style.display === 'flex') {
+          if (this.btnStopFastScan) this.btnStopFastScan.click();
+        } else if (this.btnFastScan) {
+          this.btnFastScan.click();
+        }
+        return;
+      }
+
+      // Note / Annotation (N)
+      if (key === 'n' && !e.ctrlKey && !e.altKey && !e.metaKey) {
         e.preventDefault();
         this.openAnnotationModal();
-      } else if (key === 'a') {
+        return;
+      }
+
+      // Add Sample Angle (A)
+      if (key === 'a' && !e.ctrlKey && !e.altKey && !e.metaKey) {
         e.preventDefault();
         addSampleFn();
-      } else if (key === 'c') {
+        return;
+      }
+
+      // Clear Target (C)
+      if (key === 'c' && !e.ctrlKey && !e.altKey && !e.metaKey) {
         e.preventDefault();
         clearTargetFn();
-      } else if (key === 'r') {
+        return;
+      }
+
+      // Restart / Refresh Feeds (R)
+      if (key === 'r' && !e.ctrlKey && !e.altKey && !e.metaKey) {
         e.preventDefault();
         refreshCamerasFn();
-      } else if (key === 'q') {
+        return;
+      }
+
+      // Safe Quit (Q)
+      if (key === 'q' && !e.ctrlKey && !e.altKey && !e.metaKey) {
         e.preventDefault();
         this.safeQuit();
-      } else if (key === 's') {
+        return;
+      }
+
+      // Settings (S)
+      if (key === 's' && !e.ctrlKey && !e.altKey && !e.metaKey) {
         e.preventDefault();
         if (btnSettings) btnSettings.click();
-      } else if (key === '?') {
+        return;
+      }
+
+      // Operator Field Guide (? or Shift+/)
+      if ((key === '?' || (e.key === '/' && e.shiftKey)) && !e.ctrlKey && !e.altKey) {
         e.preventDefault();
         const overlay = document.getElementById('shortcuts-overlay');
         if (overlay) overlay.style.display = overlay.style.display === 'none' ? 'flex' : 'none';
+        return;
       }
     });
     

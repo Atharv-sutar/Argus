@@ -1396,9 +1396,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             if self.runtime_pipeline is not None:
                 self.runtime_pipeline.clear_target()
                 self._audit(AuditEventType.GALLERY_CLEAR, "Target and gallery cleared")
-                self._send_json({"success": True, "message": "Target cleared"})
-            else:
-                self._send_json({"success": False, "error": "Runtime pipeline not active"}, status=HTTPStatus.BAD_REQUEST)
+            self._send_json({"success": True, "message": "Target cleared"})
             return
 
         elif path == "/api/handoff/confirm":

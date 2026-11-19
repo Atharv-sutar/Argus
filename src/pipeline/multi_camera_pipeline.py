@@ -1093,11 +1093,14 @@ class MultiCameraPipeline:
         if not self._active_camera_id or self._active_camera_id not in self._nodes:
             enabled_ids = [cid for cid in self.graph.all_camera_ids() if cid in self._nodes and self._nodes[cid].config.enabled]
             self._active_camera_id = enabled_ids[0] if enabled_ids else None
-        if self._active_camera_id and self._active_camera_id in self._nodes:
-            self._nodes[self._active_camera_id].mark_active_target()
         self._suppressed_handoff_cam = None
         self._suppressed_handoff_until = 0.0
         self.search_manager.reset()
+        self._deactivate_search_cameras()
+        self._last_candidate_scores.clear()
+        with self._worker_lock:
+            for worker in self._workers.values():
+                worker.current_target = Target(state=TargetState.UNSELECTED)
         self._transit_history.clear()
         if getattr(self, "_bystander_history", None) is not None:
             self._bystander_history.clear()
