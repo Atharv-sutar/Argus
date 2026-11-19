@@ -1,16 +1,14 @@
 """Integration tests for MultiCameraPipeline handoff and search orchestration."""
 
 import numpy as np
-import pytest
 
 from src.camera.capture import SyntheticCamera
-from src.core.config import AppConfig, SearchConfig
+from src.core.config import AppConfig
 from src.core.interfaces import BaseDetector, BaseReID
 from src.core.multi_camera_types import (
     CameraEdgeConfig,
     CameraNodeConfig,
     CameraStatus,
-    EdgeDirection,
     EdgeType,
     SourceType,
 )

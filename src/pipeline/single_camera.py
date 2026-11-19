@@ -4,7 +4,7 @@ import logging
 import time
 import hashlib
 import os
-from typing import Generator, Optional, Tuple
+from typing import Generator, List, Optional, Tuple
 import numpy as np
 
 try:
@@ -14,7 +14,7 @@ except ImportError:
 
 from src.core.interfaces import BaseCamera, BaseDetector, BaseTracker
 from src.core.types import DetectionResult, Target, TargetState, Track, TrackResult
-from src.identity.manager import CandidateEvaluation, IdentityManager
+from src.identity.manager import IdentityManager
 from src.identity.evidence import EvidenceDecision
 from src.target.manager import TargetManager
 from src.visualization.annotator import FrameAnnotator
@@ -186,11 +186,6 @@ class SingleCameraPipeline:
             if track.track_id == track_id:
                 crop = self._extract_crop(self._last_frame, track.box)
                 if crop is not None:
-                    # Save diagnostic initial crop
-                    if cv2 is not None:
-                        os.makedirs(r'C:\Users\athar\.gemini\antigravity-ide\brain\c2a87c82-e77c-4b55-8b21-41f2212e7450\scratch', exist_ok=True)
-                        cv2.imwrite(r'C:\Users\athar\.gemini\antigravity-ide\brain\c2a87c82-e77c-4b55-8b21-41f2212e7450\scratch\reid_ref_A.png', crop)
-
                     emb = self.identity_manager.register_new_target(
                         crop=crop,
                         identity_id=self._identity_key,

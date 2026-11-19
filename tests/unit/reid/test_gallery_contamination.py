@@ -1,12 +1,11 @@
 """Unit tests for gallery contamination resistance, manual-anchored scoring, and lock-switch rollback."""
 
 import numpy as np
-import pytest
 
 from src.camera.capture import SyntheticCamera
 from src.core.config import AppConfig
 from src.core.multi_camera_types import CameraNodeConfig, SourceType
-from src.core.types import BoundingBox, Detection, DetectionResult, Embedding, GalleryEntry, TargetState
+from src.core.types import BoundingBox, Detection, DetectionResult, Embedding, TargetState
 from src.detection.yolo_detector import BaseDetector
 from src.multi_camera.camera_graph import CameraGraph
 from src.pipeline.multi_camera_pipeline import MultiCameraPipeline

@@ -1,8 +1,6 @@
 """Extended multi-scenario stress tests (Scenarios A-F) and anchor hash stability."""
 
 import hashlib
-import time
-import pytest
 import numpy as np
 
 from src.core.types import (
@@ -14,7 +12,6 @@ from src.core.types import (
     VerifiedIdentityDecision,
 )
 from src.identity.manager import IdentityManager
-from src.reid.quality import CropQualityEvaluator
 from src.target.manager import TargetManager
 
 

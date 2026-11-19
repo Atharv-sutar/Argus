@@ -1,6 +1,5 @@
 """Integration tests for the single-camera pipeline with target tracking and ReID."""
 
-from typing import Optional
 import numpy as np
 import pytest
 

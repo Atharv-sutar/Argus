@@ -1,7 +1,6 @@
 """Generates a stitched chronological journey video from a completed route."""
 
 import logging
-import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 

@@ -10,7 +10,6 @@ import numpy as np
 
 sys.path.insert(0, os.path.abspath("."))
 
-from src.core.types import MatchDecisionState
 from src.identity.manager import IdentityManager
 from src.reid.extractor import PyTorchReIDExtractor
 from src.reid.quality import CropQualityEvaluator

@@ -15,13 +15,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import glob
 import json
 import logging
 import os
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import cv2
 import numpy as np
@@ -29,7 +28,6 @@ import numpy as np
 # Ensure root directory is on PYTHONPATH
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.core.types import Embedding
 from src.reid.extractor import PyTorchReIDExtractor
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")

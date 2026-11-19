@@ -1,7 +1,6 @@
 """Unit tests for VectorStore and IdentityManager."""
 
 import numpy as np
-import pytest
 from src.core.interfaces import BaseReID
 from src.core.types import Embedding
 from src.identity.manager import IdentityManager

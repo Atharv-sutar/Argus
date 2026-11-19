@@ -25,15 +25,11 @@ except ImportError:
     np = None
 
 from src.core.multi_camera_types import (
-    CameraEdgeConfig,
     CameraNodeConfig,
-    CameraStatus,
-    EdgeDirection,
-    EdgeType,
     SourceType,
 )
 from src.multi_camera.camera_graph import CameraGraph
-from src.camera.directory_loader import auto_load_video_directory, is_video_directory
+from src.camera.directory_loader import auto_load_video_directory
 from src.playback.annotations import Annotation, AnnotationStore
 from src.case.manager import CaseManager
 from src.audit.logger import AuditLogger, AuditEventType
@@ -706,12 +702,6 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 try:
                     while not _SHUTDOWN_EVENT.is_set() and (self.runtime_pipeline is None or getattr(self.runtime_pipeline, "is_running", True)):
                         if self.runtime_pipeline is not None:
-                            progress = self.runtime_pipeline.get_search_progress()
-                            statuses = {
-                                cid: self.runtime_pipeline.get_camera_status(cid).value
-                                for cid in self.runtime_pipeline.graph.all_camera_ids()
-                                if self.runtime_pipeline.get_camera_status(cid)
-                            }
                             gallery = self.runtime_pipeline.gallery
                             thumbnails = gallery.get_thumbnails(max_count=25) if gallery else []
                             
@@ -1033,7 +1023,12 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                         elif "max_search_radius" in search_pl:
                             cfg.multi_camera.search.max_radius = int(search_pl["max_search_radius"])
                         if "total_recovery_timeout" in search_pl:
-                            cfg.multi_camera.search.total_recovery_timeout = float(search_pl["total_recovery_timeout"])
+                            if getattr(getattr(cfg, "fixes", None), "apply_settings_live", False):
+                                # The dataclass field is total_recovery_timeout_s; the legacy line
+                                # below sets an attribute nothing reads.
+                                cfg.multi_camera.search.total_recovery_timeout_s = float(search_pl["total_recovery_timeout"])
+                            else:
+                                cfg.multi_camera.search.total_recovery_timeout = float(search_pl["total_recovery_timeout"])
                             
                     if "reid" in payload:
                         reid_pl = payload["reid"]

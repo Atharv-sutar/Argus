@@ -2,7 +2,6 @@
 gate, and a forced full re-verification right after an occlusion ends."""
 
 import numpy as np
-import pytest
 
 from src.camera.capture import SyntheticCamera
 from src.core.config import AppConfig

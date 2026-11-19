@@ -17,12 +17,10 @@ from src.camera.capture import SyntheticCamera
 from src.core.config import AppConfig
 from src.core.interfaces import BaseDetector, BaseReID
 from src.core.multi_camera_types import (
-    CameraEdgeConfig,
     CameraNodeConfig,
-    EdgeType,
     SourceType,
 )
-from src.core.types import BoundingBox, Detection, DetectionResult, Embedding, TargetState
+from src.core.types import BoundingBox, Detection, DetectionResult, Embedding
 from src.multi_camera.camera_graph import CameraGraph
 from src.tracking.byte_tracker import ByteTracker
 

@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
 import cv2
 import numpy as np
 import concurrent.futures
+import functools
 
 from src.camera.capture import OpenCVCamera, SyntheticCamera
 from src.core.config import AppConfig
@@ -42,6 +43,22 @@ from src.inference.device import trim_gpu_memory
 from src.recording.manager import ContinuousRecordingManager
 
 logger = logging.getLogger(__name__)
+
+
+def _serialized(fn):
+    """fixes.serialize_pipeline_access: run the wrapped method under the pipeline lock so the
+    HTTP thread and the processing loop never mutate target / gallery / tracker state at once."""
+
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        fixes = getattr(getattr(self, "config", None), "fixes", None)
+        lock = getattr(self, "_pipeline_lock", None)
+        if lock is not None and getattr(fixes, "serialize_pipeline_access", False):
+            with lock:
+                return fn(self, *args, **kwargs)
+        return fn(self, *args, **kwargs)
+
+    return wrapper
 
 
 class MultiCameraPipeline:
@@ -122,6 +139,9 @@ class MultiCameraPipeline:
 
         self.undo_stack = UndoStack(max_depth=10)
         self.identity_manager.undo_stack = self.undo_stack
+        fixes_cfg = getattr(config, "fixes", None)
+        self.identity_manager.reset_state_on_target_change = bool(getattr(fixes_cfg, "reset_state_on_target_change", False))
+        self.identity_manager.auto_add_handles_time_reset = bool(getattr(fixes_cfg, "auto_add_handles_time_reset", False))
 
         if target_manager is not None:
             self.target_manager = target_manager
@@ -153,6 +173,7 @@ class MultiCameraPipeline:
 
         # 5. Search manager
         self.search_manager = SearchManager(self.graph, self.search_config, audit_logger=self.audit_logger)
+        self.search_manager.per_track_confirmation = bool(getattr(fixes_cfg, "per_track_handoff_confirmation", False))
 
         # 6. Active tracking state
         self._active_camera_id: Optional[str] = None
@@ -344,7 +365,6 @@ class MultiCameraPipeline:
                 gmc_method=getattr(self.config.tracking, "gmc_method", "sparseOptFlow"),
                 reid_extractor=self.reid_extractor,
                 reid_weight=getattr(self.config.tracking, "reid_weight", 0.5),
-                appearance_thresh=getattr(self.config.tracking, "appearance_thresh", 0.35),
                 ema_alpha=getattr(self.config.tracking, "ema_alpha", 0.9),
                 fix_association_cost=getattr(self.config.tracking, "fix_association_cost", False),
             )
@@ -582,6 +602,7 @@ class MultiCameraPipeline:
     def get_search_progress(self) -> SearchProgress:
         return self.search_manager.get_progress()
 
+    @_serialized
     def select_target_on_camera(
         self, camera_id: str, x: float, y: float, norm_x: Optional[float] = None, norm_y: Optional[float] = None
     ) -> Optional[int]:
@@ -684,7 +705,7 @@ class MultiCameraPipeline:
                         synth_track = Track(
                             track_id=synth_id,
                             box=best_det.box,
-                            state=TrackState.CONFIRMED,
+                            state=TrackState.TRACKED,
                             confidence=best_det.confidence,
                         )
                         synth_res = TrackResult(
@@ -702,6 +723,8 @@ class MultiCameraPipeline:
                         selected_id = synth_id
 
         if selected_id is not None:
+            if self._reset_state_enabled():
+                self._reset_target_runtime_state()
             self._active_camera_id = camera_id
             self._suppressed_handoff_cam = None
             self._suppressed_handoff_until = 0.0
@@ -739,6 +762,7 @@ class MultiCameraPipeline:
             return selected_id
         return None
 
+    @_serialized
     def correct_target_on_camera(
         self, camera_id: str, x: float, y: float, norm_x: Optional[float] = None, norm_y: Optional[float] = None
     ) -> Optional[int]:
@@ -834,7 +858,7 @@ class MultiCameraPipeline:
                         synth_track = Track(
                             track_id=synth_id,
                             box=best_det.box,
-                            state=TrackState.CONFIRMED,
+                            state=TrackState.TRACKED,
                             confidence=best_det.confidence,
                         )
                         synth_res = TrackResult(
@@ -888,6 +912,7 @@ class MultiCameraPipeline:
         return None
 
 
+    @_serialized
     def select_target_by_id(self, camera_id: str, track_id: int) -> bool:
         """
         Manually select target by track ID on the specified camera.
@@ -914,6 +939,8 @@ class MultiCameraPipeline:
             camera_id=camera_id,
         )
         if ok:
+            if self._reset_state_enabled():
+                self._reset_target_runtime_state()
             self._active_camera_id = camera_id
             self._suppressed_handoff_cam = None
             self._suppressed_handoff_until = 0.0
@@ -940,6 +967,7 @@ class MultiCameraPipeline:
             )
         return ok
 
+    @_serialized
     def correct_target_by_id(self, camera_id: str, track_id: int) -> bool:
         """
         Corrects the target lock to a different track ID on the specified camera.
@@ -989,6 +1017,7 @@ class MultiCameraPipeline:
             )
         return ok
 
+    @_serialized
     def add_manual_target_sample(self, camera_id: Optional[str] = None) -> bool:
         """
         Human-confirmed manual capture: adds the current locked target's appearance crop
@@ -1034,8 +1063,11 @@ class MultiCameraPipeline:
         )
         return added
 
+    @_serialized
     def clear_target(self) -> None:
         """Clear the target and purge its appearance gallery."""
+        if self._reset_state_enabled():
+            self._reset_target_runtime_state()
         self.target_manager.clear()
         self._evidence_engine.clear()
         for node in self._nodes.values():
@@ -1064,6 +1096,7 @@ class MultiCameraPipeline:
 
         logger.info("[MULTI-CAM] Target cleared and gallery purged. Playback resumed if paused.")
 
+    @_serialized
     def undo_last_action(self) -> Optional[dict]:
         if not hasattr(self, "undo_stack") or not self.undo_stack:
             return None
@@ -1078,6 +1111,7 @@ class MultiCameraPipeline:
             
         return {"action_type": action.action_type}
 
+    @_serialized
     def redo_last_action(self) -> Optional[dict]:
         if not hasattr(self, "undo_stack") or not self.undo_stack:
             return None
@@ -1092,6 +1126,7 @@ class MultiCameraPipeline:
             
         return {"action_type": action.action_type}
 
+    @_serialized
     def step(self) -> Dict[str, Tuple[Optional[np.ndarray], Optional[TrackResult], Optional[Target]]]:
         """
         Executes a single processing step across the multi-camera network concurrently.
@@ -1516,7 +1551,8 @@ class MultiCameraPipeline:
                             cid, 
                             rec_sim, 
                             uncertain_min=self.config.reid.uncertain_band_min, 
-                            auto_accept_min=self.config.reid.auto_add_threshold
+                            auto_accept_min=self.config.reid.auto_add_threshold,
+                            track_id=rec_track.track_id,
                         )
                         if getattr(self, "decision_logger", None) and self.decision_logger.enabled:
                             s_reason = "REACQ" if decision == HandoffDecision.CONFIRMED else ("REACQ_PENDING" if decision == HandoffDecision.UNCERTAIN else "REJECT")
@@ -1645,6 +1681,35 @@ class MultiCameraPipeline:
             trim_gpu_memory()
 
         return results
+
+    def _reset_state_enabled(self) -> bool:
+        return bool(getattr(getattr(self.config, "fixes", None), "reset_state_on_target_change", False))
+
+    def _reset_target_runtime_state(self) -> None:
+        """fixes.reset_state_on_target_change: forget decision state tied to the previous target."""
+        self._switch_consensus.clear()
+        self._current_track_misses = 0
+        self._last_candidate_scores.clear()
+        self._post_occlusion_reverify_pending = False
+        self._locked_track_blurred = False
+        self._pending_handoff_cam = None
+        self._pending_handoff_track = None
+        self._pending_handoff_crop = None
+        self._pending_handoff_emb = None
+        self._pending_handoff_sim = 0.0
+        self._evidence_engine.clear()
+
+    def apply_config_update(self, cfg: AppConfig) -> None:
+        """Called by POST /api/settings after it edits the runtime config.
+        With fixes.apply_settings_live on, thresholds copied at start-up are refreshed too."""
+        if not getattr(getattr(cfg, "fixes", None), "apply_settings_live", False):
+            return
+        mt = float(cfg.reid.match_threshold)
+        self.identity_manager.similarity_threshold = mt
+        for engine in (self._evidence_engine, getattr(self.identity_manager, "evidence_engine", None)):
+            if engine is not None and hasattr(engine, "min_similarity_threshold"):
+                engine.min_similarity_threshold = mt
+        logger.info(f"[SETTINGS] Applied live: match_threshold={mt:.3f}")
 
     def _score_all_tracks_enabled(self) -> bool:
         return bool(getattr(getattr(self.config, "target", None), "score_all_tracks", False))
@@ -2171,14 +2236,10 @@ class MultiCameraPipeline:
                 if evidence_dec.is_confirmed and evidence_dec.best_track_id is not None:
                     # Find the confirmed track's data
                     confirmed_track = None
-                    confirmed_crop = None
-                    confirmed_emb = None
                     confirmed_sim = evidence_dec.best_score
-                    for (ct, cc, ce, cs) in all_sorted:
+                    for (ct, _cc, _ce, cs) in all_sorted:
                         if ct.track_id == evidence_dec.best_track_id:
                             confirmed_track = ct
-                            confirmed_crop = cc
-                            confirmed_emb = ce
                             confirmed_sim = cs
                             break
 
@@ -2410,6 +2471,7 @@ class MultiCameraPipeline:
                     node.mark_offline()
         return frames
 
+    @_serialized
     def set_active_camera(self, camera_id: str) -> bool:
         """Sets the active focused camera in the pipeline and ensures worker is initialized."""
         self._sync_nodes_with_graph()
@@ -2681,6 +2743,7 @@ class MultiCameraPipeline:
             self._is_paused = False
 
 
+    @_serialized
     def confirm_handoff(self) -> bool:
         """Called by UI to explicitly confirm a pending handoff."""
         if self.target_manager.target.state == TargetState.UNCERTAIN and getattr(self, '_pending_handoff_cam', None):
@@ -2703,6 +2766,11 @@ class MultiCameraPipeline:
             return True
         return False
 
+    def accept_handoff(self) -> bool:
+        """Alias used by POST /api/handoff/confirm (the endpoint called a method that did not exist)."""
+        return self.confirm_handoff()
+
+    @_serialized
     def reject_handoff(self) -> bool:
         """Called by UI to reject a pending handoff."""
         if self.target_manager.target.state == TargetState.UNCERTAIN and getattr(self, '_pending_handoff_cam', None):
@@ -2805,7 +2873,7 @@ class MultiCameraPipeline:
                 vram_gb = props.total_memory / (1024**3)
                 if vram_gb >= 6.0:
                     recommended = "osnet_x1_0"
-        except Exception as e:
+        except Exception:
             pass
         return recommended
 

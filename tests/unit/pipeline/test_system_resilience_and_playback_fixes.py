@@ -1,14 +1,12 @@
-import pytest
 import numpy as np
 from unittest.mock import MagicMock
 from src.playback.controller import PlaybackController
 from src.playback.journey_stitcher import JourneyStitcher
 from src.playback.route_recorder import RouteEvent
-from src.core.types import BoundingBox, Detection, DetectionResult, Track, TrackResult, TrackState
+from src.core.types import BoundingBox, Detection, DetectionResult, TrackResult
 from src.core.config import AppConfig
 from src.core.multi_camera_types import CameraNodeConfig, SourceType
 from src.multi_camera.camera_graph import CameraGraph
-from src.multi_camera.camera_node import CameraNode
 from src.pipeline.multi_camera_pipeline import MultiCameraPipeline
 
 

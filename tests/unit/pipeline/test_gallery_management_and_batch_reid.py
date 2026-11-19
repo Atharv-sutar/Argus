@@ -1,7 +1,6 @@
 """Unit tests for gallery entry deletion, batched ReID candidate evaluation, and dynamic graph synchronization."""
 
 import numpy as np
-import pytest
 
 from src.camera.capture import SyntheticCamera
 from src.core.config import AppConfig
@@ -10,7 +9,8 @@ from src.core.types import BoundingBox, Detection, DetectionResult, Embedding, T
 from src.detection.yolo_detector import BaseDetector
 from src.multi_camera.camera_graph import CameraGraph
 from src.pipeline.multi_camera_pipeline import MultiCameraPipeline
-from src.reid.gallery import TargetGallery
+from src.identity.manager import IdentityManager
+from src.identity.store import InMemoryVectorStore
 from src.tracking.byte_tracker import ByteTracker
 
 
@@ -36,30 +36,31 @@ class ControllableMockDetector(BaseDetector):
 
 
 def test_gallery_remove_entry_rebuilds_matrix():
-    """Verify that deleting a gallery entry removes it and properly updates the cosine matrix."""
-    gallery = TargetGallery(max_size=10, match_threshold=0.75)
-    
+    """Deleting a gallery entry removes it from matching (runtime gallery = IdentityManager;
+    the old src/reid/gallery.py TargetGallery was never used by the pipeline and was removed)."""
+
+    class _NoReID:
+        def extract(self, crop):  # pragma: no cover - embeddings are always supplied
+            raise AssertionError
+
+    gallery = IdentityManager(reid_extractor=_NoReID(), vector_store=InMemoryVectorStore())
+
     vec1 = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
     vec2 = np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
-    
+
     crop1 = np.ones((50, 50, 3), dtype=np.uint8) * 100
     crop2 = np.ones((50, 50, 3), dtype=np.uint8) * 200
 
-    gallery.seed(crop=crop1, embedding=Embedding(vector=vec1), camera_id="cam_0")
-    gallery.add_manual(crop=crop2, embedding=Embedding(vector=vec2), camera_id="cam_0")
+    gallery.register_new_target(crop1, "target_0", embedding=Embedding(vector=vec1), clear_existing=True)
+    gallery.register_new_target(crop2, "target_0", embedding=Embedding(vector=vec2), clear_existing=False)
 
     assert gallery.size == 2
-    entries = gallery.get_entries()
-    entry1_id = entries[0].entry_id
-    entry2_id = entries[1].entry_id
+    assert {t["entry_id"] for t in gallery.get_thumbnails()} == {"trusted_0", "trusted_1"}
 
-    # Test matching before removal
     sim1, _ = gallery.match(Embedding(vector=vec1))
     assert sim1 > 0.90
 
-    # Remove entry 1
-    removed = gallery.remove_entry(entry1_id)
-    assert removed is True
+    assert gallery.remove_entry("trusted_0") is True
     assert gallery.size == 1
 
     # After removal, vec1 should have ~0.0 similarity against the remaining gallery (vec2)

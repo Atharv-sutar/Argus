@@ -4,7 +4,6 @@ import os
 import shutil
 import tempfile
 import time
-import numpy as np
 import pytest
 
 from src.core.config import AppConfig

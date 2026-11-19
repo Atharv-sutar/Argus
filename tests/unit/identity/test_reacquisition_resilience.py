@@ -1,11 +1,8 @@
 """Targeted regression test suite verifying ReID anti-scoop, sole-bystander rejection, and reacquisition rules."""
 
-import pytest
-import numpy as np
 
-from src.core.types import BoundingBox, Embedding, Target, TargetState, Track, TrackResult
-from src.identity.evidence import EvidenceEngine, TrackObservation
-from src.identity.manager import IdentityManager
+from src.core.types import BoundingBox, Embedding, TargetState, Track
+from src.identity.evidence import EvidenceEngine
 from src.target.manager import TargetManager
 
 

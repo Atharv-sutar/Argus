@@ -4,7 +4,6 @@ import json
 import logging
 import time
 import urllib.request
-from pathlib import Path
 
 from src.camera.capture import SyntheticCamera
 from src.core.config import AppConfig

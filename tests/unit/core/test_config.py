@@ -1,6 +1,5 @@
 """Unit tests for configuration loading and validation."""
 
-import pytest
 from src.core.config import AppConfig
 
 

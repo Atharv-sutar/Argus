@@ -106,6 +106,10 @@ class IdentityManager:
         )
         self._identities: Dict[str, Identity] = {}
         self._entry_crops: Dict[str, str] = {}
+        # Set by the pipeline from config.fixes (default OFF = legacy behaviour)
+        self.reset_state_on_target_change: bool = False
+        self.auto_add_handles_time_reset: bool = False
+        self._last_auto_add_ts: float = 0.0
 
     def get_identity(self, identity_id: str) -> Optional[Identity]:
         return self._identities.get(identity_id)
@@ -340,20 +344,6 @@ class IdentityManager:
         res = self.match_batch([candidate_embedding])
         return res[0]
         
-    def clear(self, identity_id: str = "target_0") -> None:
-        """Shim for TargetGallery.clear"""
-        if hasattr(self, "audit_logger") and self.audit_logger:
-            self.audit_logger.log(
-                AuditEventType.GALLERY_CLEAR,
-                {"cleared_count": self.size, "reason": "manual_clear"},
-            )
-        if identity_id in self._identities:
-            del self._identities[identity_id]
-        self.vector_store.remove_identity(identity_id)
-        self._entry_crops.clear()
-        if hasattr(self, "evidence_engine") and self.evidence_engine is not None:
-            self.evidence_engine.clear()
-        
     def rollback_auto_entries(self, for_track_id: Optional[int] = None) -> int:
         """
         Shim for TargetGallery.rollback_auto_entries. 
@@ -465,6 +455,10 @@ class IdentityManager:
 
         # Rate limit: at most 1 auto-entry every 1.5 seconds
         last_ts = getattr(self, "_last_auto_add_ts", 0.0)
+        if self.auto_add_handles_time_reset and timestamp_ms > 0 and timestamp_ms < last_ts:
+            # Clock went backwards (looping file, new clip): treat it as a new timeline instead
+            # of blocking enrollment until the stale timestamp is reached again.
+            last_ts = float("-inf")
         if timestamp_ms > 0 and (timestamp_ms - last_ts) < 1500.0:
             return False
         
@@ -534,6 +528,11 @@ class IdentityManager:
             self.vector_store.remove_identity(identity_id)
             if self.evidence_engine:
                 self.evidence_engine.clear()
+            if self.reset_state_on_target_change:
+                # Old thumbnails would otherwise show under the new target's entry indices.
+                for k in [k for k in self._entry_crops if k.startswith(f"{identity_id}_")]:
+                    del self._entry_crops[k]
+                self._last_auto_add_ts = 0.0
 
             fused, deep, _, upper, lower = self._extract_all_representations(crop, embedding)
 
@@ -762,7 +761,7 @@ class IdentityManager:
             return False
 
         if decision is None or decision.decision_state != MatchDecisionState.MATCH:
-            logger.warning(f"[IDENTITY] Cross-camera viewpoint enrollment REJECTED: no valid VerifiedIdentityDecision token.")
+            logger.warning("[IDENTITY] Cross-camera viewpoint enrollment REJECTED: no valid VerifiedIdentityDecision token.")
             return False
 
         is_valid, q_score, reason = self.quality.evaluate(crop)
@@ -1163,8 +1162,23 @@ class IdentityManager:
         return True
 
     def clear(self) -> None:
+        """Forget every identity (target gallery included)."""
+        if self.audit_logger and self.reset_state_on_target_change:
+            self.audit_logger.log(
+                AuditEventType.GALLERY_CLEAR,
+                {"cleared_count": self.size, "reason": "manual_clear"},
+            )
         self._identities.clear()
         self.vector_store.clear()
+        if self.reset_state_on_target_change:
+            self._reset_per_target_state()
+
+    def _reset_per_target_state(self) -> None:
+        """fixes.reset_state_on_target_change: drop state that belongs to the previous target."""
+        self._entry_crops.clear()
+        self._last_auto_add_ts = 0.0
+        if self.evidence_engine is not None:
+            self.evidence_engine.clear()
 
     def save_to_db(self, db_path: str) -> None:
         """Persists all tracked identities and embeddings to an SQLite database."""

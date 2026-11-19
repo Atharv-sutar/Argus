@@ -1,7 +1,6 @@
 """Unit tests for safe quit endpoint and resource cleanup (Issue 2)."""
 
 import json
-import threading
 import time
 import urllib.request
 

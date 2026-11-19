@@ -8,7 +8,7 @@ Reference:
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+from typing import List
 import torch
 import torch.nn as nn
 from torch.hub import load_state_dict_from_url

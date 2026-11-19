@@ -8,7 +8,6 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, os.path.abspath("."))
-from src.core.types import Embedding, Identity
 from src.identity.manager import IdentityManager
 from src.identity.store import InMemoryVectorStore
 from src.reid.extractor import PyTorchReIDExtractor
@@ -16,11 +15,11 @@ from src.reid.quality import CropQualityEvaluator
 
 
 def run_benchmark():
-    scratch_dir = r'C:\Users\athar\.gemini\antigravity-ide\brain\c2a87c82-e77c-4b55-8b21-41f2212e7450\scratch'
+    scratch_dir = os.environ.get("ARGUS_REID_CROPS_DIR", os.path.join("data", "reid_crops"))  # set ARGUS_REID_CROPS_DIR to your reid_cand_*.png folder
     crop_files = glob.glob(os.path.join(scratch_dir, "reid_cand_*.png"))
 
     if len(crop_files) < 10:
-        print(f"Using synthetic person crops for benchmark...")
+        print("Using synthetic person crops for benchmark...")
         crops = []
         for i in range(20):
             img = np.random.randint(40, 220, (180, 70, 3), dtype=np.uint8)
@@ -28,7 +27,7 @@ def run_benchmark():
     else:
         crops = [cv2.imread(f) for f in crop_files[:40] if cv2.imread(f) is not None]
 
-    print(f"=== Argus ReID Recognition & Discrimination Benchmark ===")
+    print("=== Argus ReID Recognition & Discrimination Benchmark ===")
     print(f"Dataset: {len(crops)} person observation crops loaded.\n")
 
     extractor = PyTorchReIDExtractor(model_name="mobilenet_v3_small", device="cpu")
@@ -102,13 +101,13 @@ def run_benchmark():
 
     # Evaluate candidate match and false positive rejection
     eval_target_self = identity_manager.evaluate_candidate_crop(crops[0], "target_A")
-    print(f"\n[Self-Match Test (Same Person)]")
+    print("\n[Self-Match Test (Same Person)]")
     print(f"Score: {eval_target_self.candidate_score:.3f} | ProtoSim: {eval_target_self.proto_sim:.3f} | Match: {eval_target_self.is_match}")
     print(f"Agreement Passed: {eval_target_self.feature_agreement_passed}")
 
     if len(crops) > 10:
         eval_non_target = identity_manager.evaluate_candidate_crop(crops[10], "target_A")
-        print(f"\n[Different Person Impostor Test]")
+        print("\n[Different Person Impostor Test]")
         print(f"Score: {eval_non_target.candidate_score:.3f} | ProtoSim: {eval_non_target.proto_sim:.3f} | Match: {eval_non_target.is_match}")
         print(f"Agreement Passed: {eval_non_target.feature_agreement_passed}")
         print(f"Impostor Correctly Rejected: {not eval_non_target.is_match}")

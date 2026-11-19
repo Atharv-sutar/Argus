@@ -1,6 +1,5 @@
 """Unit tests for the directory loader module."""
 
-import os
 from pathlib import Path
 import pytest
 
@@ -8,7 +7,6 @@ from src.camera.directory_loader import (
     auto_load_video_directory,
     discover_video_files,
     is_video_directory,
-    _natural_sort_key,
     _sanitize_camera_id,
     _friendly_camera_name,
 )

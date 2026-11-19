@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 
 from src.core.types import (
@@ -232,7 +232,7 @@ class EvidenceEngine:
             # Rule 0: Candidate MUST pass multi-crop reference matching
             if not top_valid:
                 diag_lines.append(
-                    f"  Decision: NO_MATCH (Top candidate failed multi-crop reference verification | is_match=False)"
+                    "  Decision: NO_MATCH (Top candidate failed multi-crop reference verification | is_match=False)"
                 )
                 return EvidenceDecision(
                     target_identity_id=target_identity_id,

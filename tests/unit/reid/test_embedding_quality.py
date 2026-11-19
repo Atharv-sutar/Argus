@@ -1,7 +1,6 @@
 """Unit tests for embedding_quality discrimination evaluation script."""
 
 import numpy as np
-import pytest
 
 from scripts.embedding_quality import compute_roc_auc, evaluate_embeddings
 

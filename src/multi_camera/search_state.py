@@ -40,6 +40,7 @@ class SearchStateManager:
         self._searched_cameras: Set[str] = set()
         self._candidate_camera: Optional[str] = None
         self._candidate_confirmations: int = 0
+        self._candidate_track_id: Optional[int] = None
 
     @property
     def state(self) -> SearchState:
@@ -162,15 +163,21 @@ class SearchStateManager:
         self._candidate_camera = None
         self._candidate_confirmations = 0
 
-    def record_candidate_confirmation(self, camera_id: str) -> int:
+    def record_candidate_confirmation(self, camera_id: str, track_id: Optional[int] = None) -> int:
         """
         Record a confirmation frame for a candidate camera.
 
+        When track_id is given (fixes.per_track_handoff_confirmation), a different track on the
+        same camera restarts the count, so N confirmations always refer to one person.
+
         Returns the total confirmation count.
         """
-        if self._candidate_camera != camera_id:
+        if self._candidate_camera != camera_id or (
+            track_id is not None and getattr(self, "_candidate_track_id", None) != track_id
+        ):
             self._candidate_camera = camera_id
             self._candidate_confirmations = 0
+        self._candidate_track_id = track_id
         self._candidate_confirmations += 1
         return self._candidate_confirmations
 
@@ -178,6 +185,7 @@ class SearchStateManager:
         """Reset candidate tracking (candidate failed confirmation)."""
         self._candidate_camera = None
         self._candidate_confirmations = 0
+        self._candidate_track_id = None
 
     def get_progress(self, graph: Optional[CameraGraph] = None) -> SearchProgress:
         """Build an observable progress snapshot."""
