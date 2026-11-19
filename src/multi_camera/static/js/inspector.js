@@ -97,6 +97,10 @@ class Inspector {
     this.currentNode = node;
     this.currentEdge = null;
 
+    if (this.app.cameraManager && typeof this.app.cameraManager.switchTab === 'function') {
+      this.app.cameraManager.switchTab('inspect');
+    }
+
     if (this.panelEmpty) this.panelEmpty.style.display = 'none';
     if (this.panelEdge) this.panelEdge.style.display = 'none';
     if (this.panelNode) this.panelNode.style.display = 'block';
@@ -150,6 +154,10 @@ class Inspector {
   inspectEdge(edge) {
     this.currentEdge = edge;
     this.currentNode = null;
+
+    if (this.app.cameraManager && typeof this.app.cameraManager.switchTab === 'function') {
+      this.app.cameraManager.switchTab('inspect');
+    }
 
     if (this.panelEmpty) this.panelEmpty.style.display = 'none';
     if (this.panelNode) this.panelNode.style.display = 'none';

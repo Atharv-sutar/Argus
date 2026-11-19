@@ -292,6 +292,13 @@
       <div class="handoff-modal" style="background: var(--bg-panel); padding: 20px; border-radius: 8px; border: 1px solid var(--border-color); width: 500px; max-width: 90%;">
         <h3 style="margin-top: 0; color: var(--cyan-bright);">Add Annotation</h3>
         <p style="margin: 0 0 10px 0; color: var(--text-muted); font-size: 12px;">Anchored to <span id="anno-cam-id" style="color:var(--text-main); font-weight:bold;"></span> at <span id="anno-time-ms" style="color:var(--text-main); font-weight:bold;"></span>s</p>
+        <div style="margin-bottom: 8px;">
+          <select id="anno-type" style="padding: 4px 8px; background: var(--bg-dark); color: #fff; border: 1px solid var(--border-color); border-radius: 4px; font-size: 11px;">
+            <option value="note">Observation Note</option>
+            <option value="target_flag">Target Flag</option>
+            <option value="security_alert">Security Alert</option>
+          </select>
+        </div>
         <textarea id="anno-text-input" rows="4" style="width: 100%; background: var(--bg-dark); color: #fff; border: 1px solid var(--border-color); padding: 10px; border-radius: 4px; resize: vertical;" placeholder="Type observation note..."></textarea>
         <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 15px;">
             <button type="button" id="btn-anno-cancel" class="btn btn-secondary">Cancel</button>
@@ -556,6 +563,12 @@
               <button id="btn-zoom-reset" class="tool-btn" title="Fit to Screen">Fit</button>
             </div>
 
+            <div class="tool-group">
+              <button id="btn-filter-reid" class="tool-btn" title="Filter Re-ID Focus Only">👁 Re-ID Only</button>
+              <button id="btn-toggle-fov" class="tool-btn active" title="Toggle FOV Sight Cones">📐 FOV Cones</button>
+              <button id="btn-toggle-minimap" class="tool-btn active" title="Toggle Minimap">🗺 Minimap</button>
+            </div>
+
             <div class="canvas-legend">
               <span class="legend-item"><span class="edge-sample edge-overlap"></span> Overlap</span>
               <span class="legend-item"><span class="edge-sample edge-adjacent"></span> Adjacent</span>
@@ -574,176 +587,261 @@
           </div>
 
           <div class="topology-stage-layout">
-            <!-- Left Topology Management Sidebar: Add Camera, Probe, Inspector -->
+            <!-- Left Topology Management Sidebar: Provision, Inspect, Probe -->
             <aside class="topology-sidebar">
-              <!-- Tab A: Add Camera -->
-              <div class="topo-card">
-                <div class="topo-card-header">
-                  <h4>ADD CAMERA</h4>
-                </div>
-                <form id="form-custom-camera" class="topo-form">
-                  <div class="form-row">
-                    <label>Camera ID</label>
-                    <input type="text" id="custom-cam-id" placeholder="cam_2" required>
-                  </div>
-                  <div class="form-row">
-                    <label>Display Name</label>
-                    <input type="text" id="custom-cam-name" placeholder="Corridor B" required>
-                  </div>
-                  <div class="form-row">
-                    <label>Source Type</label>
-                    <select id="custom-cam-type">
-                      <option value="webcam">Webcam (Device Index)</option>
-                      <option value="rtsp">Network Stream (RTSP / HTTP IP Webcam)</option>
-                      <option value="video_file">Video File</option>
-                      <option value="synthetic">Synthetic Test Generator</option>
-                    </select>
-                  </div>
-                  <div class="form-row">
-                    <label>Source URI / Index</label>
-                    <input type="text" id="custom-cam-source" placeholder="0 or http://<ip>:8080/video or rtsp://..." required>
-                    <span style="font-size: 10px; color: var(--text-muted); margin-top: 3px; display: block;">
-                      Tip: For Android IP Webcam, use <code>http://&lt;ip&gt;:8080/video</code> (HTTP/HTTPS supported)
-                    </span>
-                  </div>
-                  <button type="submit" class="btn btn-primary btn-sm w-full">+ Add Camera to Canvas</button>
-                </form>
+              <!-- Sidebar Navigation Tabs -->
+              <div class="topo-sidebar-tabs">
+                <button type="button" class="topo-tab-btn active" id="tab-topo-provision">
+                  <span>⚡</span> PROVISION
+                </button>
+                <button type="button" class="topo-tab-btn" id="tab-topo-inspect">
+                  <span>🔍</span> INSPECT
+                </button>
+                <button type="button" class="topo-tab-btn" id="tab-topo-discover">
+                  <span>📡</span> PROBE
+                </button>
               </div>
 
-              <!-- Tab B: Discover Local Webcams -->
-              <div class="topo-card">
-                <div class="topo-card-header">
-                  <h4>LOCAL DISCOVERY</h4>
-                </div>
-                <div style="display: flex; gap: 5px; margin-bottom: 10px; align-items: center;">
-                  <label style="font-size: 11px;">Range:</label>
-                  <input type="number" id="discover-start" value="0" min="0" max="20" style="width: 40px; padding: 2px;">
-                  <span style="font-size: 11px;">to</span>
-                  <input type="number" id="discover-end" value="4" min="1" max="20" style="width: 40px; padding: 2px;">
-                  <button id="btn-discover" class="btn btn-secondary btn-xs" style="margin-left: auto;">Probe</button>
-                </div>
-                <div id="discovered-list" class="discovered-list" style="max-height: 150px; overflow-y: auto;">
-                  <div class="empty-state">Click 'Probe' to detect connected USB/webcams</div>
-                </div>
-                <div class="preview-box">
-                  <img id="preview-image" style="display: none;" alt="Preview">
-                  <div class="preview-placeholder">Camera Preview</div>
-                  <div id="preview-info"></div>
-                </div>
-              </div>
+              <!-- Tab Pane A: Provision Camera -->
+              <div id="pane-topo-provision" class="topo-tab-pane">
+                <div class="topo-card">
+                  <div class="topo-card-header">
+                    <h4>SURVEILLANCE NODE PROVISIONING</h4>
+                    <span class="badge-pill" style="font-size: 9px; padding: 1px 6px;">HW INGEST</span>
+                  </div>
 
-              <!-- Tab C: Inspector / Selected Object Properties -->
-              <div class="topo-card">
-                <div class="topo-card-header">
-                  <h4>PROPERTIES</h4>
-                </div>
-                <div id="inspector-empty" class="empty-state">Select a camera node or edge to edit</div>
-
-                <!-- Node Inspector -->
-                <div id="inspector-node" style="display: none;">
-                  <form id="form-edit-node" class="topo-form">
+                  <form id="form-custom-camera" class="topo-form">
+                    <!-- Quick Device Presets -->
                     <div class="form-row">
-                      <label>Camera ID</label>
-                      <input type="text" id="prop-cam-id" readonly class="readonly-input">
-                    </div>
-                    <div class="form-row">
-                      <label>Display Name</label>
-                      <input type="text" id="prop-cam-name" required>
-                    </div>
-                    <div class="form-row">
-                      <label>Floor</label>
-                      <input type="text" id="prop-cam-floor" placeholder="Floor 1">
-                    </div>
-                    <div class="form-row">
-                      <label>Zone</label>
-                      <input type="text" id="prop-cam-zone" placeholder="East Wing">
-                    </div>
-                    <div class="form-row">
-                      <label>Group</label>
-                      <input type="text" id="prop-cam-group" placeholder="Indoor">
-                    </div>
-                    <div class="form-row" style="margin-top: 10px; margin-bottom: 10px;">
-                      <label>Live Preview</label>
-                      <div class="preview-box">
-                        <img id="inspector-preview-image" style="display: none;" alt="Preview">
-                        <div id="inspector-preview-placeholder" class="preview-placeholder">Camera Preview</div>
-                        <div id="inspector-preview-info"></div>
+                      <label>Device Preset</label>
+                      <div class="device-presets-grid">
+                        <button type="button" class="btn-preset active" data-preset="webcam">📹 USB Web</button>
+                        <button type="button" class="btn-preset" data-preset="rtsp">🌐 RTSP IP</button>
+                        <button type="button" class="btn-preset" data-preset="android">📱 IP Cam</button>
+                        <button type="button" class="btn-preset" data-preset="video">📼 Video</button>
+                        <button type="button" class="btn-preset" data-preset="synthetic">⚡ Synthetic</button>
                       </div>
                     </div>
+
+                    <div class="form-row">
+                      <label>Camera ID</label>
+                      <input type="text" id="custom-cam-id" placeholder="cam_0" value="cam_0" required>
+                    </div>
+
+                    <div class="form-row">
+                      <label>Display Name / Location</label>
+                      <input type="text" id="custom-cam-name" placeholder="Concourse Entry A" value="USB Webcam 0" required>
+                    </div>
+
                     <div class="form-row">
                       <label>Source Type</label>
-                      <select id="prop-cam-type">
-                        <option value="webcam">Webcam</option>
+                      <select id="custom-cam-type">
+                        <option value="webcam">Webcam (Device Index)</option>
                         <option value="rtsp">Network Stream (RTSP / HTTP IP Webcam)</option>
                         <option value="video_file">Video File</option>
-                        <option value="synthetic">Synthetic</option>
+                        <option value="synthetic">Synthetic Test Generator</option>
                       </select>
                     </div>
+
                     <div class="form-row">
-                      <label>Source</label>
-                      <input type="text" id="prop-cam-source" required>
+                      <label>Source URI / Index</label>
+                      <input type="text" id="custom-cam-source" placeholder="0 or http://<ip>:8080/video or rtsp://..." value="0" required>
+                      <span style="font-size: 10px; color: var(--text-muted); margin-top: 2px; display: block;">
+                        Supported: Device index (<code>0</code>), RTSP, HTTP/HTTPS IP streams, or MP4 path.
+                      </span>
                     </div>
-                    <div class="form-row form-checkbox">
-                      <label><input type="checkbox" id="prop-cam-enabled"> Enabled</label>
+
+                    <!-- Stream Live Probe Validator -->
+                    <div class="form-row" style="background: rgba(0, 240, 255, 0.03); border: 1px solid rgba(0, 240, 255, 0.12); border-radius: 4px; padding: 8px;">
+                      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                        <span style="font-size: 10px; font-weight: 700; color: var(--cyan-bright); text-transform: uppercase;">Stream Ingest Validation</span>
+                        <button type="button" id="btn-test-stream" class="btn btn-secondary btn-xs" style="padding: 2px 8px; font-size: 10px;">⚡ Probe Feed</button>
+                      </div>
+                      <div id="add-cam-preview-box" class="preview-box" style="display: none; height: 110px; margin-top: 6px;">
+                        <img id="add-cam-preview-img" style="display: none;" alt="Stream Preview">
+                        <div id="add-cam-preview-placeholder" class="preview-placeholder">Testing Stream...</div>
+                      </div>
+                      <div id="stream-probe-status" style="font-size: 9.5px; color: var(--text-muted); margin-top: 4px;">Status: Ready to probe</div>
                     </div>
-                    <div class="topo-btn-row">
-                      <button type="submit" class="btn btn-primary btn-xs">Save</button>
-                      <button type="button" id="btn-delete-node" class="btn btn-danger btn-xs">Remove Camera</button>
+
+                    <!-- Connect to Existing Node (Auto-Topology Integration) -->
+                    <div class="form-row" style="background: rgba(16, 185, 129, 0.03); border: 1px solid rgba(16, 185, 129, 0.15); border-radius: 4px; padding: 8px;">
+                      <label style="color: var(--emerald-bright);">Connect to Existing Node (Auto-Link)</label>
+                      <select id="custom-cam-connect-target" style="margin-top: 2px;">
+                        <option value="">-- None (Isolated Node) --</option>
+                      </select>
+                      <div id="custom-cam-link-props" style="display: none; margin-top: 8px;">
+                        <div style="display: flex; gap: 8px;">
+                          <div style="flex: 1;">
+                            <label style="font-size: 9px;">Edge Type</label>
+                            <select id="custom-cam-edge-type">
+                              <option value="adjacent">Adjacent (Direct Next)</option>
+                              <option value="overlap">Overlap (Shared Field)</option>
+                              <option value="travel">Travel (Corridor Transit)</option>
+                            </select>
+                          </div>
+                          <div style="width: 80px;">
+                            <label style="font-size: 9px;">Transit (s)</label>
+                            <input type="number" id="custom-cam-transit-s" value="4.5" min="0.5" step="0.5" style="padding: 4px;">
+                          </div>
+                        </div>
+                      </div>
                     </div>
+
+                    <button type="submit" class="btn btn-primary btn-sm w-full" style="font-weight: 700; letter-spacing: 0.5px;">+ Inject Node into Topology</button>
                   </form>
                 </div>
+              </div>
 
-                <!-- Edge Inspector -->
-                <div id="inspector-edge" style="display: none;">
-                  <form id="form-edit-edge" class="topo-form">
-                    <div class="form-row">
-                      <label>Connection</label>
-                      <div class="edge-nodes-display"><span id="prop-edge-source"></span> &rarr; <span id="prop-edge-target"></span></div>
-                    </div>
-                    <div class="form-row">
-                      <label>Edge Type</label>
-                      <select id="prop-edge-type">
-                        <option value="overlap">Overlap (Shared Field)</option>
-                        <option value="adjacent">Adjacent (Direct Next)</option>
-                        <option value="travel">Travel (Corridor Transit)</option>
-                      </select>
-                    </div>
-                    <div class="form-row">
-                      <label>Weight / Cost</label>
-                      <input type="number" id="prop-edge-weight" min="0.1" max="10.0" step="0.1" value="1.0">
-                    </div>
-                    <div class="topo-btn-row">
-                      <button type="submit" class="btn btn-primary btn-xs">Save</button>
-                      <button type="button" id="btn-delete-edge" class="btn btn-danger btn-xs">Delete Edge</button>
-                    </div>
-                  </form>
+              <!-- Tab Pane B: Node / Edge Inspector -->
+              <div id="pane-topo-inspect" class="topo-tab-pane" style="display: none;">
+                <div class="topo-card">
+                  <div class="topo-card-header">
+                    <h4>PROPERTIES & SENSORS</h4>
+                    <span class="badge-pill" style="font-size: 9px; padding: 1px 6px;">TELEMETRY</span>
+                  </div>
+                  <div id="inspector-empty" class="empty-state">Click any camera node or transition edge on canvas to inspect</div>
+
+                  <!-- Node Inspector -->
+                  <div id="inspector-node" style="display: none;">
+                    <form id="form-edit-node" class="topo-form">
+                      <div class="form-row">
+                        <label>Camera ID</label>
+                        <input type="text" id="prop-cam-id" readonly class="readonly-input">
+                      </div>
+                      <div class="form-row">
+                        <label>Display Name</label>
+                        <input type="text" id="prop-cam-name" required>
+                      </div>
+                      <div class="form-row">
+                        <label>Floor</label>
+                        <input type="text" id="prop-cam-floor" placeholder="Floor 1">
+                      </div>
+                      <div class="form-row">
+                        <label>Zone</label>
+                        <input type="text" id="prop-cam-zone" placeholder="East Wing">
+                      </div>
+                      <div class="form-row">
+                        <label>Group</label>
+                        <input type="text" id="prop-cam-group" placeholder="Indoor">
+                      </div>
+                      <div class="form-row" style="margin-top: 10px; margin-bottom: 10px;">
+                        <label>Live Feed Preview</label>
+                        <div class="preview-box">
+                          <img id="inspector-preview-image" style="display: none;" alt="Preview">
+                          <div id="inspector-preview-placeholder" class="preview-placeholder">Camera Preview</div>
+                          <div id="inspector-preview-info"></div>
+                        </div>
+                      </div>
+                      <div class="form-row">
+                        <label>Source Type</label>
+                        <select id="prop-cam-type">
+                          <option value="webcam">Webcam</option>
+                          <option value="rtsp">Network Stream (RTSP / HTTP IP Webcam)</option>
+                          <option value="video_file">Video File</option>
+                          <option value="synthetic">Synthetic</option>
+                        </select>
+                      </div>
+                      <div class="form-row">
+                        <label>Source</label>
+                        <input type="text" id="prop-cam-source" required>
+                      </div>
+                      <div class="form-row form-checkbox">
+                        <label><input type="checkbox" id="prop-cam-enabled"> Enabled</label>
+                      </div>
+                      <div class="topo-btn-row">
+                        <button type="submit" class="btn btn-primary btn-xs">Save Changes</button>
+                        <button type="button" id="btn-delete-node" class="btn btn-danger btn-xs">Remove Camera</button>
+                      </div>
+                    </form>
+                  </div>
+
+                  <!-- Edge Inspector -->
+                  <div id="inspector-edge" style="display: none;">
+                    <form id="form-edit-edge" class="topo-form">
+                      <div class="form-row">
+                        <label>Connection</label>
+                        <div class="edge-nodes-display"><span id="prop-edge-source"></span> &rarr; <span id="prop-edge-target"></span></div>
+                      </div>
+                      <div class="form-row">
+                        <label>Edge Type</label>
+                        <select id="prop-edge-type">
+                          <option value="overlap">Overlap (Shared Field)</option>
+                          <option value="adjacent">Adjacent (Direct Next)</option>
+                          <option value="travel">Travel (Corridor Transit)</option>
+                        </select>
+                      </div>
+                      <div class="form-row">
+                        <label>Transit Latency (seconds)</label>
+                        <input type="number" id="prop-edge-weight" min="0.1" max="120.0" step="0.5" value="4.5">
+                      </div>
+                      <div class="topo-btn-row">
+                        <button type="submit" class="btn btn-primary btn-xs">Save Edge</button>
+                        <button type="button" id="btn-delete-edge" class="btn btn-danger btn-xs">Delete Edge</button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Tab Pane C: Local Discovery -->
+              <div id="pane-topo-discover" class="topo-tab-pane" style="display: none;">
+                <div class="topo-card">
+                  <div class="topo-card-header">
+                    <h4>HARDWARE DISCOVERY</h4>
+                    <span class="badge-pill" style="font-size: 9px; padding: 1px 6px;">V4L2 / DSHOW</span>
+                  </div>
+                  <div style="display: flex; gap: 5px; margin-bottom: 10px; align-items: center;">
+                    <label style="font-size: 11px;">Index:</label>
+                    <input type="number" id="discover-start" value="0" min="0" max="20" style="width: 40px; padding: 2px;">
+                    <span style="font-size: 11px;">to</span>
+                    <input type="number" id="discover-end" value="4" min="1" max="20" style="width: 40px; padding: 2px;">
+                    <button id="btn-discover" class="btn btn-secondary btn-xs" style="margin-left: auto;">Probe USB</button>
+                  </div>
+                  <div id="discovered-list" class="discovered-list" style="max-height: 180px; overflow-y: auto;">
+                    <div class="empty-state">Click 'Probe USB' to scan local webcams</div>
+                  </div>
+                  <div class="preview-box" style="margin-top: 10px;">
+                    <img id="preview-image" style="display: none;" alt="Preview">
+                    <div class="preview-placeholder">Camera Preview</div>
+                    <div id="preview-info"></div>
+                  </div>
                 </div>
               </div>
       
-        <!-- Topology Event Log Panel -->
-        <div class="gallery-section-subhead" style="margin-top: 15px; border-top: 1px solid var(--border-color); padding-top: 15px;">
-            <span>OPERATIONAL EVENT LOG</span>
-        </div>
-        <div id="topo-event-log-container" style="flex: 1; min-height: 150px; max-height: 250px; overflow-y: auto; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 4px; padding: 10px; font-family: 'JetBrains Mono', monospace; font-size: 11px; margin-bottom: 10px;">
-            <div style="color: var(--text-dim);">System initialized. Waiting for events...</div>
-        </div>
-      </aside>
-
-
+              <!-- Topology Event Log Panel -->
+              <div class="topo-card" style="margin-top: 10px;">
+                <div class="topo-card-header">
+                  <h4>EVENT LOG</h4>
+                </div>
+                <div id="topo-event-log-container" style="min-height: 90px; max-height: 140px; overflow-y: auto; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 4px; padding: 8px; font-family: 'JetBrains Mono', monospace; font-size: 10px;">
+                  <div style="color: var(--text-dim);">System initialized. Listening for topology events...</div>
+                </div>
+              </div>
+            </aside>
 
             <!-- Main Canvas Container -->
             <div id="canvas-container" class="canvas-container">
-              <div id="topo-search-bar" style="position: absolute; top: 10px; left: 10px; z-index: 10; display: flex; gap: 5px; background: rgba(0,0,0,0.6); padding: 5px; border-radius: 4px;">
-                <input type="text" id="topo-search-input" placeholder="Search cameras..." style="padding: 5px; border: 1px solid var(--border-color); background: var(--bg-dark); color: #fff; width: 200px;">
-                <select id="topo-filter-zone" style="padding: 5px; border: 1px solid var(--border-color); background: var(--bg-dark); color: #fff;">
+              <div id="topo-search-bar" style="position: absolute; top: 10px; left: 10px; z-index: 10; display: flex; gap: 5px; background: rgba(8,12,20,0.85); backdrop-filter: blur(8px); padding: 5px; border: 1px solid var(--border-subtle); border-radius: 4px;">
+                <input type="text" id="topo-search-input" placeholder="Search cameras..." style="padding: 5px 8px; border: 1px solid var(--border-color); background: var(--bg-dark); color: #fff; width: 180px; font-size: 11px;">
+                <select id="topo-filter-zone" style="padding: 5px; border: 1px solid var(--border-color); background: var(--bg-dark); color: #fff; font-size: 11px;">
                   <option value="">All Zones</option>
                 </select>
-                <select id="topo-filter-floor" style="padding: 5px; border: 1px solid var(--border-color); background: var(--bg-dark); color: #fff;">
+                <select id="topo-filter-floor" style="padding: 5px; border: 1px solid var(--border-color); background: var(--bg-dark); color: #fff; font-size: 11px;">
                   <option value="">All Floors</option>
                 </select>
               </div>
               
               <canvas id="graph-canvas"></canvas>
+
+              <!-- Tactical Telemetry HUD Strip at Bottom of Canvas -->
+              <div class="canvas-telemetry-hud">
+                <div class="hud-item"><span class="hud-lbl">GRID:</span> <span class="hud-val">SEC-07A // EPSG:3857</span></div>
+                <div class="hud-item"><span class="hud-lbl">MESH:</span> <span class="hud-val text-cyan" id="hud-mesh-count">0 NODES ONLINE</span></div>
+                <div class="hud-item"><span class="hud-lbl">SEARCH:</span> <span class="hud-val text-amber" id="hud-search-radius">R = 0 (IDLE)</span></div>
+                <div class="hud-item"><span class="hud-lbl">TRACKED CHAIN:</span> <span class="hud-val text-emerald" id="hud-tracked-chain">NONE</span></div>
+                <div class="hud-item"><span class="hud-lbl">VECTOR ENGINE:</span> <span class="hud-val">KALMAN-FILTER v3</span></div>
+              </div>
               
               <div id="topo-list-view" style="display: none; position: absolute; top: 50px; left: 10px; right: 10px; bottom: 10px; background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 4px; overflow: auto; padding: 10px; z-index: 5;">
                 <div style="display: flex; gap: 10px; margin-bottom: 10px;">

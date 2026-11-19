@@ -895,7 +895,8 @@ class SurveillanceApp {
         }
         
         try {
-          await API.createAnnotation(camId, timeMs, text, null, 'note');
+          const aType = this.annoType?.value || 'note';
+          await API.createAnnotation(camId, timeMs, text, null, aType);
           this.showToast('Annotation saved', 'success');
           this.annoOverlay.style.display = 'none';
           this.annoInput.value = '';
@@ -2022,6 +2023,35 @@ class SurveillanceApp {
       if (uptimeEl && st.uptime_s !== undefined) uptimeEl.textContent = `${st.uptime_s.toFixed(0)}s`;
       if (fpsEl && st.fps !== undefined) fpsEl.textContent = st.fps.toFixed(1);
       if (gpuEl && st.gpu_memory_mb !== undefined) gpuEl.textContent = `${st.gpu_memory_mb.toFixed(1)} MB`;
+
+      // Forward live telemetry into interactive topology graph canvas
+      if (this.graphCanvas) {
+        this.graphCanvas.activeCameraId = this._pendingActiveCameraSwitch || st.active_camera_id;
+        this.graphCanvas.targetState = this.targetState;
+        this.graphCanvas.searchProgress = st.search_progress;
+        this.graphCanvas.candidateScores = st.candidate_scores || {};
+        this.graphCanvas.cameraStatuses = st.camera_statuses || {};
+        this.graphCanvas.transitHistory = st.transit_history || [];
+      }
+
+      // Update Topology Canvas HUD Bar
+      const hudMesh = document.getElementById('hud-mesh-count');
+      const hudSearch = document.getElementById('hud-search-radius');
+      const hudChain = document.getElementById('hud-tracked-chain');
+      if (hudMesh && this.graphCanvas) {
+        hudMesh.textContent = `${this.graphCanvas.nodes.length} NODES ONLINE`;
+      }
+      if (hudSearch) {
+        hudSearch.textContent = `R = ${rad} (${searchSt})`;
+      }
+      if (hudChain) {
+        const hist = st.transit_history || [];
+        if (hist.length > 0) {
+          hudChain.textContent = hist.map(h => (h.camera_id || h)).join(' → ');
+        } else {
+          hudChain.textContent = st.active_camera_id ? `${st.active_camera_id} [ORIGIN]` : 'NONE';
+        }
+      }
 
     } catch (e) {
       console.debug('Status poll error', e);

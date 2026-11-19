@@ -9,10 +9,232 @@ class CameraManager {
 
     this.listEl = document.getElementById('discovered-list');
     this.previewImg = document.getElementById('preview-image');
-    this.previewPlaceholder = document.querySelector('.preview-placeholder');
+    this.previewPlaceholder = document.querySelector('#pane-topo-discover .preview-placeholder');
     this.previewInfo = document.getElementById('preview-info');
 
+    this.initTabs();
+    this.initPresets();
+    this.initStreamProbe();
     this.initEvents();
+  }
+
+  initTabs() {
+    const tabs = [
+      { btnId: 'tab-topo-provision', paneId: 'pane-topo-provision' },
+      { btnId: 'tab-topo-inspect', paneId: 'pane-topo-inspect' },
+      { btnId: 'tab-topo-discover', paneId: 'pane-topo-discover' },
+    ];
+
+    tabs.forEach(({ btnId, paneId }) => {
+      const btn = document.getElementById(btnId);
+      if (btn) {
+        btn.addEventListener('click', () => {
+          tabs.forEach(t => {
+            const b = document.getElementById(t.btnId);
+            const p = document.getElementById(t.paneId);
+            if (b) b.classList.remove('active');
+            if (p) p.style.display = 'none';
+          });
+          btn.classList.add('active');
+          const pane = document.getElementById(paneId);
+          if (pane) pane.style.display = 'block';
+
+          if (btnId === 'tab-topo-provision') {
+            this.updateConnectDropdown();
+          }
+        });
+      }
+    });
+
+    // Populate connect dropdown initially
+    setTimeout(() => this.updateConnectDropdown(), 200);
+  }
+
+  switchTab(tabKey) {
+    const map = {
+      'provision': { btnId: 'tab-topo-provision', paneId: 'pane-topo-provision' },
+      'inspect': { btnId: 'tab-topo-inspect', paneId: 'pane-topo-inspect' },
+      'discover': { btnId: 'tab-topo-discover', paneId: 'pane-topo-discover' },
+    };
+    const target = map[tabKey];
+    if (!target) return;
+
+    ['tab-topo-provision', 'tab-topo-inspect', 'tab-topo-discover'].forEach(id => {
+      const b = document.getElementById(id);
+      if (b) b.classList.remove('active');
+    });
+    ['pane-topo-provision', 'pane-topo-inspect', 'pane-topo-discover'].forEach(id => {
+      const p = document.getElementById(id);
+      if (p) p.style.display = 'none';
+    });
+
+    const activeBtn = document.getElementById(target.btnId);
+    const activePane = document.getElementById(target.paneId);
+    if (activeBtn) activeBtn.classList.add('active');
+    if (activePane) activePane.style.display = 'block';
+
+    if (tabKey === 'provision') {
+      this.updateConnectDropdown();
+    }
+  }
+
+  initPresets() {
+    const presetButtons = document.querySelectorAll('.btn-preset[data-preset]');
+    const idInput = document.getElementById('custom-cam-id');
+    const nameInput = document.getElementById('custom-cam-name');
+    const typeSelect = document.getElementById('custom-cam-type');
+    const sourceInput = document.getElementById('custom-cam-source');
+
+    const presets = {
+      webcam: {
+        idSuffix: 'webcam_0',
+        name: 'USB Webcam 0',
+        type: 'webcam',
+        source: '0',
+      },
+      rtsp: {
+        idSuffix: 'rtsp_1',
+        name: 'RTSP Corridor North',
+        type: 'rtsp',
+        source: 'rtsp://192.168.1.100:554/live',
+      },
+      android: {
+        idSuffix: 'mobile_1',
+        name: 'Android IP Cam',
+        type: 'rtsp',
+        source: 'http://192.168.1.50:8080/video',
+      },
+      video: {
+        idSuffix: 'video_1',
+        name: 'Recorded Test Feed',
+        type: 'video_file',
+        source: 'test_footage/cam_0.mp4',
+      },
+      synthetic: {
+        idSuffix: 'sim_1',
+        name: 'Synthetic Corridor',
+        type: 'synthetic',
+        source: 'synthetic:hallway',
+      },
+    };
+
+    presetButtons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        presetButtons.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+
+        const presetKey = btn.dataset.preset;
+        const config = presets[presetKey];
+        if (!config) return;
+
+        const count = this.app.graphCanvas ? this.app.graphCanvas.nodes.length : 0;
+        if (idInput) idInput.value = `cam_${config.idSuffix}`;
+        if (nameInput) nameInput.value = config.name;
+        if (typeSelect) typeSelect.value = config.type;
+        if (sourceInput) sourceInput.value = config.source;
+
+        // Reset stream probe status
+        const statusEl = document.getElementById('stream-probe-status');
+        if (statusEl) statusEl.textContent = `Preset loaded: ${config.name}. Ready to probe.`;
+      });
+    });
+  }
+
+  initStreamProbe() {
+    const btnTest = document.getElementById('btn-test-stream');
+    const previewBox = document.getElementById('add-cam-preview-box');
+    const previewImg = document.getElementById('add-cam-preview-img');
+    const previewPlaceholder = document.getElementById('add-cam-preview-placeholder');
+    const statusEl = document.getElementById('stream-probe-status');
+
+    if (!btnTest) return;
+
+    btnTest.addEventListener('click', async () => {
+      const sourceInput = document.getElementById('custom-cam-source');
+      const typeSelect = document.getElementById('custom-cam-type');
+      if (!sourceInput || !typeSelect) return;
+
+      let source = sourceInput.value.trim();
+      let type = typeSelect.value;
+      if (!source) {
+        if (statusEl) statusEl.textContent = 'Please specify a source URI or index first.';
+        return;
+      }
+
+      // Normalization
+      if (/^https?:\/\//i.test(source)) {
+        if (type === 'webcam') type = 'rtsp';
+      }
+
+      btnTest.disabled = true;
+      btnTest.textContent = 'Probing...';
+      if (statusEl) statusEl.textContent = 'Connecting to stream endpoint...';
+
+      if (previewBox) previewBox.style.display = 'block';
+      if (previewPlaceholder) {
+        previewPlaceholder.style.display = 'block';
+        previewPlaceholder.textContent = `Testing feed: ${source}...`;
+      }
+      if (previewImg) previewImg.style.display = 'none';
+
+      const url = `${API.getPreviewUrl(source, type)}&t=${Date.now()}`;
+
+      if (previewImg) {
+        previewImg.onload = () => {
+          previewImg.style.display = 'block';
+          if (previewPlaceholder) previewPlaceholder.style.display = 'none';
+          if (statusEl) {
+            statusEl.innerHTML = '<span style="color: var(--emerald-bright); font-weight: 600;">🟢 Stream Active // Feed Verified Online</span>';
+          }
+          btnTest.disabled = false;
+          btnTest.textContent = '⚡ Probe Feed';
+        };
+
+        previewImg.onerror = () => {
+          previewImg.style.display = 'none';
+          if (previewPlaceholder) {
+            previewPlaceholder.style.display = 'block';
+            previewPlaceholder.textContent = 'Feed Offline or Unreachable';
+          }
+          if (statusEl) {
+            statusEl.innerHTML = '<span style="color: var(--border-danger); font-weight: 600;">🔴 Stream Inactive // Device Offline</span>';
+          }
+          btnTest.disabled = false;
+          btnTest.textContent = '⚡ Probe Feed';
+        };
+
+        previewImg.src = url;
+      }
+    });
+  }
+
+  updateConnectDropdown() {
+    const targetSelect = document.getElementById('custom-cam-connect-target');
+    const linkProps = document.getElementById('custom-cam-link-props');
+    if (!targetSelect) return;
+
+    const currentVal = targetSelect.value;
+    targetSelect.innerHTML = '<option value="">-- None (Isolated Node) --</option>';
+
+    if (this.app.graphCanvas && this.app.graphCanvas.nodes) {
+      this.app.graphCanvas.nodes.forEach(node => {
+        const opt = document.createElement('option');
+        opt.value = node.camera_id;
+        opt.textContent = `${node.name} (${node.camera_id})`;
+        targetSelect.appendChild(opt);
+      });
+    }
+
+    targetSelect.value = currentVal;
+    if (linkProps) {
+      linkProps.style.display = targetSelect.value ? 'block' : 'none';
+    }
+
+    targetSelect.onchange = () => {
+      if (linkProps) {
+        linkProps.style.display = targetSelect.value ? 'block' : 'none';
+      }
+    };
   }
 
   initEvents() {
@@ -67,17 +289,54 @@ class CameraManager {
         this.app.graphCanvas = new GraphCanvas(this.app, 'graph-canvas');
       }
 
-      this.app.graphCanvas.addNode({
+      const connectTargetId = document.getElementById('custom-cam-connect-target')?.value;
+      const edgeType = document.getElementById('custom-cam-edge-type')?.value || 'adjacent';
+      const transitS = parseFloat(document.getElementById('custom-cam-transit-s')?.value) || 4.5;
+
+      // Intelligent Positioning
+      let posX = 240 + Math.random() * 120;
+      let posY = 180 + Math.random() * 100;
+
+      let targetNode = null;
+      if (connectTargetId && this.app.graphCanvas.nodes) {
+        targetNode = this.app.graphCanvas.nodes.find(n => n.camera_id === connectTargetId);
+        if (targetNode) {
+          const angle = Math.random() * Math.PI * 2;
+          posX = Math.round(targetNode.position_x + Math.cos(angle) * 160);
+          posY = Math.round(targetNode.position_y + Math.sin(angle) * 160);
+        }
+      }
+
+      const newNode = {
         camera_id: id,
         name: name,
         source: (source !== '' && !isNaN(source) && String(parseInt(source, 10)) === source) ? parseInt(source, 10) : source,
         source_type: type,
         enabled: true,
-        position_x: 200 + Math.random() * 100,
-        position_y: 150 + Math.random() * 100,
-      });
+        position_x: posX,
+        position_y: posY,
+      };
 
-      this.app.showToast(`Added camera '${name}' to canvas`, 'success');
+      this.app.graphCanvas.addNode(newNode);
+
+      // Add connecting edge if target selected
+      if (targetNode) {
+        this.app.graphCanvas.addEdge({
+          source_camera_id: targetNode.camera_id,
+          target_camera_id: id,
+          edge_type: edgeType,
+          direction: 'bidirectional',
+          enabled: true,
+          expected_typical_transition_s: transitS,
+          expected_min_transition_s: Math.max(0.5, transitS - 1.5),
+          expected_max_transition_s: transitS + 2.5,
+        });
+        this.app.showToast(`Added '${name}' and connected to '${targetNode.name}' (⏱ ${transitS}s transit)`, 'success');
+      } else {
+        this.app.showToast(`Added camera '${name}' to canvas`, 'success');
+      }
+
+      this.updateConnectDropdown();
       customForm.reset();
     });
   }
