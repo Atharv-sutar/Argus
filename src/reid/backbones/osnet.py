@@ -230,7 +230,7 @@ class Conv7x7(nn.Module):
         return self.relu(self.bn(self.conv(x)))
 
 
-def _load_pretrained_weights(model: nn.Module, model_key: str) -> None:
+def _load_pretrained_weights(model: nn.Module, model_key: str, require_pretrained: bool = False) -> dict:
     """Loads state dict from local cache or URL and maps parameters into the model."""
     import os
     models_dir = os.path.join(torch.hub.get_dir(), "checkpoints")
@@ -238,10 +238,12 @@ def _load_pretrained_weights(model: nn.Module, model_key: str) -> None:
     
     local_path = os.path.join(models_dir, f"{model_key}.pt")
     state_dict = None
+    source = "none"
     
     if os.path.exists(local_path):
         try:
             state_dict = torch.load(local_path, map_location="cpu", weights_only=False)
+            source = local_path
         except Exception as e:
             logger.warning(f"Failed loading local checkpoint {local_path}: {e}")
             
@@ -250,28 +252,49 @@ def _load_pretrained_weights(model: nn.Module, model_key: str) -> None:
         if url:
             try:
                 state_dict = load_state_dict_from_url(url, map_location="cpu", progress=False)
+                source = url
             except Exception as e:
                 logger.warning(f"Could not load OSNet weights from URL {url}: {e}")
+
+    model_dict = model.state_dict()
+    expected = len(model_dict)
+    loaded = 0
 
     if state_dict is not None:
         if "state_dict" in state_dict:
             state_dict = state_dict["state_dict"]
 
-        model_dict = model.state_dict()
         filtered_dict = {}
         for k, v in state_dict.items():
             k_clean = k.replace("module.", "")
             if k_clean in model_dict and model_dict[k_clean].shape == v.shape:
                 filtered_dict[k_clean] = v
 
+        loaded = len(filtered_dict)
         model_dict.update(filtered_dict)
         model.load_state_dict(model_dict)
-        logger.info(f"Loaded {len(filtered_dict)}/{len(model_dict)} pretrained OSNet weights for '{model_key}'.")
+        logger.info(f"Loaded {loaded}/{expected} pretrained OSNet weights for '{model_key}'.")
     else:
         logger.warning(f"No pretrained weights loaded for '{model_key}'.")
 
+    ok = (loaded == expected) and (expected > 0)
+    report = {
+        "loaded": loaded,
+        "expected": expected,
+        "source": source,
+        "ok": ok,
+    }
+    model.weights_report = report
 
-def osnet_x0_25(pretrained: bool = True, dataset: str = "msmt17") -> OSNet:
+    if require_pretrained and not ok:
+        raise RuntimeError(
+            f"Pretrained weights required for '{model_key}', but failed to load properly. "
+            f"Report: {report}"
+        )
+    return report
+
+
+def osnet_x0_25(pretrained: bool = True, dataset: str = "msmt17", require_pretrained: bool = False) -> OSNet:
     """Instantiates lightweight OSNet-x0.25 model (~0.2M params, 512D output)."""
     model = OSNet(
         blocks=[2, 2, 2],
@@ -279,11 +302,13 @@ def osnet_x0_25(pretrained: bool = True, dataset: str = "msmt17") -> OSNet:
         feature_dim=512,
     )
     if pretrained:
-        _load_pretrained_weights(model, f"osnet_x0_25_{dataset}")
+        _load_pretrained_weights(model, f"osnet_x0_25_{dataset}", require_pretrained=require_pretrained)
+    else:
+        model.weights_report = {"loaded": 0, "expected": len(model.state_dict()), "source": "random", "ok": False}
     return model
 
 
-def osnet_x1_0(pretrained: bool = True, dataset: str = "msmt17") -> OSNet:
+def osnet_x1_0(pretrained: bool = True, dataset: str = "msmt17", require_pretrained: bool = False) -> OSNet:
     """Instantiates standard OSNet-x1.0 model (~2.2M params, 512D output)."""
     model = OSNet(
         blocks=[2, 2, 2],
@@ -291,17 +316,19 @@ def osnet_x1_0(pretrained: bool = True, dataset: str = "msmt17") -> OSNet:
         feature_dim=512,
     )
     if pretrained:
-        _load_pretrained_weights(model, f"osnet_x1_0_{dataset}")
+        _load_pretrained_weights(model, f"osnet_x1_0_{dataset}", require_pretrained=require_pretrained)
+    else:
+        model.weights_report = {"loaded": 0, "expected": len(model.state_dict()), "source": "random", "ok": False}
     return model
 
 
-def build_osnet(model_name: str = "osnet_x0_25", pretrained: bool = True) -> OSNet:
+def build_osnet(model_name: str = "osnet_x0_25", pretrained: bool = True, require_pretrained: bool = False) -> OSNet:
     """Factory helper to build OSNet variants."""
     name = model_name.lower()
     if "x1_0" in name or "x1.0" in name:
-        return osnet_x1_0(pretrained=pretrained, dataset="msmt17")
+        return osnet_x1_0(pretrained=pretrained, dataset="msmt17", require_pretrained=require_pretrained)
     elif "x0_25" in name or "x0.25" in name or "small" in name:
-        return osnet_x0_25(pretrained=pretrained, dataset="msmt17")
+        return osnet_x0_25(pretrained=pretrained, dataset="msmt17", require_pretrained=require_pretrained)
     else:
-        return osnet_x0_25(pretrained=pretrained, dataset="msmt17")
+        return osnet_x0_25(pretrained=pretrained, dataset="msmt17", require_pretrained=require_pretrained)
 

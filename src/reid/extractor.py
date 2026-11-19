@@ -34,6 +34,7 @@ class PyTorchReIDExtractor(BaseReID):
         input_size: Tuple[int, int] = (256, 128),
         prefer_engine: bool = True,
         batch_size: int = 32,
+        require_pretrained_weights: bool = False,
     ) -> None:
         self.model_name = model_name.lower()
         self.device_str = resolve_inference_device(device)
@@ -41,13 +42,22 @@ class PyTorchReIDExtractor(BaseReID):
         self.feature_dim = 512
         self.prefer_engine = prefer_engine
         self.batch_size = max(1, batch_size)
+        self.require_pretrained_weights = require_pretrained_weights
         self._model = None
         self._osnet_model = None
         self._device = None
         self._trt_session = None
+        self._weights_report = {"loaded": 0, "expected": 0, "source": "none", "ok": False}
         self.active_backend = "PyTorch"
 
         self._init_model()
+
+    @property
+    def weights_report(self) -> dict:
+        """Returns diagnostic report on loaded pretrained weights."""
+        if hasattr(self._model, "weights_report"):
+            return self._model.weights_report
+        return self._weights_report
 
     def _init_model(self) -> None:
         if self.prefer_engine:
@@ -88,6 +98,7 @@ class PyTorchReIDExtractor(BaseReID):
                     self._trt_session = TensorRTInferenceSession(candidate_path)
                     self.active_backend = self._trt_session.active_backend
                     self.feature_dim = dim
+                    self._weights_report = {"loaded": 1, "expected": 1, "source": candidate_path, "ok": True}
                     logger.info(f"ReID model '{norm_name}' loaded via {self.active_backend} (dim={self.feature_dim}).")
                     return
             except Exception as e:
@@ -101,7 +112,11 @@ class PyTorchReIDExtractor(BaseReID):
 
             if "osnet" in self.model_name or self.model_name in ("default", "reid"):
                 from src.reid.backbones.osnet import build_osnet
-                self._model = build_osnet(self.model_name if "x1_0" in self.model_name else "osnet_x0_25", pretrained=True).to(self._device).eval()
+                self._model = build_osnet(
+                    self.model_name if "x1_0" in self.model_name else "osnet_x0_25",
+                    pretrained=True,
+                    require_pretrained=self.require_pretrained_weights,
+                ).to(self._device).eval()
                 self.feature_dim = 512
                 self.active_backend = f"PyTorch ({self._device})"
             elif "mobilenet" in self.model_name:
@@ -111,11 +126,21 @@ class PyTorchReIDExtractor(BaseReID):
                 self._model = backbone.to(self._device).eval()
                 self.feature_dim = 576
                 self.active_backend = f"PyTorch ({self._device})"
+                self._weights_report = {"loaded": len(backbone.state_dict()), "expected": len(backbone.state_dict()), "source": "torchvision", "ok": True}
             else:
                 from src.reid.backbones.osnet import build_osnet
-                self._model = build_osnet("osnet_x0_25", pretrained=True).to(self._device).eval()
+                self._model = build_osnet("osnet_x0_25", pretrained=True, require_pretrained=self.require_pretrained_weights).to(self._device).eval()
                 self.feature_dim = 512
                 self.active_backend = f"PyTorch ({self._device})"
+
+            if hasattr(self._model, "weights_report"):
+                self._weights_report = self._model.weights_report
+
+            if self.require_pretrained_weights and not self._weights_report.get("ok", False):
+                raise RuntimeError(
+                    f"Pretrained weights required for ReID model '{self.model_name}', "
+                    f"but failed to load. Report: {self._weights_report}"
+                )
 
             logger.info(f"ReID model '{self.model_name}' (dim={self.feature_dim}) initialized successfully on {self._device}.")
         except Exception as e:

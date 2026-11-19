@@ -93,6 +93,7 @@ class MultiCameraPipeline:
             self.reid_extractor = PyTorchReIDExtractor(
                 model_name=actual_model_name,
                 device=config.inference.device,
+                require_pretrained_weights=getattr(config.reid, "require_pretrained_weights", False),
             )
 
         # 2. Identity Manager & Target Manager
@@ -220,6 +221,14 @@ class MultiCameraPipeline:
             )
         else:
             self.recording_manager = ContinuousRecordingManager(enabled=False)
+
+        # 9.6 Decision Logger (diagnostic logging harness)
+        from src.reid.decision_logger import DecisionLogger
+        diag_cfg = getattr(self.config, "diagnostics", None)
+        self.decision_logger = DecisionLogger(
+            log_path=getattr(diag_cfg, "decision_log_path", "logs/decision_log.jsonl") if diag_cfg else "logs/decision_log.jsonl",
+            enabled=getattr(diag_cfg, "decision_log", False) if diag_cfg else False,
+        )
 
         storage_str = str(self.identity_manager.vector_store) if self.identity_manager and self.identity_manager.vector_store else 'None'
         
@@ -1455,6 +1464,30 @@ class MultiCameraPipeline:
                             uncertain_min=self.config.reid.uncertain_band_min, 
                             auto_accept_min=self.config.reid.auto_add_threshold
                         )
+                        if getattr(self, "decision_logger", None) and self.decision_logger.enabled:
+                            s_reason = "REACQ" if decision == HandoffDecision.CONFIRMED else ("REACQ_PENDING" if decision == HandoffDecision.UNCERTAIN else "REJECT")
+                            self.decision_logger.log({
+                                "frame_number": self._frame_count,
+                                "camera": cid,
+                                "timestamp": float(ts_ms),
+                                "state_before": target.state.value if hasattr(target.state, "value") else str(target.state),
+                                "state_after": target.state.value if hasattr(target.state, "value") else str(target.state),
+                                "locked_track_id": target.track_id,
+                                "reason": s_reason,
+                                "candidates": [{
+                                    "track_id": rec_track.track_id,
+                                    "box": [round(float(c), 1) for c in rec_track.box.as_xyxy()],
+                                    "blur_score": 100.0,
+                                    "filtered": False,
+                                    "filter_reason": None,
+                                    "effective_sim": round(float(rec_sim), 4),
+                                    "manual_sim": round(float(rec_sim), 4),
+                                    "auto_sim": 0.0,
+                                    "top3_gallery_indices": [],
+                                }],
+                                "auto_adds": [],
+                                "rollbacks": [],
+                            })
                         if decision == HandoffDecision.CONFIRMED:
                             logger.info(f"[MULTI-CAM RECOVERY] Target CONFIRMED on '{cid}' (Track={rec_track.track_id}, sim={rec_sim:.3f})")
                             candidate_recovered_cam = cid
@@ -1617,19 +1650,58 @@ class MultiCameraPipeline:
         # Detect crowd occlusion / overlap on the active target
         is_occluded = self._is_occluded(current_track, track_res.tracks, iou_threshold=0.25) if current_track is not None else False
 
+        def _emit_decision_log(
+            reason: str,
+            cands_list: List[Dict[str, Any]],
+            auto_adds_list: List[int],
+            rollbacks_list: List[int],
+        ) -> None:
+            if not getattr(self, "decision_logger", None) or not self.decision_logger.enabled:
+                return
+            self.decision_logger.log({
+                "frame_number": int(track_res.frame_id) if hasattr(track_res, "frame_id") and track_res.frame_id is not None else self._frame_count,
+                "camera": self._active_camera_id or "camera_0",
+                "timestamp": float(timestamp_ms),
+                "state_before": prev_target_state.value if hasattr(prev_target_state, "value") else str(prev_target_state),
+                "state_after": target.state.value if hasattr(target.state, "value") else str(target.state),
+                "locked_track_id": target.track_id,
+                "reason": reason,
+                "candidates": cands_list,
+                "auto_adds": auto_adds_list,
+                "rollbacks": rollbacks_list,
+            })
+
         # Case A: On frames where ReID is NOT evaluated
         if not should_reid or self.identity.is_empty:
+            cands_summary = [
+                {
+                    "track_id": tr.track_id,
+                    "box": [round(float(c), 1) for c in tr.box.as_xyxy()],
+                    "blur_score": 100.0,
+                    "filtered": False,
+                    "filter_reason": None,
+                    "effective_sim": 0.0,
+                    "manual_sim": 0.0,
+                    "auto_sim": 0.0,
+                    "top3_gallery_indices": [],
+                }
+                for tr in track_res.tracks
+            ]
             if current_track is not None:
                 if is_occluded:
                     self.target_manager.mark_tracking(current_track, track_res.frame_id, timestamp_ms)
                     self.target_manager.target.state = TargetState.OCCLUDED
+                    _emit_decision_log("OCCLUDED_FREEZE", cands_summary, [], [])
                 elif target.state == TargetState.CONFIRMED:
                     self.target_manager.mark_confirmed(current_track, track_res.frame_id, timestamp_ms)
+                    _emit_decision_log("FOLLOW_ID", cands_summary, [], [])
                 elif target.state in (TargetState.TRACKING, TargetState.LOCKED, TargetState.OCCLUDED):
                     self.target_manager.mark_tracking(current_track, track_res.frame_id, timestamp_ms)
+                    _emit_decision_log("FOLLOW_ID", cands_summary, [], [])
             elif current_track is None and target.state in (TargetState.TRACKING, TargetState.LOCKED, TargetState.OCCLUDED, TargetState.CONFIRMED):
                 self._last_candidate_scores.clear()
                 self.target_manager.mark_lost(timestamp_ms)
+                _emit_decision_log("TARGET_LOST", cands_summary, [], [])
             return
 
         # Case B: On frames where ReID IS evaluated (or target is LOST / OCCLUDED)
@@ -1710,6 +1782,51 @@ class MultiCameraPipeline:
             f"Candidates=[{', '.join(cand_telemetry)}] | Gallery=(man={self.identity.manual_count}, auto={self.identity.auto_count})"
         )
 
+        # Build candidate decision logs
+        cand_match_map: Dict[int, Tuple[float, float, float, List[int]]] = {}
+        for (cand_tr, _), (eff_s, man_s, auto_s, top3) in zip(candidates_to_extract, match_details):
+            cand_match_map[cand_tr.track_id] = (
+                float(eff_s),
+                float(man_s),
+                float(auto_s),
+                list(top3) if isinstance(top3, (list, tuple)) else [],
+            )
+
+        def _build_cands_log() -> List[Dict[str, Any]]:
+            records = []
+            for tr in track_res.tracks:
+                eff_s, man_s, auto_s, top3 = cand_match_map.get(tr.track_id, (0.0, 0.0, 0.0, []))
+                is_filt = False
+                filt_reason = None
+                b_score = 100.0
+                c_crop = worker.extract_crop(frame, tr.box)
+                if c_crop is None or c_crop.size == 0 or c_crop.shape[0] < 12 or c_crop.shape[1] < 12:
+                    is_filt = True
+                    filt_reason = "crop_too_small"
+                    b_score = 0.0
+                else:
+                    try:
+                        gray = cv2.cvtColor(c_crop, cv2.COLOR_BGR2GRAY)
+                        b_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+                    except Exception:
+                        pass
+                    if b_score <= self.config.reid.min_sharpness and tr.track_id != target.track_id:
+                        is_filt = True
+                        filt_reason = "blur_low"
+
+                records.append({
+                    "track_id": tr.track_id,
+                    "box": [round(float(c), 1) for c in tr.box.as_xyxy()],
+                    "blur_score": round(float(b_score), 2),
+                    "filtered": is_filt,
+                    "filter_reason": filt_reason,
+                    "effective_sim": round(eff_s, 4),
+                    "manual_sim": round(man_s, 4),
+                    "auto_sim": round(auto_s, 4),
+                    "top3_gallery_indices": top3,
+                })
+            return records
+
         # Scenario 1: Target was actively tracking, locked, confirmed, uncertain or occluded
         if target.state in (TargetState.TRACKING, TargetState.LOCKED, TargetState.OCCLUDED, TargetState.CONFIRMED, TargetState.UNCERTAIN):
             if current_track is not None:
@@ -1719,6 +1836,7 @@ class MultiCameraPipeline:
                     self.target_manager.target.state = TargetState.OCCLUDED
                     self._current_track_misses = 0
                     self._switch_consensus.clear()
+                    _emit_decision_log("OCCLUDED_FREEZE", _build_cands_log(), [], [])
                     return
 
                 # Normal non-occluded verification using Phase 1 logic
@@ -1729,6 +1847,7 @@ class MultiCameraPipeline:
                 if has_ambiguity:
                     self.target_manager.mark_uncertain(timestamp_ms)
                     self._current_track_misses += 1
+                    _emit_decision_log("AMBIGUOUS", _build_cands_log(), [], [])
                     return
 
                 if current_sim >= match_thresh:
@@ -1736,6 +1855,7 @@ class MultiCameraPipeline:
                     self._switch_consensus.clear()
                     self.target_manager.mark_confirmed(current_track, track_res.frame_id, timestamp_ms)
 
+                    auto_adds = []
                     # Auto-enrollment (strictly when clear and quality passes)
                     if current_crop is not None and current_emb is not None and current_sim >= auto_thresh:
                         self.identity.add_auto(
@@ -1747,6 +1867,8 @@ class MultiCameraPipeline:
                             frame_id=track_res.frame_id,
                             track_id=current_track.track_id,
                         )
+                        auto_adds.append(current_track.track_id)
+                    _emit_decision_log("CONFIRM_INCUMBENT", _build_cands_log(), auto_adds, [])
                     return
                 is_uncertain = (uncertain_min <= current_sim <= uncertain_max)
                 has_superior_candidate = (
@@ -1758,6 +1880,7 @@ class MultiCameraPipeline:
                 if is_uncertain and not has_superior_candidate:
                     self._current_track_misses += 1
                     self.target_manager.mark_uncertain(timestamp_ms)
+                    _emit_decision_log("UNCERTAIN_INCUMBENT", _build_cands_log(), [], [])
                     return
                 
                 # If we reach here, current_sim is either < uncertain_min, or we are in the 
@@ -1779,6 +1902,7 @@ class MultiCameraPipeline:
                                     f"[ANTI-SCOOP] Lock-switch to Track #{other_tid} REJECTED: "
                                     f"manual anchor check failed (sim_manual={best_other_man_sim:.3f})"
                                 )
+                                _emit_decision_log("REJECT", _build_cands_log(), [], [])
 
                         if manual_anchor_pass:
                             # Immediate switch when margin is decisive or current track is very weak
@@ -1801,6 +1925,7 @@ class MultiCameraPipeline:
                     # Purge auto-enrolled entries from the deposed track AND any stale entries for the new track
                     self.identity.rollback_auto_entries(for_track_id=current_track.track_id)
                     self.identity.rollback_auto_entries(for_track_id=best_other_track.track_id)
+                    rollbacks = [current_track.track_id, best_other_track.track_id]
                     self._switch_consensus.clear()
                     self._current_track_misses = 0
 
@@ -1810,6 +1935,7 @@ class MultiCameraPipeline:
                         timestamp_ms=timestamp_ms,
                     )
                     self.target_manager.mark_confirmed(best_other_track, track_res.frame_id, timestamp_ms)
+                    auto_adds = []
                     if best_other_crop is not None and best_other_emb is not None and best_other_sim >= auto_thresh:
                         self.identity.add_auto(
                             crop=best_other_crop,
@@ -1820,6 +1946,8 @@ class MultiCameraPipeline:
                             frame_id=track_res.frame_id,
                             track_id=best_other_track.track_id,
                         )
+                        auto_adds.append(best_other_track.track_id)
+                    _emit_decision_log("SWITCH", _build_cands_log(), auto_adds, rollbacks)
                     return
 
                 self._current_track_misses += 1
@@ -1830,14 +1958,17 @@ class MultiCameraPipeline:
                     )
                     self.target_manager.mark_rejected(timestamp_ms)
                     self.target_manager.mark_searching(timestamp_ms)
+                    _emit_decision_log("REJECT", _build_cands_log(), [], [])
                 else:
                     self.target_manager.mark_uncertain(timestamp_ms)
+                    _emit_decision_log("UNCERTAIN_INCUMBENT", _build_cands_log(), [], [])
             else:
                 # Current track dropped out of view
                 # Reacquisition is handled exclusively by Scenario 2 (evidence-gated)
                 # to prevent false latching onto bystanders.
                 self.target_manager.mark_lost(timestamp_ms)
                 self.target_manager.mark_searching(timestamp_ms)
+                _emit_decision_log("TARGET_LOST", _build_cands_log(), [], [])
 
         # Scenario 2: Target was LOST, SEARCHING, or REJECTED — Evidence-gated reacquisition (anti-scoop)
         else:
@@ -1963,8 +2094,13 @@ class MultiCameraPipeline:
                         # Let Scenario 1 (mark_confirmed path) handle auto-enrollment
                         # after the reacquired track passes match_thresh for several frames.
                         # This prevents gallery contamination from false reacquisitions.
-                elif evidence_dec.diagnostic_log:
-                    logger.debug(evidence_dec.diagnostic_log)
+                        _emit_decision_log("REACQ", _build_cands_log(), [], [old_track_id] if old_track_id is not None else [])
+                else:
+                    if evidence_dec.diagnostic_log:
+                        logger.debug(evidence_dec.diagnostic_log)
+                    _emit_decision_log("REACQ_PENDING", _build_cands_log(), [], [])
+            else:
+                _emit_decision_log("REJECT", _build_cands_log(), [], [])
 
         new_target_state = target.state
         if prev_target_state in (TargetState.TRACKING, TargetState.LOCKED) and new_target_state == TargetState.LOST:
@@ -2525,6 +2661,13 @@ class MultiCameraPipeline:
             if getattr(self, "recording_manager", None):
                 try:
                     self.recording_manager.stop_all()
+                except Exception:
+                    pass
+
+            # Close decision logger if active
+            if hasattr(self, "decision_logger") and self.decision_logger is not None:
+                try:
+                    self.decision_logger.close()
                 except Exception:
                     pass
 

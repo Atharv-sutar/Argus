@@ -30,7 +30,8 @@ tracking:
   appearance_thresh: 0.35
   ema_alpha: 0.9
 reid:
-  model_name: auto
+  model_name: osnet_x0_25
+  require_pretrained_weights: true
   match_threshold: 0.75
   reacquisition_threshold: 0.78
   auto_add_threshold: 0.82
@@ -91,3 +92,6 @@ recording:
     max_storage_gb: 50.0
     max_age_days: 7.0
     cleanup_interval_s: 300.0
+diagnostics:
+  decision_log: false
+  decision_log_path: "logs/decision_log.jsonl"

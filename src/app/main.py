@@ -366,6 +366,7 @@ def run_multi_camera_app(
     config_path: str = "configs/default.yaml",
     graph_path: Optional[str] = None,
     video_dir: Optional[str] = None,
+    source: Optional[str] = None,
     no_gui: bool = True,
     serve_ui: bool = True,
     ui_port: int = 8765,
@@ -381,7 +382,35 @@ def run_multi_camera_app(
 
     loaded_graph = None
     target_graph_file = graph_path or config.multi_camera.graph_file
-    if video_dir is not None:
+    if source is not None:
+        logger.info(f"Configuring single camera source override: '{source}'")
+        from src.multi_camera.camera_graph import CameraGraph
+        from src.core.multi_camera_types import CameraNodeConfig, SourceType
+        loaded_graph = CameraGraph()
+
+        src_val = int(source) if str(source).isdigit() else source
+        src_type = (
+            SourceType.WEBCAM
+            if isinstance(src_val, int)
+            else (
+                SourceType.SYNTHETIC
+                if str(src_val).lower() == "synthetic"
+                else SourceType.VIDEO_FILE
+            )
+        )
+
+        loaded_graph.add_node(
+            CameraNodeConfig(
+                camera_id="cam_0",
+                name=f"Camera ({Path(str(source)).stem if not isinstance(src_val, int) else source})",
+                source=src_val,
+                source_type=src_type,
+                enabled=True,
+                position_x=320.0,
+                position_y=240.0,
+            )
+        )
+    elif video_dir is not None:
         logger.info(f"Auto-loading multi-camera topology from video directory: '{video_dir}'")
         loaded_graph = auto_load_video_directory(video_dir)
         try:
@@ -885,6 +914,7 @@ def main() -> None:
             config_path=args.config,
             graph_path=args.graph,
             video_dir=args.video_dir,
+            source=args.source,
             no_gui=True,
             serve_ui=True,
             ui_port=args.ui_port,
