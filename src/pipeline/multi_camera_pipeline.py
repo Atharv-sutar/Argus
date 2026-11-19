@@ -93,6 +93,7 @@ class MultiCameraPipeline:
             self.reid_extractor = PyTorchReIDExtractor(
                 model_name=actual_model_name,
                 device=config.inference.device,
+                require_pretrained_weights=getattr(config.reid, "require_pretrained_weights", False),
             )
 
         # 2. Identity Manager & Target Manager
