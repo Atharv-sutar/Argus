@@ -419,20 +419,31 @@ class IdentityManager:
             auto_mat = np.stack([e[0].vector if isinstance(e, tuple) else e.vector for e in ident.provisional_gallery])
             
         for emb in embs:
+            emb_dim = len(emb.vector) if emb.vector is not None else 0
             man_sim = 0.0
             auto_sim = 0.0
-            if man_mat is not None:
+            top3 = []
+
+            all_mats = []
+            if man_mat is not None and len(man_mat) > 0 and man_mat.shape[1] == emb_dim:
                 man_sim = float(np.max(np.dot(man_mat, emb.vector)))
-            if auto_mat is not None:
+                all_mats.append(man_mat)
+            if auto_mat is not None and len(auto_mat) > 0 and auto_mat.shape[1] == emb_dim:
                 auto_sim = float(np.max(np.dot(auto_mat, emb.vector)))
+                all_mats.append(auto_mat)
+
+            if all_mats:
+                all_mat = np.vstack(all_mats) if len(all_mats) > 1 else all_mats[0]
+                sims = np.dot(all_mat, emb.vector)
+                top3 = [int(i) for i in np.argsort(sims)[::-1][:3]]
                 
             # Cap auto_sim when manual entries exist to prevent auto-enrolled near-duplicates
             # from inflating the effective similarity beyond what human-verified gallery supports.
-            if man_mat is not None and len(man_mat) > 0 and auto_sim > man_sim + 0.05:
+            if man_mat is not None and len(man_mat) > 0 and man_mat.shape[1] == emb_dim and auto_sim > man_sim + 0.05:
                 auto_sim = man_sim + 0.05
                 
             eff_sim = max(man_sim, auto_sim)
-            results.append((eff_sim, man_sim, auto_sim, -1))
+            results.append((eff_sim, man_sim, auto_sim, top3))
         return results
         
     def add_auto(

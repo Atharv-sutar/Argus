@@ -92,3 +92,6 @@ recording:
     max_storage_gb: 50.0
     max_age_days: 7.0
     cleanup_interval_s: 300.0
+diagnostics:
+  decision_log: false
+  decision_log_path: "logs/decision_log.jsonl"

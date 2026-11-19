@@ -174,6 +174,13 @@ class RecordingConfig:
 
 
 @dataclass
+class DiagnosticsConfig:
+    """Configuration for ReID decision logging and system diagnostics."""
+    decision_log: bool = False
+    decision_log_path: str = "logs/decision_log.jsonl"
+
+
+@dataclass
 class AppConfig:
     camera: CameraConfig = field(default_factory=CameraConfig)
     inference: InferenceConfig = field(default_factory=InferenceConfig)
@@ -186,6 +193,7 @@ class AppConfig:
     playback: PlaybackConfig = field(default_factory=PlaybackConfig)
     forensic: ForensicConfig = field(default_factory=ForensicConfig)
     recording: RecordingConfig = field(default_factory=RecordingConfig)
+    diagnostics: DiagnosticsConfig = field(default_factory=DiagnosticsConfig)
 
     @classmethod
     def from_yaml(cls, path: Union[str, Path]) -> AppConfig:
@@ -235,6 +243,9 @@ class AppConfig:
         ret_config = RecordingRetentionConfig(**ret_data) if ret_data else RecordingRetentionConfig()
         recording_config = RecordingConfig(**rec_data, retention=ret_config) if rec_data else RecordingConfig()
 
+        diag_data = data.get("diagnostics", {})
+        diagnostics_config = DiagnosticsConfig(**diag_data) if diag_data else DiagnosticsConfig()
+
         return cls(
             camera=CameraConfig(**camera_data),
             inference=InferenceConfig(**inference_data),
@@ -247,6 +258,7 @@ class AppConfig:
             playback=playback_config,
             forensic=forensic_config,
             recording=recording_config,
+            diagnostics=diagnostics_config,
         )
 
 
