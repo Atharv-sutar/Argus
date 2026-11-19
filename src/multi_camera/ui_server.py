@@ -1033,7 +1033,12 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                         elif "max_search_radius" in search_pl:
                             cfg.multi_camera.search.max_radius = int(search_pl["max_search_radius"])
                         if "total_recovery_timeout" in search_pl:
-                            cfg.multi_camera.search.total_recovery_timeout = float(search_pl["total_recovery_timeout"])
+                            if getattr(getattr(cfg, "fixes", None), "apply_settings_live", False):
+                                # The dataclass field is total_recovery_timeout_s; the legacy line
+                                # below sets an attribute nothing reads.
+                                cfg.multi_camera.search.total_recovery_timeout_s = float(search_pl["total_recovery_timeout"])
+                            else:
+                                cfg.multi_camera.search.total_recovery_timeout = float(search_pl["total_recovery_timeout"])
                             
                     if "reid" in payload:
                         reid_pl = payload["reid"]

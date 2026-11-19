@@ -101,3 +101,9 @@ target:
   switch_when_better: false
   score_all_tracks: false
   blur_gate_scope: none
+fixes:
+  serialize_pipeline_access: false
+  reset_state_on_target_change: false
+  auto_add_handles_time_reset: false
+  per_track_handoff_confirmation: false
+  apply_settings_live: false

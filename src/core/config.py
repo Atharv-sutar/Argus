@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Tuple, Union
 import yaml
 
 
@@ -198,6 +198,25 @@ class TargetConfig:
 
 
 @dataclass
+class FixesConfig:
+    """Bug fixes that change runtime behaviour (all default OFF = legacy behaviour)."""
+    # Serialize step() with operator actions from the HTTP thread (select/correct/clear target,
+    # manual sample, handoff confirm/reject, undo/redo, camera focus) on the pipeline lock.
+    serialize_pipeline_access: bool = False
+    # On new target selection / clear: drop the previous target's gallery thumbnails, evidence,
+    # switch consensus, miss counter, pending handoff and auto-add rate-limit clock.
+    reset_state_on_target_change: bool = False
+    # Auto-add rate limiter: a timestamp that jumps backwards (video loop, new clip) starts a
+    # new timeline instead of blocking enrollment until the old timestamp is passed again.
+    auto_add_handles_time_reset: bool = False
+    # Cross-camera handoff: the N confirmation frames must come from the same track ID.
+    per_track_handoff_confirmation: bool = False
+    # /api/settings: write total_recovery_timeout_s (was a typo'd attribute) and push a new
+    # match_threshold into the identity manager and evidence engine, not just the config.
+    apply_settings_live: bool = False
+
+
+@dataclass
 class DiagnosticsConfig:
     """Configuration for ReID decision logging and system diagnostics."""
     decision_log: bool = False
@@ -219,6 +238,7 @@ class AppConfig:
     recording: RecordingConfig = field(default_factory=RecordingConfig)
     diagnostics: DiagnosticsConfig = field(default_factory=DiagnosticsConfig)
     target: TargetConfig = field(default_factory=TargetConfig)
+    fixes: FixesConfig = field(default_factory=FixesConfig)
 
     @classmethod
     def from_yaml(cls, path: Union[str, Path]) -> AppConfig:
@@ -274,6 +294,9 @@ class AppConfig:
         target_data = data.get("target", {})
         target_config = TargetConfig(**target_data) if target_data else TargetConfig()
 
+        fixes_data = data.get("fixes", {})
+        fixes_config = FixesConfig(**fixes_data) if fixes_data else FixesConfig()
+
         return cls(
             camera=CameraConfig(**camera_data),
             inference=InferenceConfig(**inference_data),
@@ -288,6 +311,7 @@ class AppConfig:
             recording=recording_config,
             diagnostics=diagnostics_config,
             target=target_config,
+            fixes=fixes_config,
         )
 
 

@@ -31,6 +31,9 @@ class _NullStore:
     def remove_identity(self, *a, **k):
         pass
 
+    def clear(self, *a, **k):
+        pass
+
     def __str__(self) -> str:
         return "null"
 

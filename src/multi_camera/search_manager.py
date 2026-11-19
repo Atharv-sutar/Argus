@@ -170,7 +170,12 @@ class SearchManager:
         return newly_activated if newly_activated else None
 
     def on_candidate_found(
-        self, camera_id: str, similarity: float, uncertain_min: float = 0.73, auto_accept_min: float = 0.78
+        self,
+        camera_id: str,
+        similarity: float,
+        uncertain_min: float = 0.73,
+        auto_accept_min: float = 0.78,
+        track_id: Optional[int] = None,
     ) -> HandoffDecision:
         """
         Called when a ReID candidate is found on a camera.
@@ -185,7 +190,8 @@ class SearchManager:
         Returns:
             HandoffDecision indicating whether to wait, request human confirmation, or auto-accept.
         """
-        count = self._state.record_candidate_confirmation(camera_id)
+        per_track = getattr(self, "per_track_confirmation", False)
+        count = self._state.record_candidate_confirmation(camera_id, track_id=track_id if per_track else None)
         logger.debug(
             f"Candidate on '{camera_id}': similarity={similarity:.3f}, "
             f"confirmation {count}/{self._config.confirmation_frames}"
