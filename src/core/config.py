@@ -2,10 +2,41 @@
 
 from __future__ import annotations
 
+import dataclasses
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Union
 import yaml
+
+logger = logging.getLogger(__name__)
+
+# Keys that existed in older configs but were never read by the code. They are ignored
+# (with a debug message) so old YAML files keep loading.
+_RETIRED_KEYS = {
+    "inference": {"half_precision", "enable_cross_camera_batching", "max_batch_size"},
+    "tracking": {"appearance_thresh"},
+    "reid": {"auto_add_min_consecutive", "diversity_threshold", "max_gallery_size",
+             "min_crop_width", "min_crop_height", "tracklet_cleave_threshold"},
+    "search": {"candidate_filter_rate"},
+    "playback": {"fast_scan_auto_accept", "fast_scan_auto_reject"},
+    "recording": {"container_format"},
+}
+
+
+def _build(cls, data: Dict[str, Any], section: str, **extra: Any):
+    """Instantiate a config dataclass, dropping retired/unknown keys instead of crashing."""
+    known = {f.name for f in dataclasses.fields(cls)}
+    kwargs = {}
+    for k, v in (data or {}).items():
+        if k in known:
+            kwargs[k] = v
+        elif k in _RETIRED_KEYS.get(section, set()):
+            logger.debug(f"[CONFIG] Ignoring retired key '{section}.{k}'")
+        else:
+            logger.warning(f"[CONFIG] Ignoring unknown key '{section}.{k}'")
+    kwargs.update(extra)
+    return cls(**kwargs)
 
 
 @dataclass
@@ -20,12 +51,9 @@ class CameraConfig:
 @dataclass
 class InferenceConfig:
     device: str = "auto"
-    half_precision: bool = False
     engine_type: str = "auto"
     engine_cache_dir: str = "models/trt_cache"
     batch_size: int = 4
-    enable_cross_camera_batching: bool = True
-    max_batch_size: int = 8
 
 
 @dataclass
@@ -46,7 +74,6 @@ class TrackingConfig:
     min_box_area: float = 100.0
     gmc_method: str = "sparseOptFlow"
     reid_weight: float = 0.5
-    appearance_thresh: float = 0.35
     ema_alpha: float = 0.9
     # Step 3 (default OFF): treat match_thresh as a ByteTrack-style maximum association
     # cost (0.8 => cost <= 0.8) instead of 1 - match_thresh (0.8 => IoU >= 0.8); run YOLO at
@@ -64,20 +91,14 @@ class ReIDConfig:
     match_threshold: float = 0.75
     reacquisition_threshold: float = 0.78
     auto_add_threshold: float = 0.82
-    auto_add_min_consecutive: int = 3
-    diversity_threshold: float = 0.92
-    max_gallery_size: int = 25
     min_margin: float = 0.05
     lock_switch_margin: float = 0.08
     extract_interval_frames: int = 3
-    min_crop_width: int = 32
-    min_crop_height: int = 64
     event_driven_reid: bool = True  # Uncertainty-triggered ReID: bypass redundant per-frame extraction during steady tracking
-    
+
     # PROVISIONAL / INITIAL thresholds pending calibration against real camera footage
     # (resolution, lighting, and noise vary significantly per camera)
     min_sharpness: float = 60.0 # Laplacian variance threshold for blur filtering
-    tracklet_cleave_threshold: float = 0.3 # Cosine shift threshold to split poisoned tracklets
     uncertain_band_min: float = 0.73
     uncertain_band_max: float = 0.78
 
@@ -89,18 +110,6 @@ class ReIDConfig:
     @similarity_threshold.setter
     def similarity_threshold(self, val: float) -> None:
         self.match_threshold = val
-
-    @property
-    def gallery_size(self) -> int:
-        return self.max_gallery_size
-
-    @gallery_size.setter
-    def gallery_size(self, val: int) -> None:
-        self.max_gallery_size = val
-
-
-
-
 
 
 @dataclass
@@ -123,10 +132,7 @@ class SearchConfig:
     max_radius: int = 3
     total_recovery_timeout_s: float = 30.0
     confirmation_frames: int = 3
-    
-    # PROVISIONAL / INITIAL threshold pending Phase 5 calibration
-    # Do not hardcode any logic that assumes this is strictly 50%
-    candidate_filter_rate: float = 0.5
+
     handoff_confirm_delay_s: float = 2.0
 
 
@@ -134,8 +140,6 @@ class SearchConfig:
 @dataclass
 class PlaybackConfig:
     """Configuration for playback and fast-scan processing modes."""
-    fast_scan_auto_accept: float = 0.82
-    fast_scan_auto_reject: float = 0.78
     fast_scan_rewind_s: float = 5.0
 
 @dataclass
@@ -176,7 +180,6 @@ class RecordingConfig:
     enabled: bool = True
     output_dir: str = "recordings"
     segment_duration_s: float = 300.0
-    container_format: str = "mp4"
     retention: RecordingRetentionConfig = field(default_factory=RecordingRetentionConfig)
 
 
@@ -256,67 +259,47 @@ class AppConfig:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> AppConfig:
-        """Construct AppConfig from a dictionary with nested dataclasses."""
-        camera_data = data.get("camera", {})
-        inference_data = data.get("inference", {})
-        detection_data = data.get("detection", {})
-        tracking_data = data.get("tracking", {})
-        reid_data = data.get("reid", {})
-        vis_data = data.get("visualization", {})
-        mc_data = data.get("multi_camera", {})
+        """Construct AppConfig from a dictionary with nested dataclasses.
 
-        search_data = mc_data.pop("search", {}) if isinstance(mc_data, dict) else {}
-        search_config = SearchConfig(**search_data) if search_data else SearchConfig()
-        mc_config = MultiCameraConfig(**mc_data, search=search_config) if mc_data else MultiCameraConfig()
+        The input dict is not modified. Retired keys (see _RETIRED_KEYS) and unknown keys are
+        ignored with a log message instead of raising TypeError.
+        """
+        data = data or {}
 
-        playback_data = data.get("playback", {})
-        playback_config = PlaybackConfig(**playback_data) if playback_data else PlaybackConfig()
+        def section(name: str) -> Dict[str, Any]:
+            value = data.get(name) or {}
+            return dict(value) if isinstance(value, dict) else {}
 
-        storage_data = data.get("storage", {})
-        storage_config = StorageConfig(**storage_data) if storage_data else StorageConfig()
+        mc_data = section("multi_camera")
+        search_config = _build(SearchConfig, mc_data.pop("search", None) or {}, "search")
+        mc_config = _build(MultiCameraConfig, mc_data, "multi_camera", search=search_config)
 
-        forensic_data = data.get("forensic", {})
-        
-        # Handle tuple conversion for resolution
-        if "resolution" in forensic_data and isinstance(forensic_data["resolution"], list):
+        forensic_data = section("forensic")
+        if isinstance(forensic_data.get("resolution"), list):
             forensic_data["resolution"] = tuple(forensic_data["resolution"])
-            
-        forensic_config = ForensicConfig(**forensic_data) if forensic_data else ForensicConfig()
 
-        rec_data = data.get("recording", {})
-        ret_data = rec_data.pop("retention", {}) if isinstance(rec_data, dict) else {}
-        ret_config = RecordingRetentionConfig(**ret_data) if ret_data else RecordingRetentionConfig()
-        recording_config = RecordingConfig(**rec_data, retention=ret_config) if rec_data else RecordingConfig()
-
-        diag_data = data.get("diagnostics", {})
-        diagnostics_config = DiagnosticsConfig(**diag_data) if diag_data else DiagnosticsConfig()
-
-        target_data = data.get("target", {})
-        target_config = TargetConfig(**target_data) if target_data else TargetConfig()
-
-        fixes_data = data.get("fixes", {})
-        fixes_config = FixesConfig(**fixes_data) if fixes_data else FixesConfig()
+        rec_data = section("recording")
+        ret_config = _build(RecordingRetentionConfig, rec_data.pop("retention", None) or {}, "retention")
+        recording_config = _build(RecordingConfig, rec_data, "recording", retention=ret_config)
 
         return cls(
-            camera=CameraConfig(**camera_data),
-            inference=InferenceConfig(**inference_data),
-            detection=DetectionConfig(**detection_data),
-            tracking=TrackingConfig(**tracking_data),
-            reid=ReIDConfig(**reid_data),
-            visualization=VisualizationConfig(**vis_data),
+            camera=_build(CameraConfig, section("camera"), "camera"),
+            inference=_build(InferenceConfig, section("inference"), "inference"),
+            detection=_build(DetectionConfig, section("detection"), "detection"),
+            tracking=_build(TrackingConfig, section("tracking"), "tracking"),
+            reid=_build(ReIDConfig, section("reid"), "reid"),
+            visualization=_build(VisualizationConfig, section("visualization"), "visualization"),
             multi_camera=mc_config,
-            storage=storage_config,
-            playback=playback_config,
-            forensic=forensic_config,
+            storage=_build(StorageConfig, section("storage"), "storage"),
+            playback=_build(PlaybackConfig, section("playback"), "playback"),
+            forensic=_build(ForensicConfig, forensic_data, "forensic"),
             recording=recording_config,
-            diagnostics=diagnostics_config,
-            target=target_config,
-            fixes=fixes_config,
+            diagnostics=_build(DiagnosticsConfig, section("diagnostics"), "diagnostics"),
+            target=_build(TargetConfig, section("target"), "target"),
+            fixes=_build(FixesConfig, section("fixes"), "fixes"),
         )
 
-
     def to_dict(self) -> Dict[str, Any]:
-        import dataclasses
         return dataclasses.asdict(self)
 
     def save(self, path: Union[str, Path]) -> None:

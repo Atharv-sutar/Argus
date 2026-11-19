@@ -15,7 +15,6 @@ class BaseCamera(ABC):
     @abstractmethod
     def is_opened(self) -> bool:
         """Return True if the camera stream is currently active/open."""
-        pass
 
     @abstractmethod
     def read(self) -> Tuple[bool, Optional[np.ndarray], float]:
@@ -28,12 +27,10 @@ class BaseCamera(ABC):
                 - frame: BGR image array or None on failure.
                 - timestamp_ms: Frame acquisition timestamp in milliseconds.
         """
-        pass
 
     @abstractmethod
     def release(self) -> None:
         """Release any hardware or stream resources."""
-        pass
 
 
 class BaseDetector(ABC):
@@ -57,7 +54,6 @@ class BaseDetector(ABC):
         Returns:
             DetectionResult: Detected bounding boxes and metadata.
         """
-        pass
 
     def detect_batch(
         self,
@@ -102,12 +98,10 @@ class BaseTracker(ABC):
         Returns:
             TrackResult: Active persistent tracks with stable IDs.
         """
-        pass
 
     @abstractmethod
     def reset(self) -> None:
         """Reset internal tracker state (e.g. on stream restart)."""
-        pass
 
 
 class BaseReID(ABC):
@@ -124,12 +118,10 @@ class BaseReID(ABC):
         Returns:
             Embedding: Normalized feature vector.
         """
-        pass
 
     @abstractmethod
     def extract_batch(self, crops: list[np.ndarray]) -> list[Embedding]:
         """Extract appearance embeddings for a batch of person crops."""
-        pass
 
 
 class BaseVectorStore(ABC):
@@ -138,7 +130,6 @@ class BaseVectorStore(ABC):
     @abstractmethod
     def add(self, embedding: Embedding, identity_id: str) -> None:
         """Add an embedding associated with an identity ID."""
-        pass
 
     @abstractmethod
     def search(self, embedding: Embedding, top_k: int = 1) -> list[Tuple[str, float]]:
@@ -148,10 +139,8 @@ class BaseVectorStore(ABC):
         Returns:
             list[Tuple[str, float]]: List of (identity_id, similarity_score) ranked by similarity.
         """
-        pass
 
     @abstractmethod
     def clear(self) -> None:
         """Clear all stored embeddings."""
-        pass
 

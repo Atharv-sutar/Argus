@@ -1,7 +1,6 @@
 """Comprehensive integration tests for live multi-camera production scenarios."""
 
 import numpy as np
-import pytest
 
 from src.camera.capture import SyntheticCamera
 from src.core.config import AppConfig

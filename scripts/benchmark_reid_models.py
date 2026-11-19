@@ -60,7 +60,7 @@ def main():
     os_model = osnet_x0_25(pretrained=True).eval()
 
     # 2. Load crops
-    scratch_dir = r"C:\Users\athar\.gemini\antigravity-ide\brain\c2a87c82-e77c-4b55-8b21-41f2212e7450\scratch"
+    scratch_dir = os.environ.get("ARGUS_REID_CROPS_DIR", os.path.join("data", "reid_crops"))  # set ARGUS_REID_CROPS_DIR to your reid_cand_*.png folder
     crop_paths = sorted(glob.glob(os.path.join(scratch_dir, "reid_cand_*.png")))
 
     tracks_map = {}

@@ -1,7 +1,6 @@
 """Regression tests for runtime bugs found in the clean-up audit (see fixes.* in configs/default.yaml)."""
 
 import threading
-import time
 
 import numpy as np
 import pytest
@@ -15,7 +14,7 @@ from src.multi_camera.camera_graph import CameraGraph
 from src.multi_camera.search_manager import SearchManager
 from src.pipeline.multi_camera_pipeline import MultiCameraPipeline
 
-from tests.unit.pipeline._lock_harness import FRAME, build, emb_with_sim, seed_and_lock, tracks
+from tests.unit.pipeline._lock_harness import FRAME, build, emb_with_sim, seed_and_lock
 
 
 class _Det(BaseDetector):

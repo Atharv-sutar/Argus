@@ -3,13 +3,9 @@
 import json
 import os
 import tempfile
-import time
-from pathlib import Path
-import pytest
 
 from src.reid.decision_logger import DecisionLogger
 from src.core.config import AppConfig
-from src.core.types import Track, BoundingBox, TargetState
 
 
 def test_decision_logger_basic_write():

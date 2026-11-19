@@ -21,7 +21,7 @@ def _ensure_package(package_name: str, min_version: str = None) -> None:
 
         # We first check if it's already satisfied to avoid slow pip invocations
         try:
-            version = metadata.version(package_name)
+            metadata.version(package_name)  # raises PackageNotFoundError when missing
             if min_version:
                 # Basic string comparison (not perfect, but fine for major/minor like 8.3.0 vs 8.4.0)
                 # For safety, just run pip install if we need a specific version

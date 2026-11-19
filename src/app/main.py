@@ -26,8 +26,8 @@ except ImportError:
 from src.core.config import AppConfig
 from src.core.logging_config import setup_logging
 from src.core.multi_camera_types import CameraNodeConfig, SourceType
-from src.core.types import Target, TargetState, TrackResult
-from src.camera.directory_loader import auto_load_video_directory, is_video_directory
+from src.core.types import TargetState
+from src.camera.directory_loader import auto_load_video_directory
 from src.multi_camera.camera_graph import CameraGraph
 from src.multi_camera.ui_server import is_shutdown_requested, run_ui_server
 from src.pipeline.multi_camera_pipeline import MultiCameraPipeline
@@ -511,7 +511,7 @@ def run_multi_camera_app(
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
         cv2.setMouseCallback(window_name, on_mouse)
 
-    logger.info(f"Starting Argus Multi-Camera Surveillance. State: MONITORING")
+    logger.info("Starting Argus Multi-Camera Surveillance. State: MONITORING")
 
     try:
         while pipeline.is_running and not is_shutdown_requested():
@@ -644,7 +644,7 @@ def run_multi_camera_app(
                 # Check if search timed out or no search cameras → back to TARGET_TRACKING
                 if not pipeline.search_manager.is_searching or len(search_cam_ids) == 0:
                     ui_state = "TARGET_TRACKING"
-                    logger.info(f"[UI] SEARCH_VIEW → TARGET_TRACKING (search ended)")
+                    logger.info("[UI] SEARCH_VIEW → TARGET_TRACKING (search ended)")
 
             # ===== HANDOFF_CONFIRM STATE =====
             elif ui_state == "HANDOFF_CONFIRM":

@@ -6,12 +6,9 @@ camera:
   fps: 30
 inference:
   device: auto
-  half_precision: false
   engine_type: auto
   engine_cache_dir: models/trt_cache
   batch_size: 4
-  enable_cross_camera_batching: true
-  max_batch_size: 8
 detection:
   model_name: yolo11n.pt
   confidence_threshold: 0.4
@@ -27,7 +24,6 @@ tracking:
   min_box_area: 100.0
   gmc_method: sparseOptFlow
   reid_weight: 0.5
-  appearance_thresh: 0.35
   ema_alpha: 0.9
   fix_association_cost: false
   low_conf_detection_threshold: 0.2
@@ -37,16 +33,10 @@ reid:
   match_threshold: 0.75
   reacquisition_threshold: 0.78
   auto_add_threshold: 0.82
-  auto_add_min_consecutive: 3
-  diversity_threshold: 0.92
-  max_gallery_size: 25
   min_margin: 0.05
   lock_switch_margin: 0.08
   extract_interval_frames: 3
-  min_crop_width: 32
-  min_crop_height: 64
   min_sharpness: 60.0
-  tracklet_cleave_threshold: 0.3
   uncertain_band_min: 0.73
   uncertain_band_max: 0.78
   event_driven_reid: true
@@ -68,15 +58,12 @@ multi_camera:
     max_radius: 3
     total_recovery_timeout_s: 30.0
     confirmation_frames: 3
-    candidate_filter_rate: 0.5
     handoff_confirm_delay_s: 2.0
   ui_port: 8765
 storage:
   db_path: data/identities.db
   enabled: true
 playback:
-  fast_scan_auto_accept: 0.82
-  fast_scan_auto_reject: 0.78
   fast_scan_rewind_s: 5.0
 forensic:
   target_fps: 15.0
@@ -89,7 +76,6 @@ recording:
   enabled: true
   output_dir: recordings
   segment_duration_s: 300.0
-  container_format: mp4
   retention:
     max_storage_gb: 50.0
     max_age_days: 7.0

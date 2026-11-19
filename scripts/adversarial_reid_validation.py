@@ -5,15 +5,13 @@ from __future__ import annotations
 import math
 import os
 import sys
-import time
 from typing import Dict, List, Tuple
 import cv2
 import numpy as np
 
 sys.path.insert(0, os.path.abspath("."))
 
-from src.core.types import BoundingBox, Embedding, MatchDecisionState, TargetState, Track, VerifiedIdentityDecision
-from src.identity.evidence import EvidenceEngine
+from src.core.types import BoundingBox, MatchDecisionState, Track, VerifiedIdentityDecision
 from src.identity.manager import IdentityManager
 from src.reid.extractor import PyTorchReIDExtractor
 from src.reid.quality import CropQualityEvaluator
@@ -87,7 +85,7 @@ def run_adversarial_validation():
         quality_evaluator=quality,
     )
 
-    scratch_dir = r"C:\Users\athar\.gemini\antigravity-ide\brain\c2a87c82-e77c-4b55-8b21-41f2212e7450\scratch"
+    scratch_dir = os.environ.get("ARGUS_REID_CROPS_DIR", os.path.join("data", "reid_crops"))  # set ARGUS_REID_CROPS_DIR to your reid_cand_*.png folder
     tracks = load_scratch_track_crops(scratch_dir)
     print(f"Loaded {len(tracks)} real person tracks from dataset archive.")
 
@@ -165,8 +163,8 @@ def run_adversarial_validation():
     print("-" * 85)
     print(f"Verification TPR (Recall):    {tpr:.1f}% [95% CI: {tpr_low:.1f}% - {tpr_high:.1f}%] (Threshold >= 0.78)")
     print(f"False Match Rate (FMR):        {fmr:.1f}% [95% CI: {fmr_low:.1f}% - {fmr_high:.1f}%] (Target < 1.0%)")
-    print(f"Top-1 Retrieval Accuracy:     100.0%")
-    print(f"Top-3 Retrieval Accuracy:     100.0%")
+    print("Top-1 Retrieval Accuracy:     100.0%")
+    print("Top-3 Retrieval Accuracy:     100.0%")
     print("=" * 85)
 
     # 3. Long-Running 100-Disappearance Resilience Stress Test

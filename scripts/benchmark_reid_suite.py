@@ -5,16 +5,13 @@ from __future__ import annotations
 import glob
 import os
 import sys
-import time
-from typing import Dict, List, Tuple
+from typing import Dict, List
 import cv2
 import numpy as np
 
 sys.path.insert(0, os.path.abspath("."))
 
-from src.core.types import Embedding
 from src.identity.manager import IdentityManager
-from src.identity.evidence import EvidenceEngine
 from src.reid.extractor import PyTorchReIDExtractor
 from src.reid.quality import CropQualityEvaluator
 
@@ -55,7 +52,7 @@ def run_benchmark():
         quality_evaluator=quality_eval,
     )
 
-    scratch_dir = r"C:\Users\athar\.gemini\antigravity-ide\brain\c2a87c82-e77c-4b55-8b21-41f2212e7450\scratch"
+    scratch_dir = os.environ.get("ARGUS_REID_CROPS_DIR", os.path.join("data", "reid_crops"))  # set ARGUS_REID_CROPS_DIR to your reid_cand_*.png folder
     tracks = load_scratch_track_crops(scratch_dir)
 
     print(f"Loaded {len(tracks)} tracks from validation archive.")

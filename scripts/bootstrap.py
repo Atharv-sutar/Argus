@@ -29,11 +29,8 @@ REQUIRED_DEPENDENCIES: Dict[str, str] = {
     "torchvision": "torchvision>=0.15.0",
     "ultralytics": "ultralytics>=8.0.0",
     "yaml": "pyyaml>=6.0",
-    "pydantic": "pydantic>=2.0.0",
     "faiss": "faiss-cpu>=1.7.4",
     "onnxruntime": "onnxruntime>=1.16.0",
-    "flask": "flask>=2.3.0",
-    "requests": "requests>=2.28.0",
 }
 
 

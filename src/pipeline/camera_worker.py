@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from src.core.interfaces import BaseCamera, BaseTracker
-from src.core.types import BoundingBox, DetectionResult, Target, TargetState, TrackResult
+from src.core.types import BoundingBox, DetectionResult, Embedding, Target, TargetState, TrackResult
 from src.visualization.annotator import FrameAnnotator
 
 logger = logging.getLogger(__name__)

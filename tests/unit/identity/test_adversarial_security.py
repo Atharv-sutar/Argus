@@ -1,14 +1,11 @@
 """Unit and adversarial security tests for ReID identity tokens, anchors, and expiry."""
 
-import time
-import pytest
 import numpy as np
 
 from src.core.types import (
     BoundingBox,
     Embedding,
     MatchDecisionState,
-    Target,
     TargetState,
     Track,
     VerifiedIdentityDecision,

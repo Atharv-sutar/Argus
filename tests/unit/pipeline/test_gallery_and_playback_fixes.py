@@ -1,8 +1,6 @@
 """Unit tests verifying target gallery thumbnails with tuples, remove_entry, video dir discovery, and playback controller endpoints."""
 
 import numpy as np
-import pytest
-from pathlib import Path
 from src.core.types import Embedding
 from src.identity.manager import IdentityManager
 from src.identity.store import InMemoryVectorStore

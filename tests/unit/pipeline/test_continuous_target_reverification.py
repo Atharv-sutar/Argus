@@ -1,11 +1,10 @@
 """Unit tests for continuous target re-verification and hysteresis lock switching (Issue 1)."""
 
 import numpy as np
-import pytest
 
 from src.camera.capture import SyntheticCamera
 from src.core.config import AppConfig
-from src.core.multi_camera_types import CameraEdgeConfig, CameraNodeConfig, EdgeType, SourceType
+from src.core.multi_camera_types import CameraNodeConfig, SourceType
 from src.core.types import BoundingBox, Detection, DetectionResult, Embedding, TargetState
 from src.detection.yolo_detector import BaseDetector
 from src.multi_camera.camera_graph import CameraGraph

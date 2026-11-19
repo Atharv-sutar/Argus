@@ -365,7 +365,6 @@ class MultiCameraPipeline:
                 gmc_method=getattr(self.config.tracking, "gmc_method", "sparseOptFlow"),
                 reid_extractor=self.reid_extractor,
                 reid_weight=getattr(self.config.tracking, "reid_weight", 0.5),
-                appearance_thresh=getattr(self.config.tracking, "appearance_thresh", 0.35),
                 ema_alpha=getattr(self.config.tracking, "ema_alpha", 0.9),
                 fix_association_cost=getattr(self.config.tracking, "fix_association_cost", False),
             )
@@ -2237,14 +2236,10 @@ class MultiCameraPipeline:
                 if evidence_dec.is_confirmed and evidence_dec.best_track_id is not None:
                     # Find the confirmed track's data
                     confirmed_track = None
-                    confirmed_crop = None
-                    confirmed_emb = None
                     confirmed_sim = evidence_dec.best_score
-                    for (ct, cc, ce, cs) in all_sorted:
+                    for (ct, _cc, _ce, cs) in all_sorted:
                         if ct.track_id == evidence_dec.best_track_id:
                             confirmed_track = ct
-                            confirmed_crop = cc
-                            confirmed_emb = ce
                             confirmed_sim = cs
                             break
 
@@ -2878,7 +2873,7 @@ class MultiCameraPipeline:
                 vram_gb = props.total_memory / (1024**3)
                 if vram_gb >= 6.0:
                     recommended = "osnet_x1_0"
-        except Exception as e:
+        except Exception:
             pass
         return recommended
 

@@ -1,9 +1,7 @@
 """Unit tests for SearchManager progressive search orchestration."""
 
 import time
-from unittest.mock import patch
 
-import pytest
 
 from src.core.config import SearchConfig
 from src.core.multi_camera_types import (

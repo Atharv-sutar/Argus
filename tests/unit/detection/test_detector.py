@@ -1,7 +1,6 @@
 """Unit tests for YOLO detector."""
 
 import numpy as np
-import pytest
 from src.core.types import DetectionResult
 from src.detection.yolo_detector import YOLODetector
 

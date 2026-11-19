@@ -761,7 +761,7 @@ class IdentityManager:
             return False
 
         if decision is None or decision.decision_state != MatchDecisionState.MATCH:
-            logger.warning(f"[IDENTITY] Cross-camera viewpoint enrollment REJECTED: no valid VerifiedIdentityDecision token.")
+            logger.warning("[IDENTITY] Cross-camera viewpoint enrollment REJECTED: no valid VerifiedIdentityDecision token.")
             return False
 
         is_valid, q_score, reason = self.quality.evaluate(crop)

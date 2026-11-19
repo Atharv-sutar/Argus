@@ -1,14 +1,10 @@
 import pytest
 import os
-import sqlite3
 import numpy as np
-from pathlib import Path
 
 from src.core.types import Embedding, Identity, TargetIdentityAnchor, ViewCluster
 from src.identity.sqlite_store import SQLiteVectorStore
-from src.identity.serialization import serialize_identity, deserialize_identity
 from src.identity.manager import IdentityManager
-from src.reid.extractor import PyTorchReIDExtractor
 
 @pytest.fixture
 def temp_db_path(tmp_path):
