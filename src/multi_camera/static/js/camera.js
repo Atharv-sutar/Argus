@@ -216,14 +216,16 @@ class CameraManager {
     const currentVal = targetSelect.value;
     targetSelect.innerHTML = '<option value="">-- None (Isolated Node) --</option>';
 
-    if (this.app.graphCanvas && this.app.graphCanvas.nodes) {
-      this.app.graphCanvas.nodes.forEach(node => {
-        const opt = document.createElement('option');
-        opt.value = node.camera_id;
-        opt.textContent = `${node.name} (${node.camera_id})`;
-        targetSelect.appendChild(opt);
-      });
-    }
+    const nodes = (this.app.graphCanvas && this.app.graphCanvas.nodes && this.app.graphCanvas.nodes.length > 0)
+      ? this.app.graphCanvas.nodes
+      : (this.app.cameras || []);
+
+    nodes.forEach(node => {
+      const opt = document.createElement('option');
+      opt.value = node.camera_id;
+      opt.textContent = `${node.name || node.camera_id} (${node.camera_id})`;
+      targetSelect.appendChild(opt);
+    });
 
     targetSelect.value = currentVal;
     if (linkProps) {

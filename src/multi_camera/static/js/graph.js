@@ -1165,4 +1165,3 @@ class GraphCanvas {
     this.ctx.restore();
   }
 }
-}
