@@ -476,9 +476,13 @@ class BoTSORTTracker(BaseTracker):
         reid_weight: float = 0.5,
         appearance_thresh: float = 0.35,
         ema_alpha: float = 0.9,
+        fix_association_cost: bool = False,
     ) -> None:
         self.track_thresh = track_thresh
         self.match_thresh = match_thresh
+        # tracking.fix_association_cost: interpret match_thresh as a ByteTrack-style maximum
+        # association cost (0.8 => cost <= 0.8) instead of 1 - match_thresh (0.8 => cost <= 0.2).
+        self.fix_association_cost = fix_association_cost
         self.track_buffer = track_buffer
         self.min_box_area = min_box_area
         self.reid_extractor = reid_extractor
@@ -492,6 +496,13 @@ class BoTSORTTracker(BaseTracker):
         self._next_id = 1
         self._tracks: Dict[int, SingleBoTTrack] = {}
         self._frame_id = 0
+
+    def _stage1_max_cost(self) -> float:
+        """Maximum fused cost accepted in the high-confidence association stage."""
+        if self.fix_association_cost:
+            return float(self.match_thresh)
+        # Legacy behaviour: 0.8 becomes a max cost of 0.2 (pure IoU >= 0.8).
+        return (1.0 - self.match_thresh) if self.match_thresh < 1.0 else self.match_thresh
 
     def reset(self) -> None:
         """Reset internal tracker state."""
@@ -614,7 +625,7 @@ class BoTSORTTracker(BaseTracker):
                     cost_matrix = np.where(iou_matrix > 0.05, fused_cost, cost_matrix)
 
             matches_1, unmatched_tracks_1, unmatched_high_dets = linear_assignment(
-                cost_matrix, threshold=(1.0 - self.match_thresh) if self.match_thresh < 1.0 else self.match_thresh
+                cost_matrix, threshold=self._stage1_max_cost()
             )
 
         for t_idx, d_idx in matches_1:

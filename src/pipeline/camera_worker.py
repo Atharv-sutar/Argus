@@ -26,8 +26,13 @@ class CameraWorker:
         tracker: BaseTracker,
         annotator: Optional[FrameAnnotator] = None,
         camera_id: str = "camera_0",
+        skip_duplicate_frames: bool = False,
     ) -> None:
         self.camera = camera
+        # tracking.fix_association_cost: report (and drop) frames already consumed
+        self.skip_duplicate_frames = skip_duplicate_frames
+        self.last_read_duplicate: bool = False
+        self._last_consumed_seq: Optional[int] = None
         self.tracker = tracker
         self.annotator = annotator or FrameAnnotator()
         self.camera_id = camera_id
@@ -45,9 +50,19 @@ class CameraWorker:
 
     def read_frame(self) -> Tuple[bool, Optional[np.ndarray], float]:
         """Reads a raw frame from the underlying camera stream."""
+        self.last_read_duplicate = False
         if not self.camera.is_opened():
             return False, None, 0.0
-        return self.camera.read()
+        success, frame, ts_ms = self.camera.read()
+        if self.skip_duplicate_frames and success and frame is not None:
+            # Only threaded captures expose the sequence number of the frame they returned.
+            seq = getattr(self.camera, "_last_read_seq", None) if getattr(self.camera, "use_thread", False) else None
+            if isinstance(seq, int) and seq > 0:
+                if seq == self._last_consumed_seq:
+                    self.last_read_duplicate = True
+                    return False, None, ts_ms
+                self._last_consumed_seq = seq
+        return success, frame, ts_ms
 
     def process_frame(
         self,

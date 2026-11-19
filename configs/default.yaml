@@ -29,6 +29,8 @@ tracking:
   reid_weight: 0.5
   appearance_thresh: 0.35
   ema_alpha: 0.9
+  fix_association_cost: false
+  low_conf_detection_threshold: 0.2
 reid:
   model_name: osnet_x0_25
   require_pretrained_weights: true
@@ -95,3 +97,7 @@ recording:
 diagnostics:
   decision_log: false
   decision_log_path: "logs/decision_log.jsonl"
+target:
+  switch_when_better: false
+  score_all_tracks: false
+  blur_gate_scope: none

@@ -48,6 +48,13 @@ class TrackingConfig:
     reid_weight: float = 0.5
     appearance_thresh: float = 0.35
     ema_alpha: float = 0.9
+    # Step 3 (default OFF): treat match_thresh as a ByteTrack-style maximum association
+    # cost (0.8 => cost <= 0.8) instead of 1 - match_thresh (0.8 => IoU >= 0.8); run YOLO at
+    # low_conf_detection_threshold so the low-score association stage receives detections
+    # (track_thresh still gates new tracks); and skip camera frames whose sequence number
+    # has not changed so the tracker never sees duplicates.
+    fix_association_cost: bool = False
+    low_conf_detection_threshold: float = 0.2
 
 
 @dataclass
@@ -174,6 +181,23 @@ class RecordingConfig:
 
 
 @dataclass
+class TargetConfig:
+    """Target-lock decision behaviour flags (all default OFF = legacy behaviour)."""
+    # Step 2: an incumbent above match_threshold can still lose the lock to a candidate that
+    # beats it by lock_switch_margin (existing consensus + manual-anchor gates apply), and
+    # auto-enrollment only happens when the incumbent is top-1 by min_margin.
+    switch_when_better: bool = False
+    # Step 4: on ReID frames embed/score every track (not only the locked one) during
+    # TRACKING/LOCKED, apply the blur gate per blur_gate_scope, and force one full
+    # re-verification on the first frames after an occlusion ends.
+    score_all_tracks: bool = False
+    # Used only when score_all_tracks is on: "none" = no blur gate for anyone,
+    # "all" = blur gate for everyone incl. the locked track (a blurred locked track defers
+    # the decision for that frame instead of counting as a miss).
+    blur_gate_scope: str = "none"
+
+
+@dataclass
 class DiagnosticsConfig:
     """Configuration for ReID decision logging and system diagnostics."""
     decision_log: bool = False
@@ -194,6 +218,7 @@ class AppConfig:
     forensic: ForensicConfig = field(default_factory=ForensicConfig)
     recording: RecordingConfig = field(default_factory=RecordingConfig)
     diagnostics: DiagnosticsConfig = field(default_factory=DiagnosticsConfig)
+    target: TargetConfig = field(default_factory=TargetConfig)
 
     @classmethod
     def from_yaml(cls, path: Union[str, Path]) -> AppConfig:
@@ -246,6 +271,9 @@ class AppConfig:
         diag_data = data.get("diagnostics", {})
         diagnostics_config = DiagnosticsConfig(**diag_data) if diag_data else DiagnosticsConfig()
 
+        target_data = data.get("target", {})
+        target_config = TargetConfig(**target_data) if target_data else TargetConfig()
+
         return cls(
             camera=CameraConfig(**camera_data),
             inference=InferenceConfig(**inference_data),
@@ -259,6 +287,7 @@ class AppConfig:
             forensic=forensic_config,
             recording=recording_config,
             diagnostics=diagnostics_config,
+            target=target_config,
         )
 
 
