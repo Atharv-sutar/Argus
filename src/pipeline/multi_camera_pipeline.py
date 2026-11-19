@@ -174,6 +174,8 @@ class MultiCameraPipeline:
         self._last_candidate_scores: Dict[int, float] = {}
         self._switch_consensus: Dict[int, int] = {}
         self._current_track_misses: int = 0
+        self._post_occlusion_reverify_pending: bool = False
+        self._locked_track_blurred: bool = False
         self._initializing_workers: set = set()
         self._failed_worker_times: Dict[str, float] = {}
         self._pipeline_start_time: float = time.time()
@@ -306,12 +308,23 @@ class MultiCameraPipeline:
             self._shared_detector = self._detector_factory()
         return self._shared_detector
 
+    def _effective_detection_confidence(self) -> float:
+        """With tracking.fix_association_cost on, YOLO runs below track_thresh so BoT-SORT's
+        low-confidence association stage actually receives detections (new tracks are still
+        only started from detections >= track_thresh)."""
+        if getattr(self.config.tracking, "fix_association_cost", False):
+            return float(min(
+                self.config.detection.confidence_threshold,
+                getattr(self.config.tracking, "low_conf_detection_threshold", 0.2),
+            ))
+        return float(self.config.detection.confidence_threshold)
+
     def _default_detector_factory(self) -> BaseDetector:
         if self._shared_detector is None:
             batch_sz = getattr(self.config.inference, "batch_size", 4)
             self._shared_detector = YOLODetector(
                 model_name=self.config.detection.model_name,
-                confidence_threshold=self.config.detection.confidence_threshold,
+                confidence_threshold=self._effective_detection_confidence(),
                 iou_threshold=self.config.detection.iou_threshold,
                 target_classes=self.config.detection.target_classes,
                 device=self.config.inference.device,
@@ -333,6 +346,7 @@ class MultiCameraPipeline:
                 reid_weight=getattr(self.config.tracking, "reid_weight", 0.5),
                 appearance_thresh=getattr(self.config.tracking, "appearance_thresh", 0.35),
                 ema_alpha=getattr(self.config.tracking, "ema_alpha", 0.9),
+                fix_association_cost=getattr(self.config.tracking, "fix_association_cost", False),
             )
         return ByteTracker(
             track_thresh=self.config.tracking.track_thresh,
@@ -473,6 +487,7 @@ class MultiCameraPipeline:
                 tracker=tracker,
                 annotator=annotator,
                 camera_id=camera_id,
+                skip_duplicate_frames=getattr(self.config.tracking, "fix_association_cost", False),
             )
         except Exception as e:
             logger.warning(f"[MULTI-CAM] Failed to initialize worker for camera '{camera_id}': {e}")
@@ -1151,6 +1166,21 @@ class MultiCameraPipeline:
                 role = next((r for c, _, r in tasks if c == cid), "error")
                 acquired_results[cid] = (cid, role, None, 0.0)
 
+        # tracking.fix_association_cost: drop cameras whose frame did not change since the
+        # last step so the tracker (Kalman predict) never sees the same frame twice.
+        duplicate_cams = set()
+        if getattr(self.config.tracking, "fix_association_cost", False):
+            for cid in list(acquired_results.keys()):
+                w = self._workers.get(cid)
+                if w is not None and getattr(w, "last_read_duplicate", False):
+                    duplicate_cams.add(cid)
+                    del acquired_results[cid]
+            if duplicate_cams and not acquired_results:
+                # Nothing new anywhere: this step did not happen (keeps ReID cadence in camera frames).
+                self._frame_count -= 1
+                time.sleep(0.002)
+                return {}
+
         # Single-stream continuous recording tap for live surveillance feeds
         if getattr(self, "recording_manager", None) and self.recording_manager.enabled:
             for cid, res in acquired_results.items():
@@ -1284,6 +1314,16 @@ class MultiCameraPipeline:
         target = self.target_manager.target
         target_lost_or_uncertain = (target is not None and target.state in (TargetState.LOST, TargetState.UNCERTAIN))
         should_reid = (self.reid_interval <= 1) or (self._frame_count % self.reid_interval == 0) or target_lost_or_uncertain
+
+        # target.score_all_tracks (Step 4): score every track, consistent blur gate, and embed
+        # while OCCLUDED / pending so the first post-occlusion frame can be fully re-verified.
+        score_all_tracks = self._score_all_tracks_enabled()
+        blur_gate_all = score_all_tracks and self._blur_gate_scope() == "all"
+        self._locked_track_blurred = False
+        if score_all_tracks and target is not None and (
+            target.state == TargetState.OCCLUDED or getattr(self, "_post_occlusion_reverify_pending", False)
+        ):
+            should_reid = True
         
         precomputed_reid_candidates: Dict[str, List[Tuple[Track, np.ndarray, Embedding]]] = {}
         
@@ -1325,12 +1365,26 @@ class MultiCameraPipeline:
                                 active_target_occluded = self._is_occluded(tgt_tr, track_res.tracks, iou_threshold=0.25)
 
                         for track in track_res.tracks:
-                            if event_driven_reid and is_target_steady and not active_target_occluded:
+                            if event_driven_reid and is_target_steady and not active_target_occluded and not score_all_tracks:
                                 # When active target is tracked and not occluded, only evaluate the target track
                                 if track.track_id != target_track_id:
                                     continue
 
                             c_crop = worker.extract_crop(frame, track.box)
+                            if score_all_tracks and c_crop is not None and c_crop.size > 0 and c_crop.shape[0] >= 12 and c_crop.shape[1] >= 12:
+                                passes_blur = True
+                                if blur_gate_all:
+                                    try:
+                                        gray_crop = cv2.cvtColor(c_crop, cv2.COLOR_BGR2GRAY)
+                                        passes_blur = cv2.Laplacian(gray_crop, cv2.CV_64F).var() > self.config.reid.min_sharpness
+                                    except Exception as e:
+                                        logger.error(f"[TRACKLET REID] Error applying blur filter: {e}")
+                                if passes_blur:
+                                    crops_to_extract.append(c_crop)
+                                    crop_meta.append((cid, track, c_crop))
+                                elif role == "active" and track.track_id == target_track_id:
+                                    self._locked_track_blurred = True
+                                continue
                             if c_crop is not None and c_crop.size > 0 and c_crop.shape[0] >= 12 and c_crop.shape[1] >= 12:
                                 blur_score = 100.0
                                 try:
@@ -1380,7 +1434,7 @@ class MultiCameraPipeline:
                     )
             elif active_cam_id in self._nodes:
                 self._nodes[active_cam_id].mark_offline()
-        elif active_cam_id and active_cam_id in self._nodes:
+        elif active_cam_id and active_cam_id in self._nodes and active_cam_id not in duplicate_cams:
             self._nodes[active_cam_id].mark_offline()
 
         # 4. Check Target State
@@ -1592,6 +1646,13 @@ class MultiCameraPipeline:
 
         return results
 
+    def _score_all_tracks_enabled(self) -> bool:
+        return bool(getattr(getattr(self.config, "target", None), "score_all_tracks", False))
+
+    def _blur_gate_scope(self) -> str:
+        scope = str(getattr(getattr(self.config, "target", None), "blur_gate_scope", "none")).lower()
+        return "all" if scope == "all" else "none"
+
     def _is_occluded(self, track: Track, all_tracks: List[Track], iou_threshold: float = 0.25) -> bool:
         """Detects whether a track's bounding box significantly overlaps with any other track in the scene."""
         if not all_tracks or len(all_tracks) <= 1:
@@ -1669,10 +1730,29 @@ class MultiCameraPipeline:
                 "candidates": cands_list,
                 "auto_adds": auto_adds_list,
                 "rollbacks": rollbacks_list,
+                "forced_reverify": bool(force_reverify),
             })
 
+        # target.score_all_tracks (Step 4): after an occlusion ends, force one full
+        # re-verification of all candidates before trusting the tracker ID again; with
+        # blur_gate_scope == "all" a blurred locked track defers the decision (not a miss).
+        score_all_tracks = self._score_all_tracks_enabled()
+        force_reverify = score_all_tracks and not is_occluded and (
+            prev_target_state == TargetState.OCCLUDED or getattr(self, "_post_occlusion_reverify_pending", False)
+        )
+        if force_reverify:
+            self._post_occlusion_reverify_pending = True
+        deferred_blur = (
+            score_all_tracks
+            and self._blur_gate_scope() == "all"
+            and getattr(self, "_locked_track_blurred", False)
+            and current_track is not None
+            and not is_occluded
+        )
+
         # Case A: On frames where ReID is NOT evaluated
-        if not should_reid or self.identity.is_empty:
+        if (not should_reid and not force_reverify) or self.identity.is_empty or deferred_blur:
+            follow_reason = "DEFERRED_BLUR" if deferred_blur else "FOLLOW_ID"
             cands_summary = [
                 {
                     "track_id": tr.track_id,
@@ -1694,10 +1774,10 @@ class MultiCameraPipeline:
                     _emit_decision_log("OCCLUDED_FREEZE", cands_summary, [], [])
                 elif target.state == TargetState.CONFIRMED:
                     self.target_manager.mark_confirmed(current_track, track_res.frame_id, timestamp_ms)
-                    _emit_decision_log("FOLLOW_ID", cands_summary, [], [])
+                    _emit_decision_log(follow_reason, cands_summary, [], [])
                 elif target.state in (TargetState.TRACKING, TargetState.LOCKED, TargetState.OCCLUDED):
                     self.target_manager.mark_tracking(current_track, track_res.frame_id, timestamp_ms)
-                    _emit_decision_log("FOLLOW_ID", cands_summary, [], [])
+                    _emit_decision_log(follow_reason, cands_summary, [], [])
             elif current_track is None and target.state in (TargetState.TRACKING, TargetState.LOCKED, TargetState.OCCLUDED, TargetState.CONFIRMED):
                 self._last_candidate_scores.clear()
                 self.target_manager.mark_lost(timestamp_ms)
@@ -1705,6 +1785,9 @@ class MultiCameraPipeline:
             return
 
         # Case B: On frames where ReID IS evaluated (or target is LOST / OCCLUDED)
+        if score_all_tracks and not is_occluded:
+            # This evaluation is the (forced or regular) full verification.
+            self._post_occlusion_reverify_pending = False
         candidates_to_extract: List[Tuple[Track, np.ndarray]] = []
         embs: List[Embedding] = []
 
@@ -1850,14 +1933,31 @@ class MultiCameraPipeline:
                     _emit_decision_log("AMBIGUOUS", _build_cands_log(), [], [])
                     return
 
-                if current_sim >= match_thresh:
+                # Step 2 (target.switch_when_better): an incumbent above match_threshold no
+                # longer wins automatically when another candidate clearly beats it.
+                switch_when_better = bool(getattr(getattr(self.config, "target", None), "switch_when_better", False))
+                better_alternative = (
+                    switch_when_better
+                    and best_other_track is not None
+                    and best_other_sim >= match_thresh
+                    and (best_other_sim - current_sim) >= switch_margin
+                )
+
+                if current_sim >= match_thresh and not better_alternative:
                     self._current_track_misses = 0
                     self._switch_consensus.clear()
                     self.target_manager.mark_confirmed(current_track, track_res.frame_id, timestamp_ms)
 
+                    # With switch_when_better on, only enroll when the incumbent is clearly top-1.
+                    incumbent_is_clear_top1 = (
+                        not switch_when_better
+                        or best_other_track is None
+                        or (current_sim - best_other_sim) >= min_margin
+                    )
+
                     auto_adds = []
                     # Auto-enrollment (strictly when clear and quality passes)
-                    if current_crop is not None and current_emb is not None and current_sim >= auto_thresh:
+                    if incumbent_is_clear_top1 and current_crop is not None and current_emb is not None and current_sim >= auto_thresh:
                         self.identity.add_auto(
                             crop=current_crop,
                             embedding=current_emb,
@@ -1887,6 +1987,7 @@ class MultiCameraPipeline:
                 # uncertain band but a clearly superior candidate exists (bypassing the trap).
                 # Check if genuine switch
                 should_switch = False
+                manual_anchor_pass = True
                 if best_other_track is not None and best_other_sim >= match_thresh:
                     margin_switch = best_other_sim - current_sim
                     if margin_switch >= switch_margin:
@@ -1948,6 +2049,19 @@ class MultiCameraPipeline:
                         )
                         auto_adds.append(best_other_track.track_id)
                     _emit_decision_log("SWITCH", _build_cands_log(), auto_adds, rollbacks)
+                    return
+
+                if better_alternative and current_sim >= match_thresh:
+                    # The incumbent still matches the gallery: never count this as a miss.
+                    if not manual_anchor_pass:
+                        # Challenger failed the manual-anchor gate: keep the incumbent, no enrollment.
+                        self._current_track_misses = 0
+                        self.target_manager.mark_confirmed(current_track, track_res.frame_id, timestamp_ms)
+                        _emit_decision_log("CONFIRM_INCUMBENT", _build_cands_log(), [], [])
+                    else:
+                        # Waiting for switch consensus: hold the lock, flag it as uncertain.
+                        self.target_manager.mark_uncertain(timestamp_ms)
+                        _emit_decision_log("SWITCH_PENDING", _build_cands_log(), [], [])
                     return
 
                 self._current_track_misses += 1
