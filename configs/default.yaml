@@ -40,6 +40,9 @@ reid:
   uncertain_band_min: 0.73
   uncertain_band_max: 0.78
   event_driven_reid: true
+  max_reference_samples: 50
+  max_gallery_size: 100
+  crops_dir: data/gallery_crops
 visualization:
   show_window: true
   window_name: Argus Surveillance

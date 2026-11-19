@@ -166,6 +166,7 @@ class Embedding:
     quality_score: float = 1.0
     camera_id: str = "camera_0"
     timestamp_ms: float = 0.0
+    image_path: Optional[str] = None
 
     def __post_init__(self) -> None:
         flat = np.asarray(self.vector, dtype=np.float32).flatten()
@@ -340,6 +341,10 @@ class Identity:
     trusted_prototype: Optional[Embedding] = None
     trusted_upper_proto: Optional[Embedding] = None
     trusted_lower_proto: Optional[Embedding] = None
+
+    # Stored image file paths and thumbnails
+    entry_crops: Dict[str, str] = field(default_factory=dict)
+    entry_image_paths: Dict[str, str] = field(default_factory=dict)
 
     # Confidence and metadata
     confidence: float = 0.0

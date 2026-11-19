@@ -101,6 +101,9 @@ class ReIDConfig:
     min_sharpness: float = 60.0 # Laplacian variance threshold for blur filtering
     uncertain_band_min: float = 0.73
     uncertain_band_max: float = 0.78
+    max_reference_samples: int = 50
+    max_gallery_size: int = 100
+    crops_dir: str = "data/gallery_crops"
 
     # Backward-compatible property aliases
     @property

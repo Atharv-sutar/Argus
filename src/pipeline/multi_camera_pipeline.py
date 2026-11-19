@@ -197,6 +197,7 @@ class MultiCameraPipeline:
         self._current_track_misses: int = 0
         self._post_occlusion_reverify_pending: bool = False
         self._locked_track_blurred: bool = False
+        self._bystander_history: Dict[Tuple[str, int], float] = {}
         self._initializing_workers: set = set()
         self._failed_worker_times: Dict[str, float] = {}
         self._pipeline_start_time: float = time.time()
@@ -723,6 +724,14 @@ class MultiCameraPipeline:
                         selected_id = synth_id
 
         if selected_id is not None:
+            # Forensic trail & transit reset: clear old target's history
+            self._transit_history.clear()
+            if getattr(self, "_bystander_history", None) is not None:
+                self._bystander_history.clear()
+            if self.route_recorder:
+                self.route_recorder.clear()
+            if getattr(self, "forensic_recorder", None) and hasattr(self.forensic_recorder, "discard"):
+                self.forensic_recorder.discard()
             if self._reset_state_enabled():
                 self._reset_target_runtime_state()
             self._active_camera_id = camera_id
@@ -939,6 +948,14 @@ class MultiCameraPipeline:
             camera_id=camera_id,
         )
         if ok:
+            # Forensic trail & transit reset: clear old target's history
+            self._transit_history.clear()
+            if getattr(self, "_bystander_history", None) is not None:
+                self._bystander_history.clear()
+            if self.route_recorder:
+                self.route_recorder.clear()
+            if getattr(self, "forensic_recorder", None) and hasattr(self.forensic_recorder, "discard"):
+                self.forensic_recorder.discard()
             if self._reset_state_enabled():
                 self._reset_target_runtime_state()
             self._active_camera_id = camera_id
@@ -1082,6 +1099,8 @@ class MultiCameraPipeline:
         self._suppressed_handoff_until = 0.0
         self.search_manager.reset()
         self._transit_history.clear()
+        if getattr(self, "_bystander_history", None) is not None:
+            self._bystander_history.clear()
         if self.route_recorder:
             self.route_recorder.clear()
             
@@ -1091,7 +1110,8 @@ class MultiCameraPipeline:
         with self._frame_lock:
             self._latest_jpegs.clear()
 
-        self.forensic_recorder.discard()
+        if getattr(self, "forensic_recorder", None) and hasattr(self.forensic_recorder, "discard"):
+            self.forensic_recorder.discard()
         trim_gpu_memory()
 
         logger.info("[MULTI-CAM] Target cleared and gallery purged. Playback resumed if paused.")
@@ -1698,6 +1718,8 @@ class MultiCameraPipeline:
         self._pending_handoff_emb = None
         self._pending_handoff_sim = 0.0
         self._evidence_engine.clear()
+        if getattr(self, "_bystander_history", None) is not None:
+            self._bystander_history.clear()
 
     def apply_config_update(self, cfg: AppConfig) -> None:
         """Called by POST /api/settings after it edits the runtime config.
@@ -1763,6 +1785,14 @@ class MultiCameraPipeline:
             if track.track_id == target.track_id:
                 current_track = track
                 break
+
+        # Record any non-target tracks present simultaneously as bystanders
+        if current_track is not None and self._active_camera_id:
+            if getattr(self, "_bystander_history", None) is None:
+                self._bystander_history = {}
+            for tr in track_res.tracks:
+                if tr.track_id != current_track.track_id:
+                    self._bystander_history[(self._active_camera_id, tr.track_id)] = timestamp_ms
 
         # Throttle ReID even when LOST to prevent total pipeline stall (e.g. 100% GPU usage on every frame)
         should_reid = (self._frame_count % self.reid_interval == 0)
@@ -2161,13 +2191,24 @@ class MultiCameraPipeline:
                 man_sim_f = float(man_sim)
                 is_match = eff_sim_f >= self._reacquisition_threshold
 
+                # Co-present bystander disqualification:
+                # A person seen in the same frame alongside the target cannot be the target.
+                bystander_hist = getattr(self, "_bystander_history", None) or {}
+                last_seen_copresent = bystander_hist.get((self._active_camera_id or "", cand_track.track_id), 0.0)
+                if last_seen_copresent > 0.0 and (timestamp_ms - last_seen_copresent) < 60000.0:
+                    logger.info(
+                        f"[ANTI-SCOOP] Track #{cand_track.track_id} was co-present with target on "
+                        f"'{self._active_camera_id}' ({(timestamp_ms - last_seen_copresent)/1000.0:.1f}s ago). Disqualified as bystander."
+                    )
+                    is_match = False
+
                 # Lone-bystander anti-scoop: Fix P-13
                 # Do not arbitrarily penalize a lone person with +0.05. Use standard reacquisition threshold.
                 lone_person = len(candidates_to_extract) == 1
                 if lone_person:
                     lone_thresh = self._reacquisition_threshold
-                    is_match = eff_sim_f >= lone_thresh
-                    if not is_match:
+                    if eff_sim_f < lone_thresh:
+                        is_match = False
                         logger.info(
                             f"[ANTI-SCOOP] Track #{cand_track.track_id} "
                             f"sim={eff_sim_f:.3f} < threshold={lone_thresh:.3f} | "
@@ -2176,7 +2217,7 @@ class MultiCameraPipeline:
 
                 # Manual anchor verification for reacquisition (Anti-Scoop Guard)
                 if is_match and self.identity._manual_matrix is not None and len(self.identity._manual_entries) > 0:
-                    manual_anchor_thresh = max(0.68, self._reacquisition_threshold - 0.05)
+                    manual_anchor_thresh = max(0.75, self._reacquisition_threshold - 0.02)
                     if man_sim_f < manual_anchor_thresh:
                         logger.info(
                             f"[ANTI-SCOOP] Reacquisition of Track #{cand_track.track_id} REJECTED: "
@@ -2189,7 +2230,7 @@ class MultiCameraPipeline:
                 # do not reacquire an interior candidate that suddenly appears far from that exit boundary.
                 if is_match and target.last_known_box is not None and self._active_camera_id:
                     w_active = self._get_or_create_worker(self._active_camera_id)
-                    if w_active is not None and w_active._last_frame is not None:
+                    if w_active is not None and getattr(w_active, "_last_frame", None) is not None:
                         fh, fw = w_active._last_frame.shape[:2]
                         lb = target.last_known_box
                         was_at_edge = (lb.x1 <= 20 or lb.x2 >= fw - 20 or lb.y1 <= 20 or lb.y2 >= fh - 20)
@@ -2818,7 +2859,8 @@ class MultiCameraPipeline:
             # Discard any in-progress forensic recording
             if self.forensic_recorder.is_recording:
                 try:
-                    self.forensic_recorder.discard()
+                    if getattr(self, "forensic_recorder", None) and hasattr(self.forensic_recorder, "discard"):
+                        self.forensic_recorder.discard()
                 except Exception:
                     pass
 

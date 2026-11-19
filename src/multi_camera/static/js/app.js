@@ -354,6 +354,19 @@ class SurveillanceApp {
         e.stopPropagation();
       }
       try {
+        if (this.currentStatus) {
+          this.currentStatus.transit_history = [];
+          this.currentStatus.target_track_id = null;
+          this.currentStatus.target_state = 'UNSELECTED';
+        }
+        if (this.transitTrailEl) {
+          this.transitTrailEl.innerHTML = `
+            <div class="trail-empty" style="padding: 20px 8px; text-align: center; color: var(--text-muted); font-size: 11px; line-height: 1.5;">
+              <span style="font-size: 14px;">🚶</span><br>
+              <span>No cross-camera transit recorded yet.</span><br>
+              <span style="font-size: 9.5px; color: var(--text-dim);">Lock a target to trace movements across cameras.</span>
+            </div>`;
+        }
         await API.clearTarget();
         this.showToast('Focus target cleared and gallery purged', 'info');
         await this.refreshStatus();
@@ -443,6 +456,11 @@ class SurveillanceApp {
 
     document.getElementById('btn-undo-global')?.addEventListener('click', undoFn);
     document.getElementById('btn-redo-global')?.addEventListener('click', redoFn);
+    document.getElementById('btn-undo-dropdown')?.addEventListener('click', undoFn);
+    document.getElementById('btn-redo-dropdown')?.addEventListener('click', redoFn);
+    document.getElementById('btn-refresh-dropdown')?.addEventListener('click', () => {
+      refreshCamerasFn();
+    });
 
     // Playback Toolbar Controls
     const btnPlayPause = document.getElementById('btn-play-pause');
@@ -1539,6 +1557,20 @@ class SurveillanceApp {
         this._pendingActiveCameraSwitch = cam.camera_id;
         this._pendingActiveCameraSwitchTime = Date.now();
         this.updateActiveTileVisuals();
+
+        if (startNew) {
+          if (this.currentStatus) {
+            this.currentStatus.transit_history = [];
+          }
+          if (this.transitTrailEl) {
+            this.transitTrailEl.innerHTML = `
+              <div class="trail-empty" style="padding: 20px 8px; text-align: center; color: var(--text-muted); font-size: 11px; line-height: 1.5;">
+                <span style="font-size: 14px;">🚶</span><br>
+                <span>No cross-camera transit recorded yet.</span><br>
+                <span style="font-size: 9.5px; color: var(--text-dim);">Lock a target to trace movements across cameras.</span>
+              </div>`;
+          }
+        }
 
         try {
           const res = await API.selectTarget(cam.camera_id, targetX, targetY, null, startNew, normX, normY);

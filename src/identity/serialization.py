@@ -17,7 +17,8 @@ def _serialize_emb(emb: Embedding | Tuple[Embedding, Any]) -> Dict[str, Any]:
         "crop_type": emb.crop_type,
         "quality_score": emb.quality_score,
         "camera_id": emb.camera_id,
-        "timestamp_ms": emb.timestamp_ms
+        "timestamp_ms": emb.timestamp_ms,
+        "image_path": getattr(emb, "image_path", None)
     }
 
 def _deserialize_emb(data: Dict[str, Any]) -> Embedding:
@@ -29,7 +30,8 @@ def _deserialize_emb(data: Dict[str, Any]) -> Embedding:
         crop_type=data.get("crop_type", "full"),
         quality_score=data.get("quality_score", 1.0),
         camera_id=data.get("camera_id", "camera_0"),
-        timestamp_ms=data.get("timestamp_ms", 0.0)
+        timestamp_ms=data.get("timestamp_ms", 0.0),
+        image_path=data.get("image_path", None)
     )
 
 def _serialize_cluster(c: ViewCluster) -> Dict[str, Any]:
@@ -88,7 +90,9 @@ def serialize_identity(ident: Identity) -> Dict[str, Any]:
         "trusted_lower_proto": _serialize_emb(ident.trusted_lower_proto) if ident.trusted_lower_proto else None,
         "confidence": ident.confidence,
         "last_seen_timestamp_ms": ident.last_seen_timestamp_ms,
-        "last_camera_id": ident.last_camera_id
+        "last_camera_id": ident.last_camera_id,
+        "entry_crops": getattr(ident, "entry_crops", {}),
+        "entry_image_paths": getattr(ident, "entry_image_paths", {})
     }
 
 def deserialize_identity(data: Dict[str, Any]) -> Identity:
@@ -96,6 +100,8 @@ def deserialize_identity(data: Dict[str, Any]) -> Identity:
         identity_id=data["identity_id"],
         label=data.get("label", "target_0")
     )
+    ident.entry_crops = dict(data.get("entry_crops", {}))
+    ident.entry_image_paths = dict(data.get("entry_image_paths", {}))
     ident.trusted_gallery = [_deserialize_emb(e) for e in data.get("trusted_gallery", [])]
     ident.provisional_gallery = [_deserialize_emb(e) for e in data.get("provisional_gallery", [])]
     ident.rejected_gallery = [_deserialize_emb(e) for e in data.get("rejected_gallery", [])]

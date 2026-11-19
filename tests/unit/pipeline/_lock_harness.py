@@ -53,6 +53,9 @@ class _AnchorReID:
 
 
 class _Worker:
+    def __init__(self):
+        self._last_frame = None
+
     @staticmethod
     def extract_crop(frame, box):
         x1, y1, x2, y2 = map(int, box.as_xyxy())
@@ -64,6 +67,9 @@ class _NullRecorder:
         pass
 
     def feed_frame(self, *a, **k):
+        pass
+
+    def discard(self, *a, **k):
         pass
 
 
@@ -103,9 +109,24 @@ def build(config: Optional[AppConfig] = None) -> Tuple[MultiCameraPipeline, Iden
         min_margin_threshold=cfg.reid.min_margin,
         min_consistency_ratio=0.70,
     )
+    import collections
+    import threading
+    from src.multi_camera.camera_graph import CameraGraph
+    from src.multi_camera.search_manager import SearchManager
+    from src.core.config import SearchConfig
     p.route_recorder = None
     p.forensic_recorder = _NullRecorder()
     p.decision_logger = None
+    p._bystander_history = {}
+    p._worker_lock = threading.Lock()
+    p._pipeline_lock = threading.RLock()
+    p._frame_lock = threading.Lock()
+    p._latest_jpegs = {}
+    p._workers = {"cam_0": _Worker()}
+    p._transit_history = collections.deque(maxlen=500)
+    p.graph = CameraGraph()
+    p._nodes = {}
+    p.search_manager = SearchManager(p.graph, SearchConfig())
     return p, im, tm
 
 
