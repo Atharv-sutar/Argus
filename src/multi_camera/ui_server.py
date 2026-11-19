@@ -517,20 +517,50 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
 
             elif path == "/api/graph":
                 logger.info(f"[TOPOLOGY] [GET /api/graph] Reading topology from '{self.graph_file.resolve()}' (exists={self.graph_file.is_file()})")
+                graph_data = None
+
+                # 1. Try loading from self.graph_file
                 if self.graph_file.is_file():
                     try:
                         with self.graph_lock:
                             graph = CameraGraph.load(self.graph_file)
-                            data = graph.to_dict()
-                        cams = data.get("cameras", [])
-                        edges = data.get("edges", [])
-                        logger.info(f"[TOPOLOGY] Loaded topology: {len(cams)} cameras ({[c.get('camera_id') for c in cams]}), {len(edges)} edges")
-                        self._send_json(data)
+                            if graph.node_count() > 0:
+                                graph_data = graph.to_dict()
                     except Exception as e:
-                        logger.exception(f"[TOPOLOGY] Error reading graph file '{self.graph_file}': {e}")
-                        self._send_json({"error": str(e)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                        logger.warning(f"[TOPOLOGY] Error reading graph file '{self.graph_file}': {e}")
+
+                # 2. If empty, try runtime_pipeline's graph
+                if (graph_data is None or not graph_data.get("cameras")) and self.runtime_pipeline is not None and getattr(self.runtime_pipeline, "graph", None):
+                    try:
+                        r_graph = self.runtime_pipeline.graph
+                        if r_graph.node_count() > 0:
+                            graph_data = r_graph.to_dict()
+                            logger.info(f"[TOPOLOGY] Populated topology from runtime pipeline: {r_graph.node_count()} camera(s)")
+                            with self.graph_lock:
+                                r_graph.save(self.graph_file)
+                    except Exception as e:
+                        logger.warning(f"[TOPOLOGY] Error reading runtime pipeline graph: {e}")
+
+                # 3. If still empty, try default configs/camera_graph.json
+                default_cfg = Path("configs/camera_graph.json")
+                if (graph_data is None or not graph_data.get("cameras")) and default_cfg.is_file() and default_cfg.resolve() != self.graph_file.resolve():
+                    try:
+                        d_graph = CameraGraph.load(default_cfg)
+                        if d_graph.node_count() > 0:
+                            graph_data = d_graph.to_dict()
+                            logger.info(f"[TOPOLOGY] Populated topology from default config '{default_cfg}': {d_graph.node_count()} camera(s)")
+                            with self.graph_lock:
+                                d_graph.save(self.graph_file)
+                    except Exception as e:
+                        logger.warning(f"[TOPOLOGY] Error reading default graph file '{default_cfg}': {e}")
+
+                if graph_data and graph_data.get("cameras"):
+                    cams = graph_data.get("cameras", [])
+                    edges = graph_data.get("edges", [])
+                    logger.info(f"[TOPOLOGY] Loaded topology: {len(cams)} cameras ({[c.get('camera_id') for c in cams]}), {len(edges)} edges")
+                    self._send_json(graph_data)
                 else:
-                    logger.info("[TOPOLOGY] No graph file found. Returning default empty topology.")
+                    logger.info("[TOPOLOGY] No cameras found in topology graph or pipeline. Returning default empty topology.")
                     self._send_json({"version": 1, "cameras": [], "edges": [], "background_map": None})
                 return
 

@@ -86,7 +86,9 @@ class Inspector {
     if (btnDeleteEdge) {
       btnDeleteEdge.addEventListener('click', () => {
         if (!this.currentEdge) return;
-        this.app.graphCanvas.removeEdge(this.currentEdge.source_camera_id, this.currentEdge.target_camera_id);
+        const srcId = this.currentEdge.source_camera_id || this.currentEdge.source;
+        const tgtId = this.currentEdge.target_camera_id || this.currentEdge.target;
+        this.app.graphCanvas.removeEdge(srcId, tgtId);
         this.clear();
         this.app.showToast('Connection removed', 'info');
       });
@@ -168,8 +170,8 @@ class Inspector {
     const elType = document.getElementById('prop-edge-type');
     const elWeight = document.getElementById('prop-edge-weight');
 
-    if (elSource) elSource.textContent = edge.source_camera_id;
-    if (elTarget) elTarget.textContent = edge.target_camera_id;
+    if (elSource) elSource.textContent = edge.source_camera_id || edge.source;
+    if (elTarget) elTarget.textContent = edge.target_camera_id || edge.target;
     if (elType) elType.value = edge.edge_type || 'adjacent';
     if (elWeight) elWeight.value = edge.weight !== undefined ? edge.weight : 1.0;
   }

@@ -233,7 +233,11 @@ class SurveillanceApp {
       });
       if (action === 'delete') {
         this.graphCanvas.nodes = this.graphCanvas.nodes.filter(n => !ids.includes(n.camera_id));
-        this.graphCanvas.edges = this.graphCanvas.edges.filter(e => !ids.includes(e.source) && !ids.includes(e.target));
+        this.graphCanvas.edges = this.graphCanvas.edges.filter(e => {
+          const s = e.source_camera_id || e.source;
+          const t = e.target_camera_id || e.target;
+          return !ids.includes(s) && !ids.includes(t);
+        });
       }
       
       try {
@@ -1328,21 +1332,63 @@ class SurveillanceApp {
       if (!this.graphCanvas) {
         this.graphCanvas = new GraphCanvas(this, 'graph-canvas');
       }
-      setTimeout(() => {
-        if (this.graphCanvas) {
-          this.graphCanvas.resize();
-          this.loadGraphTopology();
-        }
-      }, 50);
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          if (this.graphCanvas) {
+            this.graphCanvas.resize();
+            this.loadGraphTopology();
+          }
+        }, 50);
+      });
     }
   }
 
   async loadGraphTopology() {
     try {
       const data = await API.getGraph();
+
+      // If backend has no cameras, but live matrix has cameras, use them as preloaded fallback
+      if ((!data.cameras || data.cameras.length === 0) && this.cameras && this.cameras.length > 0) {
+        data.cameras = this.cameras.map((c, idx) => ({
+          camera_id: c.camera_id,
+          name: c.name || c.camera_id,
+          source: c.source !== undefined ? c.source : idx,
+          source_type: c.source_type || 'webcam',
+          enabled: c.enabled !== false,
+          position_x: 240 + (idx % 3) * 240,
+          position_y: 180 + Math.floor(idx / 3) * 180,
+          floor: c.floor || null,
+          zone: c.zone || null,
+        }));
+        if (!data.edges || data.edges.length === 0) {
+          data.edges = [];
+          for (let i = 0; i < data.cameras.length - 1; i++) {
+            data.edges.push({
+              source_camera_id: data.cameras[i].camera_id,
+              target_camera_id: data.cameras[i + 1].camera_id,
+              source: data.cameras[i].camera_id,
+              target: data.cameras[i + 1].camera_id,
+              edge_type: 'adjacent',
+              direction: 'bidirectional',
+              enabled: true,
+              expected_typical_transition_s: 4.5,
+              expected_min_transition_s: 1.0,
+              expected_max_transition_s: 20.0,
+            });
+          }
+        }
+        try {
+          await API.saveGraph(data);
+        } catch (_) {}
+      }
+
       if (this.graphCanvas) {
         this.graphCanvas.loadGraph(data);
         this.graphCanvas.fitToScreen();
+      }
+      this.refreshListView(data);
+      if (this.cameraManager) {
+        this.cameraManager.updateConnectDropdown();
       }
     } catch (e) {
       this.showToast(`Topology load error: ${e.message}`, 'error');

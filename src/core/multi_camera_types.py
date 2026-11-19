@@ -154,6 +154,8 @@ class CameraEdgeConfig:
         return {
             "source_camera_id": self.source_camera_id,
             "target_camera_id": self.target_camera_id,
+            "source": self.source_camera_id,
+            "target": self.target_camera_id,
             "edge_type": self.edge_type.value,
             "direction": self.direction.value,
             "enabled": self.enabled,
@@ -164,15 +166,50 @@ class CameraEdgeConfig:
 
     @classmethod
     def from_dict(cls, data: dict) -> CameraEdgeConfig:
+        src = data.get("source_camera_id") or data.get("source")
+        tgt = data.get("target_camera_id") or data.get("target")
+        if not src or not tgt:
+            raise ValueError(f"Edge missing source or target camera ID: {data}")
+
+        min_s = data.get("expected_min_transition_s")
+        if min_s is None:
+            min_s = data.get("min_transit_time")
+        if min_s is not None:
+            min_s = float(min_s)
+
+        typ_s = data.get("expected_typical_transition_s")
+        if typ_s is None:
+            typ_s = data.get("expected_transit_time")
+        if typ_s is not None:
+            typ_s = float(typ_s)
+
+        max_s = data.get("expected_max_transition_s")
+        if max_s is None:
+            max_s = data.get("max_transit_time")
+        if max_s is not None:
+            max_s = float(max_s)
+
+        edge_type_val = data.get("edge_type", "adjacent")
+        try:
+            et = EdgeType(edge_type_val)
+        except ValueError:
+            et = EdgeType.ADJACENT
+
+        direction_val = data.get("direction", "bidirectional")
+        try:
+            ed = EdgeDirection(direction_val)
+        except ValueError:
+            ed = EdgeDirection.BIDIRECTIONAL
+
         return cls(
-            source_camera_id=data["source_camera_id"],
-            target_camera_id=data["target_camera_id"],
-            edge_type=EdgeType(data.get("edge_type", "adjacent")),
-            direction=EdgeDirection(data.get("direction", "bidirectional")),
+            source_camera_id=str(src),
+            target_camera_id=str(tgt),
+            edge_type=et,
+            direction=ed,
             enabled=data.get("enabled", True),
-            expected_min_transition_s=data.get("expected_min_transition_s"),
-            expected_typical_transition_s=data.get("expected_typical_transition_s"),
-            expected_max_transition_s=data.get("expected_max_transition_s"),
+            expected_min_transition_s=min_s,
+            expected_typical_transition_s=typ_s,
+            expected_max_transition_s=max_s,
         )
 
 

@@ -150,70 +150,143 @@ class GraphCanvas {
   }
 
   loadGraph(data) {
-    this.nodes = (data.cameras || []).map(c => ({
+    this.nodes = (data.cameras || []).map((c, idx) => ({
       ...c,
-      position_x: c.position_x || 200 + Math.random() * 300,
-      position_y: c.position_y || 150 + Math.random() * 200,
+      position_x: (c.position_x !== undefined && c.position_x !== null && !isNaN(c.position_x))
+        ? Number(c.position_x)
+        : 240 + (idx % 3) * 220,
+      position_y: (c.position_y !== undefined && c.position_y !== null && !isNaN(c.position_y))
+        ? Number(c.position_y)
+        : 180 + Math.floor(idx / 3) * 180,
     }));
-    this.edges = data.edges || [];
+    this.edges = (data.edges || []).map(e => ({
+      ...e,
+      source_camera_id: e.source_camera_id || e.source,
+      target_camera_id: e.target_camera_id || e.target,
+      source: e.source_camera_id || e.source,
+      target: e.target_camera_id || e.target,
+    }));
     this.backgroundMap = data.background_map || null;
     this.selectedNode = null;
     this.selectedEdge = null;
-    this.app.inspector.clear();
+    this._hasInitialFit = false;
+    if (this.app && this.app.inspector) {
+      this.app.inspector.clear();
+    }
   }
 
   toJSON() {
     return {
       version: 1,
-      cameras: this.nodes,
-      edges: this.edges,
+      cameras: this.nodes.map(n => ({
+        ...n,
+        position_x: Number(n.position_x) || 0,
+        position_y: Number(n.position_y) || 0,
+      })),
+      edges: this.edges.map(e => ({
+        ...e,
+        source_camera_id: e.source_camera_id || e.source,
+        target_camera_id: e.target_camera_id || e.target,
+        source: e.source_camera_id || e.source,
+        target: e.target_camera_id || e.target,
+      })),
       background_map: this.backgroundMap,
     };
   }
 
   addNode(nodeConfig) {
     // Ensure unique ID
-    const baseId = nodeConfig.camera_id;
+    const baseId = nodeConfig.camera_id || 'cam';
     let id = baseId;
     let counter = 1;
     while (this.nodes.some(n => n.camera_id === id)) {
       id = `${baseId}_${counter++}`;
     }
     nodeConfig.camera_id = id;
+
+    // Validate coordinates - place near current screen center if unset
+    if (isNaN(nodeConfig.position_x) || nodeConfig.position_x === null || nodeConfig.position_x === undefined) {
+      const rect = this.canvas.getBoundingClientRect();
+      const center = this.screenToWorld(
+        (rect.width > 0 ? rect.width : this.canvas.width) / 2,
+        (rect.height > 0 ? rect.height : this.canvas.height) / 2
+      );
+      nodeConfig.position_x = Math.round(center.x + (Math.random() - 0.5) * 80);
+    }
+    if (isNaN(nodeConfig.position_y) || nodeConfig.position_y === null || nodeConfig.position_y === undefined) {
+      const rect = this.canvas.getBoundingClientRect();
+      const center = this.screenToWorld(
+        (rect.width > 0 ? rect.width : this.canvas.width) / 2,
+        (rect.height > 0 ? rect.height : this.canvas.height) / 2
+      );
+      nodeConfig.position_y = Math.round(center.y + (Math.random() - 0.5) * 80);
+    }
+
     this.nodes.push(nodeConfig);
     this.selectNode(nodeConfig);
+    this.panToNode(nodeConfig);
+  }
+
+  panToNode(node) {
+    if (!node) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const w = (rect.width > 0 ? rect.width : this.canvas.width) || 800;
+    const h = (rect.height > 0 ? rect.height : this.canvas.height) || 600;
+    this.panX = w / 2 - node.position_x * this.scale;
+    this.panY = h / 2 - node.position_y * this.scale;
   }
 
   removeNode(cameraId) {
     this.nodes = this.nodes.filter(n => n.camera_id !== cameraId);
-    this.edges = this.edges.filter(e => e.source_camera_id !== cameraId && e.target_camera_id !== cameraId);
+    this.edges = this.edges.filter(e =>
+      (e.source_camera_id || e.source) !== cameraId &&
+      (e.target_camera_id || e.target) !== cameraId
+    );
     if (this.selectedNode && this.selectedNode.camera_id === cameraId) {
       this.selectedNode = null;
-      this.app.inspector.clear();
+      if (this.app && this.app.inspector) {
+        this.app.inspector.clear();
+      }
     }
   }
 
   addEdge(edgeConfig) {
+    const srcId = edgeConfig.source_camera_id || edgeConfig.source;
+    const tgtId = edgeConfig.target_camera_id || edgeConfig.target;
+    if (!srcId || !tgtId || srcId === tgtId) return false;
+
     // Check if edge already exists
-    const exists = this.edges.some(e =>
-      (e.source_camera_id === edgeConfig.source_camera_id && e.target_camera_id === edgeConfig.target_camera_id) ||
-      (e.source_camera_id === edgeConfig.target_camera_id && e.target_camera_id === edgeConfig.source_camera_id)
-    );
-    if (!exists && edgeConfig.source_camera_id !== edgeConfig.target_camera_id) {
-      this.edges.push(edgeConfig);
-      this.selectEdge(edgeConfig);
+    const exists = this.edges.some(e => {
+      const eSrc = e.source_camera_id || e.source;
+      const eTgt = e.target_camera_id || e.target;
+      return (eSrc === srcId && eTgt === tgtId) || (eSrc === tgtId && eTgt === srcId);
+    });
+
+    if (!exists) {
+      const normalizedEdge = {
+        ...edgeConfig,
+        source_camera_id: srcId,
+        target_camera_id: tgtId,
+        source: srcId,
+        target: tgtId,
+      };
+      this.edges.push(normalizedEdge);
+      this.selectEdge(normalizedEdge);
       return true;
     }
     return false;
   }
 
   removeEdge(sourceId, targetId) {
-    this.edges = this.edges.filter(e =>
-      !(e.source_camera_id === sourceId && e.target_camera_id === targetId) &&
-      !(e.source_camera_id === targetId && e.target_camera_id === sourceId)
-    );
+    this.edges = this.edges.filter(e => {
+      const eSrc = e.source_camera_id || e.source;
+      const eTgt = e.target_camera_id || e.target;
+      return !(eSrc === sourceId && eTgt === targetId) && !(eSrc === targetId && eTgt === sourceId);
+    });
     this.selectedEdge = null;
-    this.app.inspector.clear();
+    if (this.app && this.app.inspector) {
+      this.app.inspector.clear();
+    }
   }
 
   screenToWorld(screenX, screenY) {
@@ -237,8 +310,10 @@ class GraphCanvas {
 
   getEdgeAt(worldX, worldY) {
     for (const edge of this.edges) {
-      const src = this.nodes.find(n => n.camera_id === edge.source_camera_id);
-      const tgt = this.nodes.find(n => n.camera_id === edge.target_camera_id);
+      const srcId = edge.source_camera_id || edge.source;
+      const tgtId = edge.target_camera_id || edge.target;
+      const src = this.nodes.find(n => n.camera_id === srcId);
+      const tgt = this.nodes.find(n => n.camera_id === tgtId);
       if (!src || !tgt) continue;
 
       const dist = this.distToSegment(worldX, worldY, src.position_x, src.position_y, tgt.position_x, tgt.position_y);
@@ -356,8 +431,8 @@ class GraphCanvas {
 
   fitToScreen() {
     const rect = this.canvas.getBoundingClientRect();
-    const w = rect.width || this.canvas.width || 800;
-    const h = rect.height || this.canvas.height || 600;
+    const w = (rect.width > 0 ? rect.width : this.canvas.width) || 800;
+    const h = (rect.height > 0 ? rect.height : this.canvas.height) || 600;
 
     if (this.nodes.length === 0) {
       this.scale = 1.0;
@@ -369,10 +444,10 @@ class GraphCanvas {
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     this.nodes.forEach((n, idx) => {
       if (isNaN(n.position_x) || n.position_x === null || n.position_x === undefined) {
-        n.position_x = 200 + (idx % 3) * 180;
+        n.position_x = 240 + (idx % 3) * 220;
       }
       if (isNaN(n.position_y) || n.position_y === null || n.position_y === undefined) {
-        n.position_y = 180 + Math.floor(idx / 3) * 160;
+        n.position_y = 180 + Math.floor(idx / 3) * 180;
       }
       minX = Math.min(minX, n.position_x);
       maxX = Math.max(maxX, n.position_x);
@@ -380,29 +455,34 @@ class GraphCanvas {
       maxY = Math.max(maxY, n.position_y);
     });
 
-    const boxW = Math.max(120, maxX - minX + 160);
-    const boxH = Math.max(120, maxY - minY + 160);
+    const boxW = Math.max(160, maxX - minX + 220);
+    const boxH = Math.max(160, maxY - minY + 220);
 
-    const scaleX = (w - 80) / boxW;
-    const scaleY = (h - 80) / boxH;
-    this.scale = Math.max(0.5, Math.min(1.4, Math.min(scaleX, scaleY)));
+    const scaleX = (w - 120) / boxW;
+    const scaleY = (h - 120) / boxH;
+    this.scale = Math.max(0.4, Math.min(1.2, Math.min(scaleX, scaleY)));
 
     const centerX = (minX + maxX) / 2;
     const centerY = (minY + maxY) / 2;
     this.panX = w / 2 - centerX * this.scale;
     this.panY = h / 2 - centerY * this.scale;
+    this._hasInitialFit = true;
   }
 
   selectNode(node) {
     this.selectedNode = node;
     this.selectedEdge = null;
-    this.app.inspector.inspectNode(node);
+    if (this.app && this.app.inspector) {
+      this.app.inspector.inspectNode(node);
+    }
   }
 
   selectEdge(edge) {
     this.selectedEdge = edge;
     this.selectedNode = null;
-    this.app.inspector.inspectEdge(edge);
+    if (this.app && this.app.inspector) {
+      this.app.inspector.inspectEdge(edge);
+    }
   }
 
   startRenderLoop() {
@@ -415,25 +495,29 @@ class GraphCanvas {
 
   isSearchingNode(cameraId) {
     if (!cameraId) return false;
-    if (this.cameraStatuses && this.cameraStatuses[cameraId] === 'searching') return true;
-    if (this.searchProgress && this.searchProgress.active_search_camera_ids) {
-      return this.searchProgress.active_search_camera_ids.includes(cameraId);
-    }
-    if (this.searchProgress && this.searchProgress.active_cameras) {
-      return this.searchProgress.active_cameras.includes(cameraId);
+    const status = this.cameraStatuses ? this.cameraStatuses[cameraId] : null;
+    if (status && String(status).toLowerCase() === 'searching') return true;
+    if (this.searchProgress) {
+      const activeCams = this.searchProgress.active_cameras || this.searchProgress.active_search_camera_ids;
+      if (Array.isArray(activeCams) && activeCams.includes(cameraId)) return true;
     }
     return false;
   }
 
   draw() {
     const rect = this.canvas.getBoundingClientRect();
-    const w = rect.width || this.canvas.width;
-    const h = rect.height || this.canvas.height;
+    const w = (rect.width > 0 ? rect.width : this.canvas.width) || 800;
+    const h = (rect.height > 0 ? rect.height : this.canvas.height) || 600;
     if (w <= 0 || h <= 0) return;
 
     if (this.canvas.width !== w || this.canvas.height !== h) {
       this.canvas.width = w;
       this.canvas.height = h;
+    }
+
+    // Auto-fit preloaded nodes on first visible render
+    if (this.nodes.length > 0 && !this._hasInitialFit && (this.panX === 0 && this.panY === 0)) {
+      this.fitToScreen();
     }
 
     this.ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -597,11 +681,17 @@ class GraphCanvas {
 
       // Find average vector direction to connected neighbors
       let dirAngle = 0;
-      const connectedEdges = this.edges.filter(e => e.source_camera_id === node.camera_id || e.target_camera_id === node.camera_id);
+      const connectedEdges = this.edges.filter(e => {
+        const s = e.source_camera_id || e.source;
+        const t = e.target_camera_id || e.target;
+        return s === node.camera_id || t === node.camera_id;
+      });
       if (connectedEdges.length > 0) {
         let sumX = 0, sumY = 0;
         connectedEdges.forEach(e => {
-          const otherId = (e.source_camera_id === node.camera_id) ? e.target_camera_id : e.source_camera_id;
+          const s = e.source_camera_id || e.source;
+          const t = e.target_camera_id || e.target;
+          const otherId = (s === node.camera_id) ? t : s;
           const otherNode = this.nodes.find(n => n.camera_id === otherId);
           if (otherNode) {
             sumX += (otherNode.position_x - node.position_x);
@@ -654,8 +744,10 @@ class GraphCanvas {
   }
 
   drawEdge(edge) {
-    const src = this.nodes.find(n => n.camera_id === edge.source_camera_id);
-    const tgt = this.nodes.find(n => n.camera_id === edge.target_camera_id);
+    const srcId = edge.source_camera_id || edge.source;
+    const tgtId = edge.target_camera_id || edge.target;
+    const src = this.nodes.find(n => n.camera_id === srcId);
+    const tgt = this.nodes.find(n => n.camera_id === tgtId);
     if (!src || !tgt) return;
 
     if (this.filterReidOnly) {
@@ -1021,8 +1113,10 @@ class GraphCanvas {
     this.ctx.strokeStyle = 'rgba(0, 240, 255, 0.2)';
     this.ctx.lineWidth = 1;
     for (const edge of this.edges) {
-      const src = this.nodes.find(n => n.camera_id === edge.source_camera_id);
-      const tgt = this.nodes.find(n => n.camera_id === edge.target_camera_id);
+      const srcId = edge.source_camera_id || edge.source;
+      const tgtId = edge.target_camera_id || edge.target;
+      const src = this.nodes.find(n => n.camera_id === srcId);
+      const tgt = this.nodes.find(n => n.camera_id === tgtId);
       if (src && tgt) {
         this.ctx.moveTo(src.position_x * mScale + offsetX, src.position_y * mScale + offsetY);
         this.ctx.lineTo(tgt.position_x * mScale + offsetX, tgt.position_y * mScale + offsetY);

@@ -3,18 +3,43 @@
   "cameras": [
     {
       "camera_id": "cam_0",
-      "name": "Webcam 0 (In Use)",
+      "name": "ACER HD User Facing",
       "source": 0,
       "source_type": "webcam",
       "enabled": true,
-      "position_x": 289.50700909740743,
-      "position_y": 159.04584097075565,
+      "position_x": 280.0,
+      "position_y": 160.0,
       "floor": null,
       "zone": null,
       "group": null,
-      "description": null
+      "description": "Default Built-in Webcam"
+    },
+    {
+      "camera_id": "cam_1",
+      "name": "EOS Webcam Utility",
+      "source": 1,
+      "source_type": "webcam",
+      "enabled": true,
+      "position_x": 540.0,
+      "position_y": 160.0,
+      "floor": null,
+      "zone": null,
+      "group": null,
+      "description": "Canon EOS Camera"
     }
   ],
-  "edges": [],
+  "edges": [
+    {
+      "source": "cam_0",
+      "target": "cam_1",
+      "direction": "bidirectional",
+      "edge_type": "adjacent",
+      "weight": 1.0,
+      "expected_transit_time": 5.0,
+      "probability": 1.0,
+      "min_transit_time": 1.0,
+      "max_transit_time": 30.0
+    }
+  ],
   "background_map": null
 }

@@ -254,7 +254,7 @@ class CameraManager {
     // setTimeout(() => this.discover(), 5000);
 
     const customForm = document.getElementById('form-custom-camera');
-    customForm.addEventListener('submit', (e) => {
+    customForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       const id = document.getElementById('custom-cam-id').value.trim();
       const name = document.getElementById('custom-cam-name').value.trim();
@@ -289,13 +289,23 @@ class CameraManager {
         this.app.graphCanvas = new GraphCanvas(this.app, 'graph-canvas');
       }
 
+      // Ensure graph is loaded if canvas was newly created
+      if (this.app.graphCanvas.nodes.length === 0) {
+        try {
+          const existingData = await API.getGraph();
+          if (existingData && existingData.cameras && existingData.cameras.length > 0) {
+            this.app.graphCanvas.loadGraph(existingData);
+          }
+        } catch (_) {}
+      }
+
       const connectTargetId = document.getElementById('custom-cam-connect-target')?.value;
       const edgeType = document.getElementById('custom-cam-edge-type')?.value || 'adjacent';
       const transitS = parseFloat(document.getElementById('custom-cam-transit-s')?.value) || 4.5;
 
-      // Intelligent Positioning
-      let posX = 240 + Math.random() * 120;
-      let posY = 180 + Math.random() * 100;
+      // Intelligent Positioning in current visible viewport
+      let posX = undefined;
+      let posY = undefined;
 
       let targetNode = null;
       if (connectTargetId && this.app.graphCanvas.nodes) {
@@ -305,6 +315,16 @@ class CameraManager {
           posX = Math.round(targetNode.position_x + Math.cos(angle) * 160);
           posY = Math.round(targetNode.position_y + Math.sin(angle) * 160);
         }
+      }
+
+      if (posX === undefined || posY === undefined) {
+        const rect = this.app.graphCanvas.canvas.getBoundingClientRect();
+        const center = this.app.graphCanvas.screenToWorld(
+          (rect.width > 0 ? rect.width : this.app.graphCanvas.canvas.width) / 2,
+          (rect.height > 0 ? rect.height : this.app.graphCanvas.canvas.height) / 2
+        );
+        posX = Math.round(center.x + (Math.random() - 0.5) * 60);
+        posY = Math.round(center.y + (Math.random() - 0.5) * 60);
       }
 
       const newNode = {
@@ -324,6 +344,8 @@ class CameraManager {
         this.app.graphCanvas.addEdge({
           source_camera_id: targetNode.camera_id,
           target_camera_id: id,
+          source: targetNode.camera_id,
+          target: id,
           edge_type: edgeType,
           direction: 'bidirectional',
           enabled: true,
@@ -333,10 +355,24 @@ class CameraManager {
         });
         this.app.showToast(`Added '${name}' and connected to '${targetNode.name}' (⏱ ${transitS}s transit)`, 'success');
       } else {
-        this.app.showToast(`Added camera '${name}' to canvas`, 'success');
+        this.app.showToast(`Added camera '${name}' to topology map`, 'success');
       }
 
+      // Automatically persist to backend so the camera node is permanently saved
+      try {
+        await API.saveGraph(this.app.graphCanvas.toJSON());
+      } catch (saveErr) {
+        console.warn('Auto-save graph warning:', saveErr);
+      }
+
+      this.app.graphCanvas.panToNode(newNode);
       this.updateConnectDropdown();
+      if (typeof this.app.refreshListView === 'function') {
+        this.app.refreshListView(this.app.graphCanvas.toJSON());
+      }
+      if (typeof this.app.loadLiveMatrix === 'function') {
+        this.app.loadLiveMatrix();
+      }
       customForm.reset();
     });
   }
@@ -458,22 +494,57 @@ class CameraManager {
         }
       });
 
-      card.querySelector('.cam-add-btn').addEventListener('click', (e) => {
+      card.querySelector('.cam-add-btn').addEventListener('click', async (e) => {
         e.stopPropagation();
         if (!this.app.graphCanvas) {
           this.app.graphCanvas = new GraphCanvas(this.app, 'graph-canvas');
         }
+
+        // Ensure graph is loaded if canvas was newly created
+        if (this.app.graphCanvas.nodes.length === 0) {
+          try {
+            const existingData = await API.getGraph();
+            if (existingData && existingData.cameras && existingData.cameras.length > 0) {
+              this.app.graphCanvas.loadGraph(existingData);
+            }
+          } catch (_) {}
+        }
+
+        const rect = this.app.graphCanvas.canvas.getBoundingClientRect();
+        const center = this.app.graphCanvas.screenToWorld(
+          (rect.width > 0 ? rect.width : this.app.graphCanvas.canvas.width) / 2,
+          (rect.height > 0 ? rect.height : this.app.graphCanvas.canvas.height) / 2
+        );
+
         const camId = `cam_${cam.source}`;
-        this.app.graphCanvas.addNode({
+        const newNode = {
           camera_id: camId,
           name: cam.name,
           source: cam.source,
           source_type: cam.source_type,
           enabled: true,
-          position_x: 200 + Math.random() * 100,
-          position_y: 150 + Math.random() * 100,
-        });
-        this.app.showToast(`Added ${cam.name} to canvas`, 'success');
+          position_x: Math.round(center.x + (Math.random() - 0.5) * 60),
+          position_y: Math.round(center.y + (Math.random() - 0.5) * 60),
+        };
+
+        this.app.graphCanvas.addNode(newNode);
+
+        // Auto-save graph to backend
+        try {
+          await API.saveGraph(this.app.graphCanvas.toJSON());
+        } catch (saveErr) {
+          console.warn('Auto-save graph warning:', saveErr);
+        }
+
+        this.app.graphCanvas.panToNode(newNode);
+        this.updateConnectDropdown();
+        if (typeof this.app.refreshListView === 'function') {
+          this.app.refreshListView(this.app.graphCanvas.toJSON());
+        }
+        if (typeof this.app.loadLiveMatrix === 'function') {
+          this.app.loadLiveMatrix();
+        }
+        this.app.showToast(`Added ${cam.name} to topology map`, 'success');
       });
 
       this.listEl.appendChild(card);
