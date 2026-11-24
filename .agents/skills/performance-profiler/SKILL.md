@@ -1,6 +1,6 @@
 ---
 name: performance-profiler
-description: Procedures and benchmarks for profiling FPS, latency, GPU VRAM allocation, and tracking stability to ensure real-time performance on resource-constrained hardware (GTX 1650 4GB).
+description: Procedures and benchmarks for profiling FPS, latency, GPU VRAM allocation, and tracking stability across dynamically detected hardware tiers (CPU, entry GPU, mid/high-VRAM Tensor GPUs).
 ---
 
 # Performance Profiler Runbook
@@ -9,13 +9,13 @@ Use this skill whenever you evaluate, measure, or optimize system throughput, in
 
 ## 1. Success Metrics & Thresholds
 
-| Metric | Target (GTX 1650) | Warning Level | Failure Level |
+| Metric | Target (Adaptive Tier) | Warning Level | Failure Level |
 |---|---|---|---|
 | End-to-End FPS | >= 24 FPS | < 18 FPS | < 10 FPS |
 | Detection Latency | <= 15 ms | > 25 ms | > 40 ms |
 | Tracker Latency | <= 5 ms | > 10 ms | > 20 ms |
 | ReID Extraction Latency | <= 10 ms | > 18 ms | > 30 ms |
-| GPU VRAM Usage | < 3.2 GB | >= 3.5 GB | >= 3.8 GB (OOM Risk) |
+| GPU VRAM Usage | < 80% of detected VRAM | >= 85% | >= 95% (OOM Risk) |
 | Queue Drop Rate | 0 drops on target camera | < 5% on search cameras | > 20% drops |
 
 ## 2. Profiling Procedures
@@ -37,11 +37,12 @@ Inspect:
 - `candidate_scores`: Real-time cross-camera similarity metrics.
 
 ### C. Hardware Profile Assessment
-The pipeline includes built-in hardware profiling:
+The pipeline includes built-in capability-based hardware profiling:
 ```powershell
+.\.venv\Scripts\python -c "from src.inference.device import detect_hardware_profile; print(detect_hardware_profile())"
 .\.venv\Scripts\python -c "from src.pipeline.multi_camera_pipeline import MultiCameraPipeline; print(MultiCameraPipeline.profile_hardware())"
 ```
-Returns recommended ReID model: `osnet_x0_25` (low VRAM) or `osnet_x1_0` (high compute).
+Returns the resolved `HardwareProfile` (tier, Tensor Cores, FP16/TF32, TensorRT availability, adaptive batch sizes, ORT memory limit) and recommended ReID model (`person_reid_youtu`, `osnet_x1_0`, or `osnet_x0_25`).
 
 ## 3. Optimization Rules of Thumb
 1. **Never sacrifice tracking accuracy for artificial FPS boosts.**

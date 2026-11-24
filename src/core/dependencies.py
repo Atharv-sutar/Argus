@@ -52,7 +52,7 @@ def ensure_technologies(config: AppConfig) -> None:
 
     # 2. ReID Dependencies
     reid_model = config.reid.model_name.lower()
-    if "osnet" in reid_model or "mobilenet" in reid_model:
+    if "osnet" in reid_model or "mobilenet" in reid_model or reid_model == "auto":
         _ensure_package("torch", "2.0.0")
         _ensure_package("torchvision", "0.15.0")
         
@@ -64,9 +64,12 @@ def ensure_technologies(config: AppConfig) -> None:
     # 4. Vector Database Dependencies
     _ensure_package("faiss-cpu")
 
-    # 5. Accelerated Inference Dependencies
+    # 5. Accelerated Inference & Hardware Telemetry Dependencies
     engine_type = getattr(config.inference, "engine_type", "auto").lower()
     if engine_type in ("tensorrt", "onnx", "auto"):
         _ensure_package("onnx")
+        if "youtu" in reid_model or reid_model == "auto":
+            _ensure_package("onnxruntime-gpu")
+    _ensure_package("nvidia-ml-py")
         
     logger.info("Dynamic dependencies verified.")

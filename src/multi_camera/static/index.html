@@ -19,15 +19,18 @@
       <div class="handoff-modal" style="background: var(--bg-panel); padding: 20px; border-radius: 8px; border: 1px solid var(--border-color); width: 600px; max-width: 90%;">
         <h3 style="margin-top: 0; color: var(--cyan-bright);">Advanced Settings</h3>
         <form id="form-settings" class="topo-form">
+            <div id="settings-hw-banner" style="padding: 8px 10px; margin-bottom: 12px; border-radius: 6px; background: rgba(0, 242, 254, 0.08); border: 1px solid rgba(0, 242, 254, 0.25); font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #e2e8f0; line-height: 1.45;">
+                Detecting compute hardware profile...
+            </div>
             <div class="form-row">
                 <label>ReID Extraction Model</label>
                 <select id="settings-reid-model" class="w-100" style="padding: 8px; margin-top: 5px; background: rgba(0,0,0,0.5); color: #fff; border: 1px solid var(--border-color);">
                   <option value="">Loading...</option>
                 </select>
-                <p style="font-size: 11px; color: #a1a1aa; margin-top: 8px; line-height: 1.4;">
-                  <strong>OSNet x0.25:</strong> Optimized for low VRAM and fast processing. Recommended for older GPUs.<br>
-                  <strong>OSNet x1.0:</strong> Highest accuracy. Requires higher compute and VRAM. Increases ReID certainty.<br>
-                  <em style="color: var(--amber-glow)">Note: Changing this will clear the current active target. If your system lags significantly (FPS drops below 10), it will automatically roll back to the previous model to protect stability.</em>
+                <div id="settings-reid-descriptions" style="font-size: 11px; color: #a1a1aa; margin-top: 8px; line-height: 1.45;">
+                </div>
+                <p style="font-size: 11px; color: var(--amber-glow); margin-top: 6px; line-height: 1.4;">
+                  <em>Note: Changing this clears the active target. If FPS drops severely (&lt; 10 FPS), Argus rolls back to the previous model automatically.</em>
                 </p>
             </div>
             <div class="form-row">
@@ -984,6 +987,7 @@
         <div><span style="color: var(--text-dim);">UPTIME:</span> <span id="status-uptime">0s</span></div>
         <div><span style="color: var(--text-dim);">FPS:</span> <span id="status-fps">0.0</span></div>
         <div><span style="color: var(--text-dim);">GPU MEM:</span> <span id="status-gpu">0.0 MB</span></div>
+        <div><span style="color: var(--text-dim);">ACCEL:</span> <span id="status-hardware" style="color: var(--text-main);">AUTO</span></div>
         <div><span style="color: var(--text-dim);">CASE:</span> <span id="active-case-display" style="cursor: pointer; color: var(--cyan-bright); text-decoration: underline; transition: color 0.2s;">[No Active Case]</span></div>
         <div style="margin-left: auto; color: var(--cyan-bright);"><span id="status-mode">LIVE SURVEILLANCE</span></div>
     </div>

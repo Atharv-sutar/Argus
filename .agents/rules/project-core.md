@@ -457,7 +457,7 @@ Do not sacrifice tracking or identity quality merely to increase FPS.
 
 ## GPU Rules
 
-The development target includes limited VRAM (e.g., 4 GB GTX 1650 class).
+Scale VRAM, precision (FP16/TF32/TensorRT), and batching dynamically from `detect_hardware_profile()` (`src/inference/device.py`) so Argus runs safely on compact GPUs while taking full advantage of high-VRAM Tensor-Core GPUs.
 
 Avoid:
 

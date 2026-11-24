@@ -76,8 +76,9 @@ def get_available_execution_providers() -> List[str]:
 def export_yolo_to_tensorrt(
     weights_path: str = "yolo11n.pt",
     imgsz: int = 640,
-    half: bool = False,
+    half: Optional[bool] = None,
     device: str = "0",
+    hardware_profile: Optional[Any] = None,
 ) -> str:
     """
     Exports a YOLO model to TensorRT (.engine) or optimized ONNX (.onnx).
@@ -86,6 +87,12 @@ def export_yolo_to_tensorrt(
     weights_file = Path(weights_path)
     if not weights_file.is_file():
         raise FileNotFoundError(f"YOLO weights not found: {weights_file}")
+
+    if half is None:
+        if hardware_profile is None:
+            from src.inference.device import detect_hardware_profile
+            hardware_profile = detect_hardware_profile()
+        half = bool(getattr(hardware_profile, "use_fp16", False))
 
     engine_candidate = weights_file.with_suffix(".engine")
     if engine_candidate.is_file():
@@ -98,19 +105,25 @@ def export_yolo_to_tensorrt(
         return str(onnx_candidate)
 
     try:
+        os.environ["YOLO_AUTOINSTALL"] = "false"
+        import ultralytics.utils as _u_utils
+        import ultralytics.utils.checks as _u_checks
+        _u_utils.AUTOINSTALL = False
+        _u_checks.AUTOINSTALL = False
         from ultralytics import YOLO
         model = YOLO(str(weights_file))
+        exp_dev = device.split(":", 1)[1] if str(device).startswith("cuda:") else device
 
         # Try native TensorRT engine export first if tensorrt is installed
-        if is_tensorrt_available():
+        if is_tensorrt_available() and str(exp_dev) != "cpu":
             try:
-                logger.info(f"Attempting TensorRT engine export for '{weights_file}'...")
+                logger.info(f"Attempting TensorRT engine export for '{weights_file}' (fp16={half})...")
                 path = model.export(
                     format="engine",
                     imgsz=imgsz,
                     half=half,
                     dynamic=True,
-                    device=device,
+                    device=exp_dev,
                 )
                 if path and Path(path).exists():
                     logger.info(f"Successfully exported TensorRT engine: {path}")
@@ -124,7 +137,7 @@ def export_yolo_to_tensorrt(
             format="onnx",
             imgsz=imgsz,
             dynamic=True,
-            half=half,
+            half=bool(half and str(exp_dev) != "cpu"),
         )
         logger.info(f"Successfully exported model to ONNX: {path}")
         return str(path)
@@ -176,8 +189,8 @@ def export_reid_to_onnx(
 
 class TensorRTInferenceSession:
     """
-    Wrapper for ONNX Runtime executing with TensorrtExecutionProvider or CUDAExecutionProvider.
-    Maintains engine caching and memory limits tailored for 4GB GPUs.
+    Wrapper for ONNX Runtime executing with TensorrtExecutionProvider, CUDAExecutionProvider,
+    or CPUExecutionProvider. Dynamically sizes workspace and VRAM budgets from the detected HardwareProfile.
     """
 
     def __init__(
@@ -185,22 +198,43 @@ class TensorRTInferenceSession:
         model_path: str,
         engine_cache_dir: str = "models/trt_cache",
         device_id: int = 0,
-        enable_fp16: bool = False,
+        enable_fp16: Optional[bool] = None,
+        gpu_mem_limit: Optional[int] = None,
+        trt_max_workspace_size: Optional[int] = None,
+        device: str = "auto",
+        engine_type: str = "auto",
+        hardware_profile: Optional[Any] = None,
     ) -> None:
         setup_cuda_dll_path()
         import onnxruntime as ort
+        from src.inference.device import detect_hardware_profile
 
+        profile = hardware_profile or detect_hardware_profile(
+            requested_device=device,
+            engine_type=engine_type,
+        )
+        self.hardware_profile = profile
         self.model_path = model_path
         self.engine_cache_dir = Path(engine_cache_dir)
         self.engine_cache_dir.mkdir(parents=True, exist_ok=True)
+
+        if profile.device_type == "cuda" and ":" in profile.device_str:
+            try:
+                device_id = int(profile.device_str.split(":", 1)[1])
+            except ValueError:
+                pass
+
+        fp16_flag = bool(profile.use_fp16 if enable_fp16 is None else enable_fp16)
+        trt_ws = int(trt_max_workspace_size if trt_max_workspace_size is not None else max(512 * 1024 * 1024, profile.trt_workspace_bytes))
+        cuda_limit = int(gpu_mem_limit if gpu_mem_limit is not None else max(512 * 1024 * 1024, profile.ort_gpu_mem_limit_bytes))
 
         session_opts = ort.SessionOptions()
         session_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
         trt_provider_options = {
             "device_id": device_id,
-            "trt_max_workspace_size": 1073741824,  # 1 GB
-            "trt_fp16_enable": enable_fp16,
+            "trt_max_workspace_size": trt_ws,
+            "trt_fp16_enable": fp16_flag,
             "trt_engine_cache_enable": True,
             "trt_engine_cache_path": str(self.engine_cache_dir),
         }
@@ -208,22 +242,26 @@ class TensorRTInferenceSession:
         cuda_provider_options = {
             "device_id": device_id,
             "arena_extend_strategy": "kNextPowerOfTwo",
-            "gpu_mem_limit": 1073741824,  # 1 GB
-            "cudnn_conv_algo_search": "DEFAULT",
+            "gpu_mem_limit": cuda_limit,
+            "cudnn_conv_algo_search": "EXHAUSTIVE" if profile.tier in ("gpu_mid", "gpu_high") else "DEFAULT",
             "do_copy_in_default_stream": True,
         }
 
-        # Build prioritized provider hierarchy: TensorRT -> CUDA -> CPU
         providers: List[Union[str, Tuple[str, Dict[str, Any]]]] = []
         avail = ort.get_available_providers()
+        req_eng = (engine_type or "auto").lower().strip()
 
-        if is_tensorrt_available() and "TensorrtExecutionProvider" in avail:
-            providers.append(("TensorrtExecutionProvider", trt_provider_options))
-        if "CUDAExecutionProvider" in avail:
-            providers.append(("CUDAExecutionProvider", cuda_provider_options))
+        if profile.device_type == "cuda":
+            if req_eng in ("auto", "tensorrt") and is_tensorrt_available() and "TensorrtExecutionProvider" in avail:
+                providers.append(("TensorrtExecutionProvider", trt_provider_options))
+            if "CUDAExecutionProvider" in avail:
+                providers.append(("CUDAExecutionProvider", cuda_provider_options))
         providers.append("CPUExecutionProvider")
 
-        logger.info(f"Initializing TensorRT/CUDA InferenceSession for '{model_path}'...")
+        logger.info(
+            f"Initializing ONNX/TensorRT InferenceSession for '{model_path}' "
+            f"(tier={profile.tier}, fp16={fp16_flag}, mem_limit={cuda_limit // (1024 * 1024)}MB)..."
+        )
         try:
             self.session = ort.InferenceSession(str(model_path), session_opts, providers=providers)
             active_providers = self.session.get_providers()

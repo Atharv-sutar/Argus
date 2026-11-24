@@ -1,13 +1,13 @@
 # GPU and Performance Optimization Rules
 
-## 1. Development Target Baseline
-- The target development environment includes limited VRAM hardware (NVIDIA GTX 1650 class with 4GB VRAM).
-- Total system VRAM allocation must stay under 3.5GB to prevent CUDA Out-of-Memory (OOM) crashes and Windows Desktop Window Manager paging.
+## 1. Hardware-Adaptive Baseline
+- Never hardcode hardware specs (e.g., 4 GB VRAM limits, fixed batch sizes, or legacy GPU SKUs) in inference, UI, or config defaults.
+- Probe the active device at runtime via `detect_hardware_profile()` (`src/inference/device.py`) so compact GPUs keep VRAM well under system ceiling while mid/high-VRAM Tensor-Core GPUs automatically unlock TensorRT/FP16/TF32, larger batch sizes, and higher-capacity models.
 
 ## 2. Shared Inference Engine
-- Never load duplicate YOLO or OSNet model instances across separate camera workers.
-- Shared models must be executed through the centralized inference management layer (`src/inference/`), which manages provider placement (`CUDAExecutionProvider`, `TensorrtExecutionProvider`, or fallback to `CPUExecutionProvider`).
-- Default ReID model for low-VRAM profile is `osnet_x0_25.onnx`. Only switch to `osnet_x1_0.onnx` if VRAM headroom permits.
+- Never load duplicate detector or ReID model instances across separate camera workers.
+- Shared models must execute through the centralized inference layer (`src/inference/`), dynamically selecting optimal providers (`TensorrtExecutionProvider`, PyTorch CUDA `FP16`/`TF32`, `CUDAExecutionProvider`, or `CPUExecutionProvider`) and memory workspaces for the detected `HardwareProfile`.
+- Default ReID resolution flows through the modular ReID registry (`src/reid/extractor.py`) rather than hardcoded legacy names.
 
 ## 3. Real-Time Latency & Queue Management
 - Queues between capture threads and inference workers must be strictly bounded (`maxsize <= 2`).

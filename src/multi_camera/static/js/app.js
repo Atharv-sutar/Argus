@@ -993,6 +993,36 @@ class SurveillanceApp {
             document.getElementById('set-track-buffer').value = settings.tracking.track_buffer;
             
             if (reidSettings) {
+              const hwBanner = document.getElementById('settings-hw-banner');
+              if (hwBanner && reidSettings.hardware) {
+                const hw = reidSettings.hardware;
+                const caps = [];
+                if (hw.tensor_cores || hw.has_tensor_cores) caps.push('TensorCores');
+                if (hw.fp16_enabled) caps.push('FP16');
+                if (hw.tf32_enabled) caps.push('TF32');
+                if (hw.tensorrt_available) caps.push('TensorRT');
+                const vramTxt = hw.vram_total_mb > 0 ? `${(hw.vram_total_mb / 1024).toFixed(1)} GB VRAM` : `${hw.cpu_threads || '?'} CPU threads`;
+                hwBanner.innerHTML = '';
+                const line1 = document.createElement('div');
+                line1.textContent = `HARDWARE: ${hw.device_name || hw.device_type} · ${vramTxt} · Tier=${hw.tier_label || hw.tier}`;
+                const line2 = document.createElement('div');
+                line2.style.color = '#94a3b8';
+                line2.textContent = `STACK: Det=${hw.detector_backend || 'auto'} (b=${hw.detection_batch_size || '?'}) · ReID=${hw.reid_model || reidSettings.active_model || 'auto'} (${hw.reid_backend || reidSettings.active_backend || ''}) · Caps=[${caps.join(', ') || 'FP32'}]`;
+                hwBanner.appendChild(line1);
+                hwBanner.appendChild(line2);
+              }
+              const reidDesc = document.getElementById('settings-reid-descriptions');
+              if (reidDesc && Array.isArray(reidSettings.options)) {
+                reidDesc.innerHTML = '';
+                reidSettings.options.forEach(opt => {
+                  const row = document.createElement('div');
+                  const strong = document.createElement('strong');
+                  strong.textContent = `${opt.name}: `;
+                  row.appendChild(strong);
+                  row.appendChild(document.createTextNode(opt.description || ''));
+                  reidDesc.appendChild(row);
+                });
+              }
               const reidSelect = document.getElementById('settings-reid-model');
               if (reidSelect) {
                 reidSelect.innerHTML = '';
@@ -1004,7 +1034,7 @@ class SurveillanceApp {
                 reidSettings.options.forEach(opt => {
                   const el = document.createElement('option');
                   el.value = opt.id;
-                  el.textContent = opt.name + (opt.recommended ? ' (Recommended for your PC)' : '');
+                  el.textContent = opt.name + (opt.recommended ? ' (Recommended for detected hardware)' : '');
                   reidSelect.appendChild(el);
                 });
                 
@@ -2186,9 +2216,21 @@ class SurveillanceApp {
       const uptimeEl = document.getElementById('status-uptime');
       const fpsEl = document.getElementById('status-fps');
       const gpuEl = document.getElementById('status-gpu');
+      const hwEl = document.getElementById('status-hardware');
       if (uptimeEl && st.uptime_s !== undefined) uptimeEl.textContent = `${st.uptime_s.toFixed(0)}s`;
       if (fpsEl && st.fps !== undefined) fpsEl.textContent = st.fps.toFixed(1);
-      if (gpuEl && st.gpu_memory_mb !== undefined) gpuEl.textContent = `${st.gpu_memory_mb.toFixed(1)} MB`;
+      if (gpuEl && st.gpu_memory_mb !== undefined) {
+        if (st.hardware_info && st.hardware_info.vram_total_mb > 0) {
+          gpuEl.textContent = `${st.gpu_memory_mb.toFixed(0)} / ${st.hardware_info.vram_total_mb.toFixed(0)} MB`;
+        } else {
+          gpuEl.textContent = `${st.gpu_memory_mb.toFixed(1)} MB`;
+        }
+      }
+      if (hwEl && st.hardware_info) {
+        const hw = st.hardware_info;
+        const modeTag = hw.fp16_enabled ? (hw.tf32_enabled ? 'FP16+TF32' : 'FP16') : 'FP32';
+        hwEl.textContent = `${hw.device_name || hw.device_type} [${hw.tier} | ${modeTag}]`;
+      }
 
       // Forward live telemetry into interactive topology graph canvas
       if (this.graphCanvas) {

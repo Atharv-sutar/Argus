@@ -355,15 +355,24 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
 
             elif path == "/api/settings/reid":
                 if self.runtime_pipeline is not None:
+                    from src.reid import get_reid_model_catalog
+                    hp = self.runtime_pipeline.get_hardware_profile()
                     current_model = self.runtime_pipeline.config.reid.model_name
                     recommended = self.runtime_pipeline.profile_hardware()
+                    active_model = getattr(self.runtime_pipeline.reid_extractor, "model_name", current_model)
+                    active_backend = getattr(self.runtime_pipeline.reid_extractor, "active_backend", "")
+                    det_backend = getattr(getattr(self.runtime_pipeline, "_shared_detector", None), "active_model_path", "")
                     self._send_json({
                         "current_model": current_model,
+                        "active_model": active_model,
+                        "active_backend": active_backend,
                         "recommended": recommended,
-                        "options": [
-                            {"id": "osnet_x0_25", "name": "OSNet x0.25 (Fast/Low VRAM)", "recommended": recommended == "osnet_x0_25"},
-                            {"id": "osnet_x1_0", "name": "OSNet x1.0 (High Compute/Best Accuracy)", "recommended": recommended == "osnet_x1_0"}
-                        ]
+                        "hardware": hp.to_telemetry_dict(
+                            detector_backend=str(det_backend),
+                            reid_model=str(active_model),
+                            reid_backend=str(active_backend),
+                        ),
+                        "options": get_reid_model_catalog(hp),
                     })
                 else:
                     self.send_error(503, "Pipeline not ready")
@@ -587,12 +596,13 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                         "camera_statuses": {},
                         "candidate_scores": {},
                         "gallery_size": 0,
-                        "gallery_max": 25,
+                        "gallery_max": 100,
                         "gallery_manual": 0,
                         "gallery_auto": 0,
                         "fps": 0.0,
                         "gpu_memory_mb": 0.0,
-                        "uptime_s": 0.0
+                        "uptime_s": 0.0,
+                        "hardware_info": None,
                     })
                 return
 

@@ -7,10 +7,12 @@ camera:
 inference:
   device: auto
   engine_type: auto
+  precision: auto
   engine_cache_dir: models/trt_cache
-  batch_size: 4
+  batch_size: auto
 detection:
-  model_name: yolo11n.pt
+  backend: yolo
+  model_name: auto
   confidence_threshold: 0.4
   iou_threshold: 0.45
   target_classes:
@@ -28,14 +30,15 @@ tracking:
   fix_association_cost: true
   low_conf_detection_threshold: 0.2
 reid:
-  model_name: person_reid_youtu
+  model_name: auto
   require_pretrained_weights: true
   match_threshold: 0.60
   reacquisition_threshold: 0.65
   auto_add_threshold: 0.74
   min_margin: 0.10
   lock_switch_margin: 0.08
-  extract_interval_frames: 3
+  extract_interval_frames: auto
+  batch_size: auto
   min_sharpness: 12.0
   uncertain_band_min: 0.52
   uncertain_band_max: 0.65

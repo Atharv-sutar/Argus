@@ -1,7 +1,7 @@
 {
-  "timestamp": "2026-11-24 23:08:58",
+  "timestamp": "2026-11-25 01:02:41",
   "config": {
-    "reid_model": "person_reid_youtu",
+    "reid_model": "auto",
     "match_threshold": 0.6,
     "reacquisition_threshold": 0.65,
     "auto_add_threshold": 0.74,
@@ -23,9 +23,9 @@
     "false_positive_rate": 0.0,
     "id_switches": 0,
     "recovery_events": 2,
-    "mean_target_sim": 0.9154,
-    "mean_bystander_sim": 0.1506,
-    "separation_gap": 0.7648,
+    "mean_target_sim": 0.9153,
+    "mean_bystander_sim": 0.1492,
+    "separation_gap": 0.7661,
     "state_frames": {
       "UNSELECTED": 120,
       "LOCKED": 1,
@@ -34,6 +34,6 @@
       "TRACKING": 2
     }
   },
-  "elapsed_seconds": 62.25,
-  "evaluation_fps": 5.8
+  "elapsed_seconds": 27.39,
+  "evaluation_fps": 13.1
 }

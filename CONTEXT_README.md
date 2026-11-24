@@ -13,8 +13,8 @@
   .\.venv\Scripts\python scripts/evaluate_reid.py --frames 360 --seed-cam cam_2 --seed-frame 120
   ```
 - **Web Operations Center**: `http://127.0.0.1:8798`
-- **Target Hardware Budget**: 4 GB VRAM (GTX 1650 class) — avoid duplicate model instances, excessive CPU↔GPU copies, and running ReID on inactive cameras.
-- **Git Baseline**: Codebase baseline commit `6cac660` on `main` (`https://github.com/Atharv-sutar/Argus.git`).
+- **Hardware-Adaptive Inference**: Auto-detects host CPU/GPU capabilities (`src/inference/device.py:HardwareProfile`) to scale batch size, FP16/TF32 precision, ORT/TensorRT memory budgets, detector variant, and ReID cadence dynamically across CPU, entry GPUs (`<6 GB`), mid-tier Tensor/RTX GPUs (`6–10 GB`), and high-VRAM RTX/workstation GPUs (`>=10 GB`).
+- **Git Baseline**: Originally documented at `6cac660` (`https://github.com/Atharv-sutar/Argus.git`).
 
 ---
 
@@ -24,15 +24,16 @@
 - **Multi-camera recovery flow**: `active camera -> target loss -> search manager -> candidate cameras -> detection/ReID -> target recovery -> active camera handoff`
 
 ### Key Subsystems & Entrypoints
-- **Detector**: YOLO11n (`yolo11n.onnx` / `yolo11n.pt`)
-- **Tracker (`src/tracking/bot_sort.py`)**: BoT-SORT (Kalman filter + GMC + Hungarian association)
-- **ReID (`src/reid/extractor.py`)**: `PyTorchReIDExtractor` (ONNX/CUDA & PyTorch paths); default backbone `person_reid_youtu` (`src/reid/backbones/person_reid_youtu_2021nov.onnx`, 768D).
-- **Identity & Storage (`src/identity/manager.py`, `src/identity/sqlite_store.py`)**: `IdentityManager` with FAISS vector search + SQLite persistence, disk gallery verification/rebuild (`verify_gallery_from_disk`, `rebuild_gallery_from_disk`), and dynamic case DB switching (`set_db_path`).
-- **Pipeline Orchestrator (`src/pipeline/multi_camera_pipeline.py`)**: Coordinates 4-phase acquisition, batched detection, BoT-SORT tracking, batched ReID, target evaluation, cross-camera search/handoff, and annotated JPEG streaming.
+- **Hardware Profiler (`src/inference/device.py`, `src/inference/tensorrt_engine.py`)**: `detect_hardware_profile()` probes GPU VRAM, compute capability, Tensor Cores, TensorRT, and CPU threads to build a `HardwareProfile` (`cpu`, `gpu_entry`, `gpu_mid`, `gpu_high`) and scale FP16/TF32, batch sizes, ORT/TRT arenas, and `pynvml` memory reporting.
+- **Detector (`src/detection/yolo_detector.py`)**: Modular `DETECTOR_REGISTRY` + `create_detector()` supporting `"auto"` hardware-tiered YOLO11 selection (`.engine` / `.pt` CUDA FP16/TF32 / `.onnx` CPU) with `YOLO_AUTOINSTALL=false`.
+- **Tracker (`src/tracking/bot_sort.py`, `src/tracking/__init__.py`)**: Modular `TRACKER_REGISTRY` + `create_tracker()` wrapping BoT-SORT (Kalman filter + GMC + Hungarian association) and ByteTracker.
+- **ReID (`src/reid/extractor.py`)**: Modular `REID_MODEL_REGISTRY` + `create_reid_extractor()` + `get_reid_model_catalog()`; `person_reid_youtu` (`src/reid/backbones/person_reid_youtu_2021nov.onnx`, 768D) default with `osnet_x1_0`, `osnet_x0_25`, and `mobilenet_v3_small`.
+- **Identity & Storage (`src/identity/manager.py`, `src/identity/sqlite_store.py`)**: `IdentityManager` (`reid_extractor` getter+setter for live switching) with FAISS vector search + SQLite persistence, disk gallery verification/rebuild (`verify_gallery_from_disk`, `rebuild_gallery_from_disk`), and dynamic case DB switching (`set_db_path`).
+- **Pipeline Orchestrator (`src/pipeline/multi_camera_pipeline.py`)**: Coordinates 4-phase acquisition, batched detection, BoT-SORT tracking, batched ReID, target evaluation, cross-camera search/handoff, annotated JPEG streaming, and live hardware telemetry (`get_telemetry().hardware_info`).
 - **Multi-Camera Graph (`src/multi_camera/`)**: `camera_graph.py`, `camera_node.py`, `transition.py`, `search_manager.py`, `search_state.py`, `camera_priority.py`.
 - **NVR Recording (`src/recording/`)**: `manager.py`, `retention_manager.py`, `segment_index.py`, `segment_writer.py` — continuous segment recording for live `webcam`/`rtsp` feeds tracked via SQLite `segments.db` (excludes offline files).
-- **Dynamic Dependencies (`src/core/dependencies.py`)**: Checks/installs `ultralytics`, `torch`/`torchvision` (when `"osnet"` or `"mobilenet"` is in `config.reid.model_name`), `scipy`, `faiss-cpu`, and `onnx`.
-- **Web UI (`src/multi_camera/ui_server.py`, `static/index.html`, `static/js/app.js`, `static/js/graph.js`)**: Vanilla JS + CSS variables + HTML5 Canvas.
+- **Dynamic Dependencies (`src/core/dependencies.py`)**: Checks/installs `ultralytics`, `torch`/`torchvision`, `scipy`, `faiss-cpu`, `onnx`, `onnxruntime-gpu`, and `nvidia-ml-py`.
+- **Web UI (`src/multi_camera/ui_server.py`, `static/index.html`, `static/js/app.js`, `static/js/graph.js`)**: Vanilla JS + CSS variables + HTML5 Canvas with dynamic hardware capability telemetry and ReID catalog settings.
 
 ---
 
@@ -50,7 +51,9 @@
 - With `person_reid_youtu`, `seed45` vs `cam_2` target similarity measured `0.693–0.837` (mean `0.797`) while bystanders peaked at `0.196`.
 
 ### Active Defaults (`configs/default.yaml` & `src/core/config.py`)
-- `model_name: person_reid_youtu`
+- `inference`: `device: auto`, `engine_type: auto`, `precision: auto`, `batch_size: auto`
+- `detection`: `backend: yolo`, `model_name: auto` (YAML) / `yolo11n.pt` (dataclass default)
+- `reid`: `model_name: auto` (resolves via `HardwareProfile` -> `person_reid_youtu`), `extract_interval_frames: auto` (YAML), `batch_size: auto`
 - Thresholds: `match_threshold: 0.60`, `reacquisition_threshold: 0.65`, `auto_add_threshold: 0.74`, `uncertain_band_min: 0.52`, `uncertain_band_max: 0.65`, `min_margin: 0.10`, `min_sharpness: 12.0`
 - Gallery: `gallery.max_size: 100` (artificial UI/server `25`-crop cap removed)
 - Enabled runtime flags (all 9 fix flags were previously `False`, causing BoT-SORT ID fragmentation and HTTP vs `step()` race conditions):

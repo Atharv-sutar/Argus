@@ -108,11 +108,11 @@ When Argus is running, navigate to `http://localhost:8765`:
 
 When running, Argus logs and verifies the active technology stack in real time:
 
-*   **Detector:** `YOLOv11` via `CUDAExecutionProvider` / `TensorrtExecutionProvider`
-*   **Tracker:** `BoT-SORT` (C-vectorized Kalman filter `[xc, yc, w, h, vxc, vyc, vw, vh]` + OpenCV ECC GMC + Hungarian assignment)
-*   **ReID:** `OSNet x0_25` with **Event-Driven Heuristics** (zero GPU ReID compute during steady tracking; activates only upon target loss, uncertainty, or cross-camera search)
-*   **Batching:** Dynamic cross-camera detection and ReID tensor chunking (up to 77+ FPS multi-camera ingest on 4GB GTX 1650 class hardware)
-*   **Memory Management:** Automatic VRAM trimming and tensor deallocation preventing GPU memory fragmentation
+*   **Detector:** Hardware-adaptive `YOLOv11` via `TensorRT`, PyTorch CUDA (`FP16`/`TF32` where supported), or ONNX `CPUExecutionProvider`
+*   **Tracker:** `BoT-SORT` (C-vectorized Kalman filter `[xc, yc, w, h, vxc, vyc, vw, vh]` + OpenCV optical flow GMC + Hungarian assignment)
+*   **ReID:** Hardware-adaptive ReID registry (`person_reid_youtu` 768D default, plus `OSNet` / `MobileNetV3` options) with **Event-Driven Heuristics** (minimal ReID overhead during steady tracking; dynamically scales interval by GPU tier)
+*   **Batching:** Dynamic cross-camera detection and ReID tensor batching scaled automatically to detected GPU VRAM / Tensor Cores / CPU threads
+*   **Memory Management:** Dynamic ORT/TensorRT arena sizing, NVML VRAM telemetry, and automatic GPU cache trimming preventing fragmentation
 
 ---
 
@@ -122,7 +122,7 @@ When running, Argus logs and verifies the active technology stack in real time:
 If Python is not installed on Windows, `run.bat` automatically invokes the Windows Package Manager (`winget install Python.Python.3.12`) to install Python 3.12.
 
 ### GPU Acceleration Not Detected?
-Ensure you have the latest NVIDIA drivers installed. Argus will automatically detect your CUDA-capable GPU (e.g. GTX 1650, RTX 3060, etc.) and run in TensorRT/CUDA mode. If no GPU is present, Argus automatically falls back to CPU vectorization.
+Ensure you have the latest NVIDIA drivers installed. Argus automatically detects your GPU capabilities (VRAM, compute capability, Tensor Cores, TensorRT) and enables FP16/TF32/TensorRT and larger batch sizes on higher-tier RTX GPUs, while scaling conservatively on compact GPUs or falling back to CPU vectorization when no GPU is present.
 
 ### Checking Full System Tests
 To run all 97 automated unit and integration tests:

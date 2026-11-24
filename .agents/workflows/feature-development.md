@@ -6,7 +6,7 @@ This workflow guides the development of new features in the Argus surveillance c
 1. Inspect only the relevant files.
 2. Review architecture rules in `.agents/rules/project-core.md`.
 3. Verify that changes maintain modular boundaries (`core`, `camera`, `detection`, `tracking`, `reid`, `target`, `multi_camera`, `pipeline`, `visualization`).
-4. Ensure hardware constraints are respected (GTX 1650 4GB VRAM ceiling).
+4. Ensure adaptive hardware constraints are respected across CPU and GPU tiers via `detect_hardware_profile()`.
 
 ## Step 2: Planning & Approval
 1. Use `/plan` to draft an implementation plan with success criteria, proposed file diffs, and verification steps.

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import List, Optional, Tuple
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import numpy as np
 
 try:
@@ -14,35 +15,165 @@ except ImportError:
 from src.core.interfaces import BaseReID
 from src.core.types import Embedding
 
-from src.inference.device import resolve_inference_device
+from src.inference.device import (
+    HardwareProfile,
+    configure_torch_execution,
+    detect_hardware_profile,
+)
 
 logger = logging.getLogger(__name__)
 
 
+# Modular ReID model registry: allows adding backbones in one place (used by factory, pipeline switcher, and UI API).
+REID_MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
+    "person_reid_youtu": {
+        "id": "person_reid_youtu",
+        "name": "Person ReID Youtu (768D ONNX/TensorRT - Highest Accuracy)",
+        "description": "High-discrimination 768D appearance embedding backbone for cross-camera target verification.",
+        "feature_dim": 768,
+        "min_vram_gb": 0.0,
+        "onnx_candidates": (
+            "src/reid/backbones/person_reid_youtu_2021nov.onnx",
+            "models/person_reid_youtu_2021nov.onnx",
+        ),
+        "aliases": ("auto", "default", "reid", "youtu"),
+    },
+    "osnet_x1_0": {
+        "id": "osnet_x1_0",
+        "name": "OSNet x1.0 (512D High Capacity)",
+        "description": "Full-width Omni-Scale network suited for mid/high-VRAM GPUs when PyTorch/OSNet is preferred.",
+        "feature_dim": 512,
+        "min_vram_gb": 6.0,
+        "aliases": (),
+    },
+    "osnet_x0_25": {
+        "id": "osnet_x0_25",
+        "name": "OSNet x0.25 (512D Compact)",
+        "description": "Ultra-lightweight Omni-Scale network suited for CPU or memory-constrained GPUs.",
+        "feature_dim": 512,
+        "min_vram_gb": 0.0,
+        "aliases": (),
+    },
+    "mobilenet_v3_small": {
+        "id": "mobilenet_v3_small",
+        "name": "MobileNetV3-Small (576D PyTorch Fallback)",
+        "description": "Compact torchvision feature extractor fallback.",
+        "feature_dim": 576,
+        "min_vram_gb": 0.0,
+        "aliases": ("mobilenet",),
+    },
+}
+
+_CUSTOM_REID_BUILDERS: Dict[str, Callable[..., BaseReID]] = {}
+
+
+def register_reid_model(
+    model_id: str,
+    *,
+    name: str,
+    description: str = "",
+    feature_dim: int = 512,
+    min_vram_gb: float = 0.0,
+    onnx_candidates: Tuple[str, ...] = (),
+    builder: Optional[Callable[..., BaseReID]] = None,
+) -> None:
+    """Register an external ReID model specification and optional builder cleanly."""
+    key = model_id.lower().strip()
+    REID_MODEL_REGISTRY[key] = {
+        "id": key,
+        "name": name,
+        "description": description,
+        "feature_dim": feature_dim,
+        "min_vram_gb": min_vram_gb,
+        "onnx_candidates": tuple(onnx_candidates),
+        "aliases": (),
+    }
+    if builder is not None:
+        _CUSTOM_REID_BUILDERS[key] = builder
+
+
+def is_reid_model_supported(model_name: str) -> bool:
+    key = (model_name or "").lower().strip()
+    if key in REID_MODEL_REGISTRY:
+        return True
+    for spec in REID_MODEL_REGISTRY.values():
+        if key in spec.get("aliases", ()):
+            return True
+    return "osnet" in key or "mobilenet" in key or "youtu" in key
+
+
+def get_reid_model_catalog(hardware_profile: Optional[HardwareProfile] = None) -> List[Dict[str, Any]]:
+    """Return UI/API-ready metadata for available ReID models, dynamically marking recommendation."""
+    profile = hardware_profile or detect_hardware_profile()
+    recommended = profile.recommended_reid_model
+    options: List[Dict[str, Any]] = []
+    for spec in REID_MODEL_REGISTRY.values():
+        mid = spec["id"]
+        # Only advertise person_reid_youtu if its weights file is present locally
+        cands = spec.get("onnx_candidates", ())
+        if cands and not any(Path(c).is_file() for c in cands):
+            continue
+        options.append({
+            "id": mid,
+            "name": spec["name"],
+            "description": spec.get("description", ""),
+            "feature_dim": spec.get("feature_dim", 512),
+            "min_vram_gb": spec.get("min_vram_gb", 0.0),
+            "recommended": mid == recommended,
+        })
+    return options
+
+
 class PyTorchReIDExtractor(BaseReID):
     """
-    High-capacity Person Re-Identification feature extractor supporting:
-    1. Omni-Scale Network (OSNet-x0.25 / OSNet-x1.0, 512D) - Primary ReID backbone
-    2. Multi-crop representations (Full Body, Upper Torso, Lower Body)
-    3. Fast batched GPU/CPU inference with rich metadata
+    Hardware-adaptive Person Re-Identification feature extractor supporting:
+    1. Youtu ReID ONNX/TensorRT (768D) and custom registered ONNX/TensorRT models
+    2. Omni-Scale Network (OSNet-x0.25 / OSNet-x1.0, 512D)
+    3. Multi-crop representations (Full Body, Upper Torso, Lower Body)
+    4. Batched GPU/CPU inference with dynamic HardwareProfile scaling
     """
 
     def __init__(
         self,
-        model_name: str = "osnet_x0_25",
+        model_name: str = "auto",
         device: str = "auto",
         input_size: Tuple[int, int] = (256, 128),
         prefer_engine: bool = True,
-        batch_size: int = 32,
+        batch_size: Union[int, str] = "auto",
         require_pretrained_weights: bool = False,
+        engine_type: str = "auto",
+        precision: str = "auto",
+        engine_cache_dir: str = "models/trt_cache",
+        hardware_profile: Optional[HardwareProfile] = None,
     ) -> None:
-        self.model_name = model_name.lower()
-        self.device_str = resolve_inference_device(device)
+        self.hardware_profile = hardware_profile or detect_hardware_profile(
+            requested_device=device,
+            engine_type=engine_type,
+            precision=precision,
+        )
+        raw_name = (model_name or "auto").lower().strip()
+        if raw_name in ("auto", "default", "reid"):
+            self.model_name = self.hardware_profile.recommended_reid_model
+        else:
+            self.model_name = raw_name
+
+        self.device_str = self.hardware_profile.device_str
         self.input_size = input_size
         self.feature_dim = 512
         self.prefer_engine = prefer_engine
-        self.batch_size = max(1, batch_size)
+        if batch_size is None or str(batch_size).lower() == "auto" or int(batch_size) <= 0:
+            self.batch_size = max(1, self.hardware_profile.reid_batch_size)
+        else:
+            self.batch_size = max(1, int(batch_size))
         self.require_pretrained_weights = require_pretrained_weights
+        self.engine_type = (engine_type or "auto").lower().strip()
+        self.precision = (precision or "auto").lower().strip()
+        self.engine_cache_dir = engine_cache_dir
+        self._use_fp16 = bool(
+            self.hardware_profile.device_type == "cuda"
+            and self.hardware_profile.use_fp16
+            and self.precision != "fp32"
+        )
         self._model = None
         self._osnet_model = None
         self._device = None
@@ -60,21 +191,28 @@ class PyTorchReIDExtractor(BaseReID):
         return self._weights_report
 
     def _init_model(self) -> None:
-        if self.prefer_engine:
+        configure_torch_execution(self.hardware_profile)
+        if self.prefer_engine and self.engine_type != "pytorch":
             try:
-                from pathlib import Path
                 from src.inference.tensorrt_engine import TensorRTInferenceSession
 
                 candidate_path = None
                 dim = 512
-                norm_name = "person_reid_youtu"
+                norm_name = self.model_name
 
-                # 1. Prefer production Person ReID Youtu ONNX model (768D) if requested or auto/default
-                if self.model_name in ("auto", "default", "reid", "youtu", "person_reid_youtu"):
-                    for p in [
-                        Path("src/reid/backbones/person_reid_youtu_2021nov.onnx"),
-                        Path("models/person_reid_youtu_2021nov.onnx"),
-                    ]:
+                # 1. Registry-driven ONNX / TensorRT artifact lookup
+                spec = REID_MODEL_REGISTRY.get(self.model_name)
+                if spec and spec.get("onnx_candidates"):
+                    for p_str in spec["onnx_candidates"]:
+                        p = Path(p_str)
+                        if p.is_file():
+                            candidate_path = str(p)
+                            dim = int(spec.get("feature_dim", 768))
+                            norm_name = spec["id"]
+                            break
+                elif self.model_name in ("youtu", "person_reid_youtu"):
+                    for p_str in REID_MODEL_REGISTRY["person_reid_youtu"]["onnx_candidates"]:
+                        p = Path(p_str)
                         if p.is_file():
                             candidate_path = str(p)
                             dim = 768
@@ -82,11 +220,11 @@ class PyTorchReIDExtractor(BaseReID):
                             break
 
                 # 2. Check for explicit or fallback OSNet engine/onnx
-                if candidate_path is None and ("osnet" in self.model_name or self.model_name in ("default", "reid", "auto")):
+                if candidate_path is None and "osnet" in self.model_name:
                     norm_name = "osnet_x1_0" if "x1_0" in self.model_name else "osnet_x0_25"
                     engine_path = Path("models") / f"{norm_name}.engine"
                     onnx_path = Path("models") / f"{norm_name}.onnx"
-                    if engine_path.is_file():
+                    if engine_path.is_file() and self.hardware_profile.device_type == "cuda":
                         candidate_path = str(engine_path)
                         dim = 512
                     elif onnx_path.is_file():
@@ -95,9 +233,19 @@ class PyTorchReIDExtractor(BaseReID):
 
                 if candidate_path:
                     logger.info(f"Loading accelerated ReID session from {candidate_path}...")
-                    self._trt_session = TensorRTInferenceSession(candidate_path)
+                    self._trt_session = TensorRTInferenceSession(
+                        candidate_path,
+                        engine_cache_dir=self.engine_cache_dir,
+                        enable_fp16=self._use_fp16,
+                        gpu_mem_limit=self.hardware_profile.ort_gpu_mem_limit_bytes,
+                        trt_max_workspace_size=self.hardware_profile.trt_workspace_bytes,
+                        device=self.device_str,
+                        engine_type=self.engine_type,
+                        hardware_profile=self.hardware_profile,
+                    )
                     self.active_backend = self._trt_session.active_backend
                     self.feature_dim = dim
+                    self.model_name = norm_name
                     self._weights_report = {"loaded": 1, "expected": 1, "source": candidate_path, "ok": True}
                     logger.info(f"ReID model '{norm_name}' loaded via {self.active_backend} (dim={self.feature_dim}).")
                     return
@@ -108,24 +256,28 @@ class PyTorchReIDExtractor(BaseReID):
         try:
             import torch
             self._device = torch.device(self.device_str)
-            logger.info(f"Initializing ReID model '{self.model_name}' on device '{self.device_str}'...")
+            logger.info(
+                f"Initializing ReID model '{self.model_name}' on device '{self.device_str}' "
+                f"(tier={self.hardware_profile.tier}, fp16={self._use_fp16})..."
+            )
 
-            if "osnet" in self.model_name or self.model_name in ("default", "reid"):
+            if "osnet" in self.model_name or self.model_name in ("default", "reid", "person_reid_youtu"):
                 from src.reid.backbones.osnet import build_osnet
+                osnet_variant = "osnet_x1_0" if ("x1_0" in self.model_name or (self.model_name == "person_reid_youtu" and self.hardware_profile.vram_gb >= 6.0)) else "osnet_x0_25"
                 self._model = build_osnet(
-                    self.model_name if "x1_0" in self.model_name else "osnet_x0_25",
+                    osnet_variant,
                     pretrained=True,
                     require_pretrained=self.require_pretrained_weights,
                 ).to(self._device).eval()
                 self.feature_dim = 512
-                self.active_backend = f"PyTorch ({self._device})"
+                self.active_backend = f"PyTorch ({self._device}, {'fp16' if self._use_fp16 else 'fp32'})"
             elif "mobilenet" in self.model_name:
                 import torchvision.models as models
                 backbone = models.mobilenet_v3_small(weights=models.MobileNet_V3_Small_Weights.DEFAULT)
                 backbone.classifier = torch.nn.Sequential(torch.nn.Identity())
                 self._model = backbone.to(self._device).eval()
                 self.feature_dim = 576
-                self.active_backend = f"PyTorch ({self._device})"
+                self.active_backend = f"PyTorch ({self._device}, {'fp16' if self._use_fp16 else 'fp32'})"
                 self._weights_report = {"loaded": len(backbone.state_dict()), "expected": len(backbone.state_dict()), "source": "torchvision", "ok": True}
             else:
                 from src.reid.backbones.osnet import build_osnet
@@ -338,7 +490,12 @@ class PyTorchReIDExtractor(BaseReID):
                     import torch
                     batch_tensor = torch.from_numpy(np.stack(chunk_preps)).to(self._device)
                     with torch.inference_mode():
-                        chunk_feats = self._model(batch_tensor).cpu().numpy().astype(np.float32)
+                        if self._use_fp16 and self.hardware_profile.device_type == "cuda":
+                            with torch.autocast("cuda", dtype=torch.float16):
+                                out_tensor = self._model(batch_tensor)
+                        else:
+                            out_tensor = self._model(batch_tensor)
+                        chunk_feats = out_tensor.float().cpu().numpy().astype(np.float32)
                     del batch_tensor
                 except Exception as e:
                     logger.error(f"Error in batch PyTorch ReID extraction: {e}")
@@ -367,3 +524,29 @@ class PyTorchReIDExtractor(BaseReID):
             )
 
         return embeddings
+
+
+def create_reid_extractor(
+    config: Any,
+    hardware_profile: Optional[HardwareProfile] = None,
+    model_name_override: Optional[str] = None,
+) -> BaseReID:
+    """Factory creating a configured BaseReID extractor matched to the detected HardwareProfile."""
+    reid_cfg = getattr(config, "reid", None)
+    inf_cfg = getattr(config, "inference", None)
+
+    model_name = model_name_override or (getattr(reid_cfg, "model_name", "auto") if reid_cfg else "auto")
+    key = (model_name or "auto").lower().strip()
+    if key in _CUSTOM_REID_BUILDERS:
+        return _CUSTOM_REID_BUILDERS[key](config=config, hardware_profile=hardware_profile)
+
+    return PyTorchReIDExtractor(
+        model_name=model_name,
+        device=getattr(inf_cfg, "device", "auto") if inf_cfg else "auto",
+        batch_size=getattr(reid_cfg, "batch_size", "auto") if reid_cfg else "auto",
+        require_pretrained_weights=getattr(reid_cfg, "require_pretrained_weights", False) if reid_cfg else False,
+        engine_type=getattr(inf_cfg, "engine_type", "auto") if inf_cfg else "auto",
+        precision=getattr(inf_cfg, "precision", "auto") if inf_cfg else "auto",
+        engine_cache_dir=getattr(inf_cfg, "engine_cache_dir", "models/trt_cache") if inf_cfg else "models/trt_cache",
+        hardware_profile=hardware_profile,
+    )

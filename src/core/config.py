@@ -52,8 +52,9 @@ class CameraConfig:
 class InferenceConfig:
     device: str = "auto"
     engine_type: str = "auto"
+    precision: str = "auto"
     engine_cache_dir: str = "models/trt_cache"
-    batch_size: int = 4
+    batch_size: Union[int, str] = "auto"
 
 
 @dataclass
@@ -63,6 +64,7 @@ class DetectionConfig:
     iou_threshold: float = 0.45
     target_classes: List[int] = field(default_factory=lambda: [0])
     image_size: int = 640
+    backend: str = "yolo"
 
 
 @dataclass
@@ -86,14 +88,15 @@ class TrackingConfig:
 
 @dataclass
 class ReIDConfig:
-    model_name: str = "person_reid_youtu"
+    model_name: str = "auto"
     require_pretrained_weights: bool = True
     match_threshold: float = 0.60
     reacquisition_threshold: float = 0.65
     auto_add_threshold: float = 0.74
     min_margin: float = 0.10
     lock_switch_margin: float = 0.08
-    extract_interval_frames: int = 3
+    extract_interval_frames: Union[int, str] = 3
+    batch_size: Union[int, str] = "auto"
     event_driven_reid: bool = True  # Uncertainty-triggered ReID: bypass redundant per-frame extraction during steady tracking
 
     # PROVISIONAL / INITIAL thresholds pending calibration against real camera footage

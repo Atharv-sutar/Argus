@@ -240,7 +240,7 @@ class TargetIdentityAnchor:
     identity_id: str
     label: str = "selected_target"
     clusters: List[ViewCluster] = field(default_factory=list)
-    model_name: str = "osnet_x0_25"
+    model_name: str = "reid"
     feature_dim: int = 512
     created_timestamp_ms: float = 0.0
     anchor_hash: str = ""
@@ -272,7 +272,7 @@ class VerifiedIdentityDecision:
     reason: str
     decision_id: str = ""
     source_camera_id: str = "camera_0"
-    model_name: str = "osnet_x0_25"
+    model_name: str = "reid"
     model_version: str = "2.0"
     expires_at_ms: float = 0.0
     evidence_hash: str = ""
@@ -552,3 +552,4 @@ class PipelineTelemetry:
     forensic_duration_s: float = 0.0
     forensic_frames: int = 0
     recording_stats: Optional[Dict[str, Any]] = None
+    hardware_info: Optional[Dict[str, Any]] = None

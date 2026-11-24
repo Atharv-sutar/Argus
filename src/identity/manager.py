@@ -134,6 +134,10 @@ class IdentityManager:
     def reid_extractor(self) -> Any:
         return self.reid
 
+    @reid_extractor.setter
+    def reid_extractor(self, extractor: Any) -> None:
+        self.reid = extractor
+
     @property
     def manual_count(self) -> int:
         """Shim for TargetGallery.manual_count (assumes target_0)"""

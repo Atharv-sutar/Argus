@@ -2,9 +2,9 @@
 
 ## System Overview
 Argus is an AI-powered real-time multi-camera surveillance and person tracking operations center.
-- **Detector**: YOLO11n (`yolo11n.onnx` / `yolo11n.pt`)
+- **Detector**: YOLO11 (`auto` hardware-adaptive model/engine selection)
 - **Tracker**: BoT-SORT (Kalman filter + GMC + Hungarian association)
-- **ReID**: OSNet (`models/osnet_x0_25.onnx` default for low VRAM, `models/osnet_x1_0.onnx` high compute)
+- **ReID**: `person_reid_youtu` (768D ONNX/TensorRT default) with modular registry (`osnet_x1_0`, `osnet_x0_25`, `mobilenet_v3_small`)
 - **Multi-Camera Graph**: Dynamic topological search with distance & timeout radius expansion
 - **Identity & Storage**: FAISS vector search with SQLite persistence
 - **Frontend UI**: Vanilla JavaScript + CSS variables + HTML5 Canvas web operations center (`http://127.0.0.1:8798`)
@@ -23,7 +23,7 @@ Always execute tools and tests through the project virtual environment:
   - `testing-rules.md`: Virtual env and ReID dataset testing guidelines (no synthetic ReID).
   - `bug-tracking.md`: Volatile issue tracking in `BUGS.md`.
   - `code-quality.md`: Typing, dataclass contracts, and resource management.
-  - `gpu-performance.md`: Constraints for 4GB GTX 1650 class hardware.
+  - `gpu-performance.md`: Hardware-adaptive GPU profiling, VRAM scaling, and inference constraints.
   - `frontend-architecture.md`: Vanilla JS, unique DOM IDs, and telemetry standards.
 - **Skills (`.agents/skills/`)**:
   - `karpathy-guidelines`: Caution-biased engineering principles (unmodified).

@@ -68,7 +68,7 @@ def _deserialize_anchor(data: Dict[str, Any]) -> TargetIdentityAnchor:
         identity_id=data["identity_id"],
         label=data.get("label", "selected_target"),
         clusters=[_deserialize_cluster(c) for c in data.get("clusters", [])],
-        model_name=data.get("model_name", "osnet_x0_25"),
+        model_name=data.get("model_name", "reid"),
         feature_dim=data.get("feature_dim", 512),
         created_timestamp_ms=data.get("created_timestamp_ms", 0.0),
         anchor_hash=data.get("anchor_hash", "")

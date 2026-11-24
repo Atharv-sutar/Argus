@@ -12,9 +12,10 @@ import webbrowser
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-# Suppress noisy OpenCV MediaFoundation C++ logger warnings on Windows
+# Suppress noisy OpenCV MediaFoundation C++ logger warnings on Windows and prevent silent runtime pip installs
 os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 os.environ.setdefault("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "0")
+os.environ.setdefault("YOLO_AUTOINSTALL", "false")
 
 import numpy as np
 

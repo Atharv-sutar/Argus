@@ -23,7 +23,7 @@ from src.core.multi_camera_types import (
     HandoffDecision,
 )
 from src.core.types import DetectionResult, Embedding, Target, TargetState, Track, TrackState, TrackResult, PipelineTelemetry
-from src.detection.yolo_detector import YOLODetector
+from src.detection import create_detector
 from src.multi_camera.camera_graph import CameraGraph
 from src.multi_camera.camera_node import CameraNode
 from src.audit.logger import AuditLogger
@@ -33,13 +33,19 @@ from src.playback.route_recorder import RouteRecorder
 from src.camera.video_file import VideoFileCamera
 from src.pipeline.camera_worker import CameraWorker
 from src.identity.manager import IdentityManager
-from src.reid.extractor import PyTorchReIDExtractor
+from src.reid import PyTorchReIDExtractor, create_reid_extractor, is_reid_model_supported
 from src.target.manager import TargetManager
-from src.tracking import ByteTracker, BoTSORTTracker
+from src.tracking import ByteTracker, BoTSORTTracker, create_tracker
 from src.visualization.annotator import FrameAnnotator
 from src.core.undo_stack import UndoStack
 from src.forensic.clip_recorder import ForensicClipRecorder
-from src.inference.device import trim_gpu_memory
+from src.inference.device import (
+    HardwareProfile,
+    configure_torch_execution,
+    detect_hardware_profile,
+    get_gpu_memory_info,
+    trim_gpu_memory,
+)
 from src.recording.manager import ContinuousRecordingManager
 
 logger = logging.getLogger(__name__)
@@ -96,21 +102,23 @@ class MultiCameraPipeline:
         self.search_config = config.multi_camera.search
         self.audit_logger = audit_logger
 
+        # 0. Hardware Capability Profiling & Backend Optimization
+        self.hardware_profile: HardwareProfile = detect_hardware_profile(
+            requested_device=getattr(config.inference, "device", "auto"),
+            engine_type=getattr(config.inference, "engine_type", "auto"),
+            precision=getattr(config.inference, "precision", "auto"),
+        )
+        configure_torch_execution(self.hardware_profile)
+
         # 1. ReID Extractor
         if reid_extractor is not None:
             self.reid_extractor = reid_extractor
         elif identity_manager is not None and hasattr(identity_manager, "reid_extractor"):
             self.reid_extractor = identity_manager.reid_extractor
         else:
-            actual_model_name = config.reid.model_name
-            if actual_model_name == "auto":
-                actual_model_name = self.profile_hardware()
-                config.reid.model_name = actual_model_name
-            
-            self.reid_extractor = PyTorchReIDExtractor(
-                model_name=actual_model_name,
-                device=config.inference.device,
-                require_pretrained_weights=getattr(config.reid, "require_pretrained_weights", False),
+            self.reid_extractor = create_reid_extractor(
+                config=config,
+                hardware_profile=self.hardware_profile,
             )
 
         # 2. Identity Manager & Target Manager
@@ -188,7 +196,11 @@ class MultiCameraPipeline:
         import collections
         self._transit_history: collections.deque = collections.deque(maxlen=500)
         self._frame_count: int = 0
-        self.reid_interval: int = config.reid.extract_interval_frames
+        raw_interval = getattr(config.reid, "extract_interval_frames", 3)
+        if raw_interval is None or str(raw_interval).lower().strip() == "auto" or int(raw_interval) <= 0:
+            self.reid_interval: int = self.hardware_profile.reid_extract_interval
+        else:
+            self.reid_interval: int = int(raw_interval)
         self._frame_lock: threading.Lock = threading.Lock()
         self._latest_jpegs: Dict[str, bytes] = {}
         self._frame_seqs: Dict[str, int] = {}
@@ -256,21 +268,29 @@ class MultiCameraPipeline:
 
         storage_str = str(self.identity_manager.vector_store) if self.identity_manager and self.identity_manager.vector_store else 'None'
         
-        # 10. Log Technology Stack
+        # 10. Log Hardware Profile & Technology Stack
         tracker_type = getattr(config.tracking, "tracker_type", "botsort").lower()
         tracker_name = "BoT-SORT (GMC + Kalman [xc,yc,w,h] + Hungarian)" if "bot" in tracker_type else "ByteTracker (IoU based)"
         det_backend = config.detection.model_name
+        det_batch_actual = getattr(self._shared_detector, "batch_size", self.hardware_profile.detection_batch_size)
+        det_fp16 = getattr(self._shared_detector, "_use_fp16", False)
         if getattr(self, '_shared_detector', None) and hasattr(self._shared_detector, 'active_model_path'):
             det_backend = self._shared_detector.active_model_path
         reid_backend = getattr(self.reid_extractor, 'active_backend', 'PyTorch')
         reid_name = getattr(self.reid_extractor, 'model_name', type(self.reid_extractor).__name__) if self.reid_extractor else 'None'
-        logger.info("\n" + "="*50)
-        logger.info("=== ARGUS AI TECHNOLOGY STACK INITIALIZED ===")
-        logger.info(f"Detector: {config.detection.model_name} (Active: {det_backend})")
+        reid_batch_actual = getattr(self.reid_extractor, 'batch_size', self.hardware_profile.reid_batch_size) if self.reid_extractor else 0
+        hp = self.hardware_profile
+        logger.info("\n" + "=" * 60)
+        logger.info("=== ARGUS HARDWARE-ADAPTIVE AI STACK INITIALIZED ===")
+        logger.info(
+            f"Hardware: {hp.device_name} | Tier={hp.tier} ({hp.tier_label}) | "
+            f"TensorCores={hp.has_tensor_cores} | FP16={hp.use_fp16} | TF32={hp.use_tf32} | TRT={hp.tensorrt_available}"
+        )
+        logger.info(f"Detector: {config.detection.model_name} -> Active='{det_backend}' (batch={det_batch_actual}, fp16={det_fp16})")
         logger.info(f"Tracker:  {tracker_name}")
-        logger.info(f"ReID:     {reid_name} (Backend: {reid_backend})")
+        logger.info(f"ReID:     {reid_name} (Backend={reid_backend}, batch={reid_batch_actual}, interval={self.reid_interval})")
         logger.info(f"Storage:  {storage_str}")
-        logger.info("="*50 + "\n")
+        logger.info("=" * 60 + "\n")
 
         # Sync nodes from graph
         self._sync_nodes_with_graph()
@@ -343,40 +363,15 @@ class MultiCameraPipeline:
 
     def _default_detector_factory(self) -> BaseDetector:
         if self._shared_detector is None:
-            batch_sz = getattr(self.config.inference, "batch_size", 4)
-            self._shared_detector = YOLODetector(
-                model_name=self.config.detection.model_name,
-                confidence_threshold=self._effective_detection_confidence(),
-                iou_threshold=self.config.detection.iou_threshold,
-                target_classes=self.config.detection.target_classes,
-                device=self.config.inference.device,
-                image_size=self.config.detection.image_size,
-                batch_size=batch_sz,
+            self._shared_detector = create_detector(
+                config=self.config,
+                hardware_profile=self.hardware_profile,
+                confidence_override=self._effective_detection_confidence(),
             )
         return self._shared_detector
 
     def _default_tracker_factory(self) -> BaseTracker:
-        tracker_type = getattr(self.config.tracking, "tracker_type", "botsort").lower()
-        if "bot" in tracker_type:
-            return BoTSORTTracker(
-                track_thresh=self.config.tracking.track_thresh,
-                match_thresh=self.config.tracking.match_thresh,
-                track_buffer=self.config.tracking.track_buffer,
-                min_box_area=self.config.tracking.min_box_area,
-                gmc_method=getattr(self.config.tracking, "gmc_method", "sparseOptFlow"),
-                reid_extractor=self.reid_extractor,
-                reid_weight=getattr(self.config.tracking, "reid_weight", 0.5),
-                ema_alpha=getattr(self.config.tracking, "ema_alpha", 0.9),
-                fix_association_cost=getattr(self.config.tracking, "fix_association_cost", False),
-            )
-        return ByteTracker(
-            track_thresh=self.config.tracking.track_thresh,
-            match_thresh=self.config.tracking.match_thresh,
-            track_buffer=self.config.tracking.track_buffer,
-            min_box_area=self.config.tracking.min_box_area,
-            reid_extractor=self.reid_extractor,
-            reid_weight=getattr(self.config.tracking, "reid_weight", 0.5),
-        )
+        return create_tracker(config=self.config, reid_extractor=self.reid_extractor)
 
     def _default_camera_factory(self, node_cfg: CameraNodeConfig) -> BaseCamera:
         if node_cfg.source_type == SourceType.SYNTHETIC or str(node_cfg.source).lower() == "synthetic":
@@ -559,14 +554,22 @@ class MultiCameraPipeline:
             self._last_fps_time = now
             self._last_fps_frames = self._frame_count
 
-        # Estimate GPU memory (if CUDA)
-        gpu_mb = 0.0
-        try:
-            import torch
-            if torch.cuda.is_available():
-                gpu_mb = torch.cuda.memory_allocated() / (1024 * 1024)
-        except:
-            pass
+        # Measure GPU memory across all GPU runtimes (NVML with PyTorch fallback)
+        gpu_mb, _, _ = get_gpu_memory_info()
+        hp = getattr(self, "hardware_profile", None)
+        det_backend = getattr(self._shared_detector, "active_model_path", "") if getattr(self, "_shared_detector", None) else ""
+        reid_model = getattr(self.reid_extractor, "model_name", "") if getattr(self, "reid_extractor", None) else ""
+        reid_backend = getattr(self.reid_extractor, "active_backend", "") if getattr(self, "reid_extractor", None) else ""
+        hw_info = (
+            hp.to_telemetry_dict(
+                vram_used_mb=gpu_mb,
+                detector_backend=str(det_backend),
+                reid_model=str(reid_model),
+                reid_backend=str(reid_backend),
+            )
+            if hp is not None
+            else None
+        )
 
         statuses = {
             cid: node.status.value for cid, node in self._nodes.items() if node.status
@@ -594,6 +597,7 @@ class MultiCameraPipeline:
             forensic_duration_s=round(self.forensic_recorder.duration_seconds, 1),
             forensic_frames=self.forensic_recorder.frame_count,
             recording_stats=self.recording_manager.get_storage_stats() if getattr(self, "recording_manager", None) else None,
+            hardware_info=hw_info,
         )
 
     def get_camera_status(self, camera_id: str) -> Optional[CameraStatus]:
@@ -1742,7 +1746,18 @@ class MultiCameraPipeline:
         for engine in (self._evidence_engine, getattr(self.identity_manager, "evidence_engine", None)):
             if engine is not None and hasattr(engine, "min_similarity_threshold"):
                 engine.min_similarity_threshold = mt
-        logger.info(f"[SETTINGS] Applied live: match_threshold={mt:.3f}")
+        tb = int(getattr(cfg.tracking, "track_buffer", 30))
+        for worker in self._workers.values():
+            tracker = getattr(worker, "tracker", None)
+            if tracker is not None and hasattr(tracker, "track_buffer"):
+                tracker.track_buffer = tb
+        raw_interval = getattr(cfg.reid, "extract_interval_frames", 3)
+        hp = self.get_hardware_profile()
+        if raw_interval is None or str(raw_interval).lower().strip() == "auto" or int(raw_interval) <= 0:
+            self.reid_interval = hp.reid_extract_interval
+        else:
+            self.reid_interval = int(raw_interval)
+        logger.info(f"[SETTINGS] Applied live: match_threshold={mt:.3f}, track_buffer={tb}, reid_interval={self.reid_interval}")
 
     def _score_all_tracks_enabled(self) -> bool:
         return bool(getattr(getattr(self.config, "target", None), "score_all_tracks", False))
@@ -2925,72 +2940,85 @@ class MultiCameraPipeline:
         trim_gpu_memory()
         logger.info("[MULTI-CAM] Pipeline stopped.")
 
-    def profile_hardware(self) -> str:
-        """Profiles the system hardware to determine the recommended ReID model."""
-        import torch
-        recommended = "osnet_x0_25"
-        try:
-            if torch.cuda.is_available():
-                props = torch.cuda.get_device_properties(0)
-                vram_gb = props.total_memory / (1024**3)
-                if vram_gb >= 6.0:
-                    recommended = "osnet_x1_0"
-        except Exception:
-            pass
-        return recommended
+    def get_hardware_profile(self) -> HardwareProfile:
+        """Return the resolved HardwareProfile for this pipeline (or detect on demand)."""
+        hp = getattr(self, "hardware_profile", None)
+        if hp is None:
+            hp = detect_hardware_profile(
+                requested_device=getattr(getattr(self.config, "inference", None), "device", "auto") if hasattr(self, "config") else "auto",
+                engine_type=getattr(getattr(self.config, "inference", None), "engine_type", "auto") if hasattr(self, "config") else "auto",
+                precision=getattr(getattr(self.config, "inference", None), "precision", "auto") if hasattr(self, "config") else "auto",
+            )
+            self.hardware_profile = hp
+        return hp
+
+    def profile_hardware(self=None) -> str:
+        """Profile system hardware and return the recommended ReID model ID."""
+        if self is not None and getattr(self, "hardware_profile", None) is not None:
+            return self.hardware_profile.recommended_reid_model
+        return detect_hardware_profile().recommended_reid_model
 
     def set_reid_model(self, model_name: str, auto_rollback: bool = True) -> bool:
-        """Dynamically switches the ReID model at runtime."""
-        if model_name == "auto":
-            model_name = self.profile_hardware()
+        """Dynamically switches the ReID model at runtime via the modular ReID registry."""
+        raw_request = (model_name or "").strip()
+        if not raw_request:
+            return False
 
-        if model_name not in ["osnet_x0_25", "osnet_x1_0"]:
+        hp = self.get_hardware_profile()
+        resolved_model = hp.recommended_reid_model if raw_request.lower() == "auto" else raw_request.lower()
+
+        if not is_reid_model_supported(resolved_model):
             logger.warning(f"Unsupported ReID model: {model_name}")
             return False
 
-        if self.config.reid.model_name == model_name:
+        old_cfg_model = self.config.reid.model_name
+        active_model_now = getattr(self.reid_extractor, "model_name", old_cfg_model)
+        if active_model_now == resolved_model and old_cfg_model == raw_request.lower():
             return True
 
-        old_model = self.config.reid.model_name
-        
         self.pause_processing()
         try:
-            logger.info(f"Switching ReID model from {old_model} to {model_name}")
-            
-            # 1. Clear target & gallery (embeddings are incompatible between models)
+            logger.info(f"Switching ReID model from '{active_model_now}' to '{resolved_model}' (config='{raw_request}')")
+
+            # 1. Clear target & gallery (embeddings are incompatible across models)
             self.clear_target()
-            
-            # 2. Re-initialize extractor
-            from src.reid.extractor import PyTorchReIDExtractor
-            new_extractor = PyTorchReIDExtractor(
-                model_name=model_name,
-                device=self.config.inference.device,
+
+            # 2. Re-initialize extractor using the hardware-adaptive factory
+            new_extractor = create_reid_extractor(
+                config=self.config,
+                hardware_profile=hp,
+                model_name_override=resolved_model,
             )
-            
-            # 3. Apply to pipeline
+
+            # 3. Apply to pipeline & config
             self.reid_extractor = new_extractor
-            self.config.reid.model_name = model_name
-            
-            # 4. Apply to IdentityManager
+            self.config.reid.model_name = "auto" if raw_request.lower() == "auto" else new_extractor.model_name
+
+            # 4. Apply to IdentityManager & align vector store dimension if needed
             if self.target_manager and self.target_manager.identity_manager:
-                self.target_manager.identity_manager.reid_extractor = new_extractor
-            
-            # 5. Apply to all existing ByteTrackers
+                im = self.target_manager.identity_manager
+                im.reid_extractor = new_extractor
+                vs = getattr(im, "vector_store", None)
+                if vs is not None and hasattr(vs, "clear"):
+                    vs.clear()
+
+            # 5. Apply to all existing Trackers
             for worker in self._workers.values():
                 if hasattr(worker, "tracker") and worker.tracker:
                     worker.tracker.reid_extractor = new_extractor
-                    
-            logger.info("Successfully switched ReID model.")
-            
+
+            logger.info(f"Successfully switched ReID model to '{new_extractor.model_name}' ({new_extractor.active_backend}).")
+
         except Exception as e:
             logger.error(f"Failed to switch ReID model: {e}")
-            self.config.reid.model_name = old_model
+            self.config.reid.model_name = old_cfg_model
+            return False
         finally:
             self.resume_processing()
 
         if auto_rollback:
-            self._start_rollback_monitor(old_model, model_name)
-            
+            self._start_rollback_monitor(old_cfg_model, raw_request)
+
         return True
 
     def _start_rollback_monitor(self, old_model: str, new_model: str) -> None:

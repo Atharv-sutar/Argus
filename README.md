@@ -657,11 +657,9 @@ Circular dependencies must be avoided.
 
 # 11. Performance and GPU Efficiency
 
-The project is intended to run on hardware with limited GPU memory.
+The system scales dynamically across CPU-only hosts, entry-level GPUs, and high-VRAM Tensor-Core GPUs (`HardwareProfile` in `src/inference/device.py`).
 
-The development environment may include GPUs such as the NVIDIA GTX 1650 4 GB.
-
-GPU resources must therefore be treated as constrained resources.
+GPU memory and compute budgets must be sized dynamically from detected hardware capabilities rather than hardcoded assumptions.
 
 Avoid:
 
