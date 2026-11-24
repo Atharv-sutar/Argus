@@ -37,3 +37,6 @@ Always execute tools and tests through the project virtual environment:
   - `bug-fix.md`: Step-by-step bug reproduction and resolution workflow.
   - `release-check.md`: Pre-release quality assurance checklist.
 
+## Persistent Context Reference
+- Read `CONTEXT_README.md` whenever debugging ReID, tracking, target selection/rendering, multi-camera UI wiring, or reviewing removed/redundant legacy code and empirical EPFL benchmarks.
+
