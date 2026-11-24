@@ -374,18 +374,6 @@ class IdentityManager:
             self.undo_stack = old_undo
             logger.info(f"[IDENTITY] Gallery remove redone for {entry_id}")
 
-    def undo_gallery_add(self, reverse_data: dict) -> None:
-        pass # To implement if manual adds are tracked
-
-    def redo_gallery_add(self, forward_data: dict) -> None:
-        pass
-
-    def undo_gallery_clear(self, reverse_data: dict) -> None:
-        pass
-        
-    def redo_gallery_clear(self, forward_data: dict) -> None:
-        pass
-
     def match(self, candidate_embedding: Embedding) -> Tuple[float, Optional[Any]]:
         """Shim for TargetGallery.match"""
         res = self.match_batch([candidate_embedding])
@@ -1040,11 +1028,20 @@ class IdentityManager:
         ref_anchor_score = max(proto_sim, best_ref_sim, anchor_sim)
 
         # 2. Score-Level Multi-Crop Consensus (Multi-Modal Cluster Aware)
+        total_w = float(self.w_deep + self.w_upper + self.w_color + self.w_lower)
+        if total_w > 0:
+            wd = self.w_deep / total_w
+            wu = self.w_upper / total_w
+            wc = self.w_color / total_w
+            wl = self.w_lower / total_w
+        else:
+            wd, wu, wc, wl = 0.35, 0.40, 0.15, 0.10
+
         component_score = (
-            0.35 * max(anchor_sim, proto_sim)
-            + 0.40 * upper_sim
-            + 0.15 * best_ref_sim
-            + 0.10 * lower_sim
+            wd * max(anchor_sim, proto_sim)
+            + wu * upper_sim
+            + wc * best_ref_sim
+            + wl * lower_sim
         )
 
         if ident.provisional_gallery and top2_adaptive_mean > 0:
@@ -1398,4 +1395,18 @@ class IdentityManager:
             logger.info(f"[IDENTITY] Loaded {len(self._identities)} identities from {db_path}")
         except Exception as e:
             logger.error(f"[IDENTITY] Failed to load from database: {e}")
+
+    def set_db_path(self, db_path: str) -> None:
+        """Switches persistent identity storage path (e.g. when loading a forensic case)."""
+        self.db_path = db_path
+        self._identities.clear()
+        self._entry_crops.clear()
+        self._entry_image_paths.clear()
+        if hasattr(self.vector_store, "db_path"):
+            from src.identity.sqlite_store import SQLiteVectorStore
+            self.vector_store = SQLiteVectorStore(db_path=db_path)
+            self.load_target_gallery()
+        elif hasattr(self.vector_store, "clear"):
+            self.vector_store.clear()
+        logger.info(f"[IDENTITY] Switched identity DB path to '{db_path}'")
 

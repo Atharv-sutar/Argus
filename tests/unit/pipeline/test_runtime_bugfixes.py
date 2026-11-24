@@ -69,11 +69,11 @@ def _pipe(cfg, det, tracker_factory=None):
     )
 
 
-def test_fixes_flags_default_off_in_code_and_yaml():
+def test_fixes_flags_default_on_in_code_and_yaml():
     for c in (AppConfig(), AppConfig.from_yaml("configs/default.yaml")):
         f = c.fixes
-        assert not any([f.serialize_pipeline_access, f.reset_state_on_target_change, f.auto_add_handles_time_reset,
-                        f.per_track_handoff_confirmation, f.apply_settings_live])
+        assert all([f.serialize_pipeline_access, f.reset_state_on_target_change, f.auto_add_handles_time_reset,
+                    f.per_track_handoff_confirmation, f.apply_settings_live])
 
 
 # ------------------------------------------------------------ direct crash fixes

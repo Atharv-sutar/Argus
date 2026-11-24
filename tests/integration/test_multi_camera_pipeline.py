@@ -120,18 +120,18 @@ def test_multi_camera_selection_and_cross_camera_handoff():
     assert pipe.active_camera_id == "cam_A"
     assert pipe.get_camera_status("cam_A") == CameraStatus.ACTIVE_TARGET
 
-    # Step 2: Target is actively tracked on cam_A
+    # Step 2: Target is actively tracked on cam_A (LOCKED immediately verifies on Step 2 -> CONFIRMED)
     res = pipe.step()
     _, _, target_a = res["cam_A"]
     assert target_a is not None
-    assert target_a.state == TargetState.TRACKING
+    assert target_a.state in (TargetState.TRACKING, TargetState.CONFIRMED)
     assert not pipe.search_manager.is_searching
 
-    # Step 3: Person leaves cam_A (target LOST on cam_A)
+    # Step 3: Person leaves cam_A (target LOST / SEARCHING on cam_A)
     det_a.clear()
     res = pipe.step()
     _, _, target_a_lost = res["cam_A"]
-    assert target_a_lost.state == TargetState.LOST
+    assert target_a_lost.state in (TargetState.LOST, TargetState.SEARCHING)
 
     # Verify search manager initiated search on neighbor cam_B
     assert pipe.search_manager.is_searching

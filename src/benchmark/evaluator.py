@@ -118,6 +118,21 @@ class ReIDEvaluationHarness:
             camera_factory=camera_factory,
         )
 
+        # Wait for asynchronous background worker initialization to finish before stepping
+        import time as _time
+        enabled_cams = {
+            cid for cid, node in self._pipeline._nodes.items() if node.config.enabled
+        }
+        wait_deadline = _time.time() + 10.0
+        while _time.time() < wait_deadline:
+            with self._pipeline._worker_lock:
+                ready = enabled_cams.issubset(self._pipeline._workers.keys()) and not (
+                    self._pipeline._initializing_workers & enabled_cams
+                )
+            if ready:
+                break
+            _time.sleep(0.02)
+
         metrics = EvaluationMetrics()
         self._frame_results.clear()
 

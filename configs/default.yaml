@@ -25,20 +25,20 @@ tracking:
   gmc_method: sparseOptFlow
   reid_weight: 0.5
   ema_alpha: 0.9
-  fix_association_cost: false
+  fix_association_cost: true
   low_conf_detection_threshold: 0.2
 reid:
-  model_name: osnet_x0_25
+  model_name: person_reid_youtu
   require_pretrained_weights: true
-  match_threshold: 0.75
-  reacquisition_threshold: 0.78
-  auto_add_threshold: 0.82
-  min_margin: 0.05
+  match_threshold: 0.60
+  reacquisition_threshold: 0.65
+  auto_add_threshold: 0.74
+  min_margin: 0.10
   lock_switch_margin: 0.08
   extract_interval_frames: 3
-  min_sharpness: 60.0
-  uncertain_band_min: 0.73
-  uncertain_band_max: 0.78
+  min_sharpness: 12.0
+  uncertain_band_min: 0.52
+  uncertain_band_max: 0.65
   event_driven_reid: true
   max_reference_samples: 50
   max_gallery_size: 100
@@ -87,12 +87,12 @@ diagnostics:
   decision_log: false
   decision_log_path: "logs/decision_log.jsonl"
 target:
-  switch_when_better: false
-  score_all_tracks: false
-  blur_gate_scope: none
+  switch_when_better: true
+  score_all_tracks: true
+  blur_gate_scope: all
 fixes:
-  serialize_pipeline_access: false
-  reset_state_on_target_change: false
-  auto_add_handles_time_reset: false
-  per_track_handoff_confirmation: false
-  apply_settings_live: false
+  serialize_pipeline_access: true
+  reset_state_on_target_change: true
+  auto_add_handles_time_reset: true
+  per_track_handoff_confirmation: true
+  apply_settings_live: true

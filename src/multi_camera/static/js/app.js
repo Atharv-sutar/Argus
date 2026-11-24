@@ -1999,7 +1999,7 @@ class SurveillanceApp {
       this.hdrSearchRadius.textContent = `R = ${rad} (${searchSt})`;
 
       const gSize = st.gallery ? st.gallery.size : (st.gallery_size || 0);
-      const gMax = st.gallery ? st.gallery.max_size : (st.gallery_max || 25);
+      const gMax = st.gallery ? st.gallery.max_size : (st.gallery_max || 100);
       this.hdrGalleryStats.textContent = `${gSize} / ${gMax}`;
       if (this.galleryCountBadge) {
         this.galleryCountBadge.textContent = `${gSize} / ${gMax}`;

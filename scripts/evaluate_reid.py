@@ -97,6 +97,9 @@ def main() -> None:
     # 1. Load config
     cfg_path = Path(args.config)
     cfg = AppConfig.from_yaml(cfg_path) if cfg_path.exists() else AppConfig()
+    # Keep benchmark evaluation isolated from live UI persistence and recordings
+    cfg.storage.enabled = False
+    cfg.recording.enabled = False
 
     if args.model:
         cfg.reid.model_name = args.model

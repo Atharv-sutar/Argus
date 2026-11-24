@@ -321,13 +321,14 @@ class Identity:
     Represents a unique known identity with dual-gallery memory architecture:
     1. trusted_gallery: Immutable multi-view enrollment cluster (front, side, angle views).
     2. provisional_gallery: Bounded rolling observations strictly verified against the trusted anchor.
-    3. rejected_gallery: Hard-negative impostor embeddings for negative evidence comparison.
+    3. rejected_gallery: REDUNDANT (src/core/types.py line 331; src/identity/serialization.py lines 83, 107) —
+       never populated or compared in IdentityManager; retained only for SQLite/JSON serialization compatibility.
     """
     identity_id: str
     label: str = "target_0"
     trusted_gallery: List[Embedding] = field(default_factory=list)
     provisional_gallery: List[Embedding] = field(default_factory=list)
-    rejected_gallery: List[Embedding] = field(default_factory=list)
+    rejected_gallery: List[Embedding] = field(default_factory=list)  # REDUNDANT (schema compat only)
 
     # Multi-crop galleries
     trusted_upper_gallery: List[Embedding] = field(default_factory=list)

@@ -14,12 +14,19 @@ TRUE_TARGET, IMPOSTOR = 1, 2
 def _cfg(flag: bool) -> AppConfig:
     cfg = AppConfig()
     cfg.target.switch_when_better = flag
+    # Fix synthetic test thresholds explicitly so math reflects calibrated 0.75/0.82 fixtures
+    cfg.reid.match_threshold = 0.75
+    cfg.reid.reacquisition_threshold = 0.78
+    cfg.reid.auto_add_threshold = 0.82
+    cfg.reid.min_margin = 0.05
+    cfg.reid.uncertain_band_min = 0.73
+    cfg.reid.uncertain_band_max = 0.78
     return cfg
 
 
-def test_flag_defaults_off_in_code_and_yaml():
-    assert AppConfig().target.switch_when_better is False
-    assert AppConfig.from_yaml("configs/default.yaml").target.switch_when_better is False
+def test_flag_defaults_on_in_code_and_yaml():
+    assert AppConfig().target.switch_when_better is True
+    assert AppConfig.from_yaml("configs/default.yaml").target.switch_when_better is True
 
 
 # (a) lock on impostor 0.79, true target 0.93, 30 ReID frames -> lock must move to the target

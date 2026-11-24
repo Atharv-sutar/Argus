@@ -80,27 +80,27 @@ class TrackingConfig:
     # low_conf_detection_threshold so the low-score association stage receives detections
     # (track_thresh still gates new tracks); and skip camera frames whose sequence number
     # has not changed so the tracker never sees duplicates.
-    fix_association_cost: bool = False
+    fix_association_cost: bool = True
     low_conf_detection_threshold: float = 0.2
 
 
 @dataclass
 class ReIDConfig:
-    model_name: str = "osnet_x0_25"
+    model_name: str = "person_reid_youtu"
     require_pretrained_weights: bool = True
-    match_threshold: float = 0.75
-    reacquisition_threshold: float = 0.78
-    auto_add_threshold: float = 0.82
-    min_margin: float = 0.05
+    match_threshold: float = 0.60
+    reacquisition_threshold: float = 0.65
+    auto_add_threshold: float = 0.74
+    min_margin: float = 0.10
     lock_switch_margin: float = 0.08
     extract_interval_frames: int = 3
     event_driven_reid: bool = True  # Uncertainty-triggered ReID: bypass redundant per-frame extraction during steady tracking
 
     # PROVISIONAL / INITIAL thresholds pending calibration against real camera footage
     # (resolution, lighting, and noise vary significantly per camera)
-    min_sharpness: float = 60.0 # Laplacian variance threshold for blur filtering
-    uncertain_band_min: float = 0.73
-    uncertain_band_max: float = 0.78
+    min_sharpness: float = 12.0 # Laplacian variance threshold for blur filtering
+    uncertain_band_min: float = 0.52
+    uncertain_band_max: float = 0.65
     max_reference_samples: int = 50
     max_gallery_size: int = 100
     crops_dir: str = "data/gallery_crops"
@@ -192,34 +192,34 @@ class TargetConfig:
     # Step 2: an incumbent above match_threshold can still lose the lock to a candidate that
     # beats it by lock_switch_margin (existing consensus + manual-anchor gates apply), and
     # auto-enrollment only happens when the incumbent is top-1 by min_margin.
-    switch_when_better: bool = False
+    switch_when_better: bool = True
     # Step 4: on ReID frames embed/score every track (not only the locked one) during
     # TRACKING/LOCKED, apply the blur gate per blur_gate_scope, and force one full
     # re-verification on the first frames after an occlusion ends.
-    score_all_tracks: bool = False
+    score_all_tracks: bool = True
     # Used only when score_all_tracks is on: "none" = no blur gate for anyone,
     # "all" = blur gate for everyone incl. the locked track (a blurred locked track defers
     # the decision for that frame instead of counting as a miss).
-    blur_gate_scope: str = "none"
+    blur_gate_scope: str = "all"
 
 
 @dataclass
 class FixesConfig:
-    """Bug fixes that change runtime behaviour (all default OFF = legacy behaviour)."""
+    """Bug fixes that change runtime behaviour (enabled by default for stability and ReID correctness)."""
     # Serialize step() with operator actions from the HTTP thread (select/correct/clear target,
     # manual sample, handoff confirm/reject, undo/redo, camera focus) on the pipeline lock.
-    serialize_pipeline_access: bool = False
+    serialize_pipeline_access: bool = True
     # On new target selection / clear: drop the previous target's gallery thumbnails, evidence,
     # switch consensus, miss counter, pending handoff and auto-add rate-limit clock.
-    reset_state_on_target_change: bool = False
+    reset_state_on_target_change: bool = True
     # Auto-add rate limiter: a timestamp that jumps backwards (video loop, new clip) starts a
     # new timeline instead of blocking enrollment until the old timestamp is passed again.
-    auto_add_handles_time_reset: bool = False
+    auto_add_handles_time_reset: bool = True
     # Cross-camera handoff: the N confirmation frames must come from the same track ID.
-    per_track_handoff_confirmation: bool = False
+    per_track_handoff_confirmation: bool = True
     # /api/settings: write total_recovery_timeout_s (was a typo'd attribute) and push a new
     # match_threshold into the identity manager and evidence engine, not just the config.
-    apply_settings_live: bool = False
+    apply_settings_live: bool = True
 
 
 @dataclass

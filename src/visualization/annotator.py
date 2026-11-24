@@ -91,7 +91,21 @@ class FrameAnnotator:
             return frame
 
         canvas = frame.copy()
-        target_track_id = target.track_id if (target and target.state != TargetState.UNSELECTED) else None
+        active_owned_states = (
+            TargetState.LOCKED,
+            TargetState.TRACKING,
+            TargetState.CONFIRMED,
+            TargetState.ACQUIRING_REFERENCE,
+        )
+        bracket_owned_states = active_owned_states + (
+            TargetState.OCCLUDED,
+            TargetState.UNCERTAIN,
+        )
+        target_track_id = (
+            target.track_id
+            if (target and target.state in bracket_owned_states)
+            else None
+        )
 
         # 1. Draw regular track bounding boxes and IDs
         if track_result is not None and self.draw_boxes:
@@ -131,40 +145,55 @@ class FrameAnnotator:
                         cv2.LINE_AA,
                     )
 
-        # 2. Draw Target Highlight (if active)
-        if target is not None and target.state != TargetState.UNSELECTED:
-            target_color = (0, 215, 255)  # Vibrant Gold / Yellow
-            if target.state in (TargetState.LOST, TargetState.UNCERTAIN):
-                target_color = (0, 100, 255)  # Amber / Warning Orange
-
-            # Find target track or use last known box
-            target_box = None
-            if track_result is not None and target.track_id is not None:
+        # 2. Draw Target Highlight (if active and not rejected / permanently lost)
+        if target is not None and target.state not in (
+            TargetState.UNSELECTED,
+            TargetState.REJECTED,
+            TargetState.LOST_PERMANENTLY,
+        ):
+            # Look up live track box only when target state actively owns a track
+            live_box = None
+            if track_result is not None and target_track_id is not None:
                 for track in track_result.tracks:
-                    if track.track_id == target.track_id:
-                        target_box = track.box
+                    if track.track_id == target_track_id:
+                        live_box = track.box
                         break
 
-            if target_box is None and target.last_known_box is not None:
-                target_box = target.last_known_box
+            is_live_locked = (target.state in active_owned_states and live_box is not None)
+            if is_live_locked:
+                target_color = (0, 215, 255)  # Vibrant Gold / Yellow ONLY for live locked target
+                target_box = live_box
+            elif target.state == TargetState.OCCLUDED:
+                target_color = (200, 120, 255)  # Magenta / Occluded indicator
+                target_box = live_box if live_box is not None else target.last_known_box
+            else:
+                # UNCERTAIN, LOST, SEARCHING, or momentary missing live box -> Amber warning brackets only
+                target_color = (0, 100, 255)  # Amber / Warning Orange
+                target_box = live_box if (target.state == TargetState.UNCERTAIN and live_box is not None) else target.last_known_box
 
             if target_box is not None:
                 tx1, ty1, tx2, ty2 = map(int, target_box.as_xyxy())
-                if target.state == TargetState.LOST:
-                    # For LOST state, draw corner brackets only to indicate last known position
-                    self._draw_target_brackets(canvas, tx1, ty1, tx2, ty2, target_color, length=12, thickness=2)
-                else:
+                if is_live_locked:
                     cv2.rectangle(canvas, (tx1, ty1), (tx2, ty2), target_color, self.box_thickness + 1)
                     self._draw_target_brackets(canvas, tx1, ty1, tx2, ty2, target_color)
+                else:
+                    # Never draw a solid locked-yellow box for LOST / SEARCHING / UNCERTAIN / stale last_known_box
+                    self._draw_target_brackets(canvas, tx1, ty1, tx2, ty2, target_color, length=12, thickness=2)
 
                 target_sim_str = ""
-                if candidate_similarities is not None and target.track_id is not None and target.track_id in candidate_similarities:
+                if (
+                    is_live_locked
+                    and candidate_similarities is not None
+                    and target.track_id is not None
+                    and target.track_id in candidate_similarities
+                ):
                     target_sim_str = f" [sim={candidate_similarities[target.track_id]:.2f}]"
 
                 status_text = f"[TARGET] {target.state.value}"
-                if target.state != TargetState.LOST:
-                    status_text += f" (Tracker: {target.track_id}){target_sim_str}"
-                if target.state == TargetState.LOST and target.lost_duration_ms > 0:
+                if is_live_locked or target.state in (TargetState.OCCLUDED, TargetState.UNCERTAIN):
+                    if target.track_id is not None:
+                        status_text += f" (Tracker: {target.track_id}){target_sim_str}"
+                elif target.state in (TargetState.LOST, TargetState.SEARCHING) and target.lost_duration_ms > 0:
                     status_text += f" ({target.lost_duration_ms / 1000.0:.1f}s)"
 
                 (stw, sth), sbase = cv2.getTextSize(

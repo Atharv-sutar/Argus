@@ -52,10 +52,10 @@ def id_switches(ids: List[Optional[int]]) -> int:
     return len(set(seen)) - 1 if seen else 0
 
 
-def test_flag_defaults_off_in_code_and_yaml():
-    assert AppConfig().tracking.fix_association_cost is False
+def test_flag_defaults_on_in_code_and_yaml():
+    assert AppConfig().tracking.fix_association_cost is True
     y = AppConfig.from_yaml("configs/default.yaml").tracking
-    assert y.fix_association_cost is False
+    assert y.fix_association_cost is True
     assert y.low_conf_detection_threshold == AppConfig().tracking.low_conf_detection_threshold == 0.2
 
 
@@ -91,6 +91,7 @@ def test_pipeline_lowers_detector_confidence_only_with_flag():
 
     p = object.__new__(MultiCameraPipeline)
     p.config = AppConfig()
+    p.config.tracking.fix_association_cost = False
     assert p._effective_detection_confidence() == pytest.approx(0.4)
     p.config.tracking.fix_association_cost = True
     assert p._effective_detection_confidence() == pytest.approx(0.2)

@@ -17,6 +17,11 @@ class ColorNormalizer:
     """
     Normalizes person crop imagery to be invariant across disparate camera sensors,
     exposure levels, and white-balance temperatures.
+
+    REDUNDANT IN DEFAULT PIPELINE (src/reid/color_normalizer.py lines 16-115):
+    Retained as an optional utility (covered by tests/unit/reid/test_color_normalizer.py),
+    intentionally not wired in front of `person_reid_youtu` because EPFL benchmarks showed
+    Rank-1 accuracy drops from 96.6% to 93.1% when applied prior to Youtu feature extraction.
     """
 
     def __init__(

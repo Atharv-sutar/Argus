@@ -703,10 +703,11 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             elif path == "/api/target/gallery":
                 if self.runtime_pipeline is not None:
                     gallery = self.runtime_pipeline.gallery
-                    thumbnails = gallery.get_thumbnails(max_count=25)
+                    max_items = getattr(gallery, "max_size", 100)
+                    thumbnails = gallery.get_thumbnails(max_count=max_items)
                     self._send_json({
                         "size": gallery.size,
-                        "max_size": gallery.max_size,
+                        "max_size": max_items,
                         "manual_count": gallery.manual_count,
                         "auto_count": gallery.auto_count,
                         "thumbnails": thumbnails,
@@ -714,7 +715,7 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 else:
                     self._send_json({
                         "size": 0,
-                        "max_size": 25,
+                        "max_size": 100,
                         "manual_count": 0,
                         "auto_count": 0,
                         "thumbnails": [],
@@ -733,7 +734,8 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     while not _SHUTDOWN_EVENT.is_set() and (self.runtime_pipeline is None or getattr(self.runtime_pipeline, "is_running", True)):
                         if self.runtime_pipeline is not None:
                             gallery = self.runtime_pipeline.gallery
-                            thumbnails = gallery.get_thumbnails(max_count=25) if gallery else []
+                            max_items = getattr(gallery, "max_size", 100) if gallery else 100
+                            thumbnails = gallery.get_thumbnails(max_count=max_items) if gallery else []
                             
                             pending_handoff = None
                             if getattr(self.runtime_pipeline, "target_state", "UNSELECTED") == "UNCERTAIN":
@@ -1336,7 +1338,10 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 selected_id = None
                 
                 is_active = self.runtime_pipeline.target_manager.is_active()
-                is_correction = is_active and not start_new
+                t_state = getattr(getattr(self.runtime_pipeline.target_manager, "target", None), "state", None)
+                from src.core.types import TargetState as _TS
+                can_correct = is_active and t_state not in (_TS.UNSELECTED, _TS.REJECTED, _TS.LOST_PERMANENTLY)
+                is_correction = can_correct and not start_new
                 
                 if track_id is not None:
                     if is_correction:

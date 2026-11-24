@@ -24,10 +24,10 @@ def _cfg(score_all: bool, scope: str = "none") -> AppConfig:
     return cfg
 
 
-def test_flags_default_off_in_code_and_yaml():
+def test_flags_default_on_in_code_and_yaml():
     for c in (AppConfig(), AppConfig.from_yaml("configs/default.yaml")):
-        assert c.target.score_all_tracks is False
-        assert c.target.blur_gate_scope == "none"
+        assert c.target.score_all_tracks is True
+        assert c.target.blur_gate_scope == "all"
 
 
 # ---------------------------------------------------------------- step(): who gets embedded

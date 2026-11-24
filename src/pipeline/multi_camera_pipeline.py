@@ -667,7 +667,7 @@ class MultiCameraPipeline:
                 if hasattr(worker, "detector"):
                     det_res = worker.detector.detect(frame_to_process, timestamp_ms=ts_ms)
                 elif self._shared_detector is not None:
-                    batch_res = self._shared_detector.detect_batch([frame_to_process], timestamps_ms=[ts_ms])  # type: ignore
+                    batch_res = self._shared_detector.detect_batch([frame_to_process], frame_ids=[self._frame_count], timestamps_ms=[ts_ms])  # type: ignore
                     det_res = batch_res[0] if batch_res else None
                 else:
                     det_res = self._default_detector_factory().detect(frame_to_process, timestamp_ms=ts_ms)
@@ -702,7 +702,8 @@ class MultiCameraPipeline:
                         proximity_tolerance=70.0,
                     )
                     if selected_id is None:
-                        synth_id = 1
+                        existing_tracks = list(getattr(track_res, "tracks", []) or [])
+                        synth_id = max((t.track_id for t in existing_tracks), default=0) + 1
                         synth_track = Track(
                             track_id=synth_id,
                             box=best_det.box,
@@ -710,7 +711,7 @@ class MultiCameraPipeline:
                             confidence=best_det.confidence,
                         )
                         synth_res = TrackResult(
-                            tracks=[synth_track],
+                            tracks=existing_tracks + [synth_track],
                             frame_id=getattr(track_res, "frame_id", 1),
                             timestamp_ms=ts_ms,
                         )
@@ -828,7 +829,7 @@ class MultiCameraPipeline:
                 if hasattr(worker, "detector"):
                     det_res = worker.detector.detect(frame_to_process, timestamp_ms=ts_ms)
                 elif self._shared_detector is not None:
-                    batch_res = self._shared_detector.detect_batch([frame_to_process], timestamps_ms=[ts_ms])
+                    batch_res = self._shared_detector.detect_batch([frame_to_process], frame_ids=[self._frame_count], timestamps_ms=[ts_ms])
                     det_res = batch_res[0] if batch_res else None
                 else:
                     det_res = self._default_detector_factory().detect(frame_to_process, timestamp_ms=ts_ms)
@@ -863,7 +864,8 @@ class MultiCameraPipeline:
                         proximity_tolerance=70.0,
                     )
                     if selected_id is None:
-                        synth_id = 1
+                        existing_tracks = list(getattr(track_res, "tracks", []) or [])
+                        synth_id = max((t.track_id for t in existing_tracks), default=0) + 1
                         synth_track = Track(
                             track_id=synth_id,
                             box=best_det.box,
@@ -871,7 +873,7 @@ class MultiCameraPipeline:
                             confidence=best_det.confidence,
                         )
                         synth_res = TrackResult(
-                            tracks=[synth_track],
+                            tracks=existing_tracks + [synth_track],
                             frame_id=getattr(track_res, "frame_id", 1),
                             timestamp_ms=ts_ms,
                         )
@@ -1181,7 +1183,15 @@ class MultiCameraPipeline:
         if active_cam_id and active_worker and active_worker.camera.is_opened():
             tasks.append((active_cam_id, active_worker, "active"))
 
-        target_is_lost = (self.target_manager.is_active() and self.target_manager.target.state in (TargetState.LOST, TargetState.UNCERTAIN))
+        target_is_lost = (
+            self.target_manager.is_active()
+            and self.target_manager.target.state in (
+                TargetState.LOST,
+                TargetState.UNCERTAIN,
+                TargetState.SEARCHING,
+                TargetState.REJECTED,
+            )
+        )
         search_cams_to_process = set()
 
         if self.search_manager.is_searching:
@@ -1358,19 +1368,17 @@ class MultiCameraPipeline:
                 _, role, frame, ts_ms = acquired_results[cid]
                 phase1_results[cid] = (cid, role, frame, ts_ms, None)
 
-        # Fix: Ensure standby cameras get their unannotated frames encoded in Phase 2
-        for cid, (_, role, frame, ts_ms) in acquired_results.items():
-            if role == "standby" and frame is not None:
-                phase1_results[cid] = (cid, role, frame, ts_ms, None)
-
-        # Add standby cameras to phase1_results to match old format
+        # Pass standby and empty-frame cameras directly to Phase 2 without running detection/tracking
         for cid, (_, role, frame, ts_ms) in acquired_results.items():
             if role == "standby" or frame is None:
                 phase1_results[cid] = (cid, role, frame, ts_ms, None)
 
         # Execute Phase 4: Batched ReID Extraction
         target = self.target_manager.target
-        target_lost_or_uncertain = (target is not None and target.state in (TargetState.LOST, TargetState.UNCERTAIN))
+        target_lost_or_uncertain = (
+            target is not None
+            and target.state in (TargetState.LOST, TargetState.UNCERTAIN, TargetState.SEARCHING, TargetState.REJECTED)
+        )
         should_reid = (self.reid_interval <= 1) or (self._frame_count % self.reid_interval == 0) or target_lost_or_uncertain
 
         # target.score_all_tracks (Step 4): score every track, consistent blur gate, and embed
@@ -1784,6 +1792,8 @@ class MultiCameraPipeline:
 
         # 1. Identify currently locked track
         current_track: Optional[Track] = None
+        if track_res is None:
+            track_res = TrackResult(tracks=[])
         for track in track_res.tracks:
             if track.track_id == target.track_id:
                 current_track = track
@@ -1797,8 +1807,15 @@ class MultiCameraPipeline:
                 if tr.track_id != current_track.track_id:
                     self._bystander_history[(self._active_camera_id, tr.track_id)] = timestamp_ms
 
-        # Throttle ReID even when LOST to prevent total pipeline stall (e.g. 100% GPU usage on every frame)
-        should_reid = (self._frame_count % self.reid_interval == 0)
+        # Always run ReID every frame when target is non-steady (LOST/UNCERTAIN/SEARCHING/REJECTED/LOCKED)
+        is_recovery_state = target.state in (
+            TargetState.LOST,
+            TargetState.UNCERTAIN,
+            TargetState.SEARCHING,
+            TargetState.REJECTED,
+            TargetState.LOCKED,
+        )
+        should_reid = (self.reid_interval <= 1) or (self._frame_count % self.reid_interval == 0) or is_recovery_state
         match_thresh = self.config.reid.match_threshold
         switch_margin = getattr(self.config.reid, "lock_switch_margin", 0.08)
         auto_thresh = self.config.reid.auto_add_threshold

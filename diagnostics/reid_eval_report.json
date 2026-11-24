@@ -1,40 +1,39 @@
 {
-  "timestamp": "2026-10-14 22:05:49",
+  "timestamp": "2026-11-24 23:08:58",
   "config": {
-    "reid_model": "auto",
-    "match_threshold": 0.75,
-    "reacquisition_threshold": 0.78,
-    "auto_add_threshold": 0.82,
+    "reid_model": "person_reid_youtu",
+    "match_threshold": 0.6,
+    "reacquisition_threshold": 0.65,
+    "auto_add_threshold": 0.74,
     "lock_switch_margin": 0.08,
-    "min_margin": 0.05,
-    "uncertain_band_min": 0.73,
-    "uncertain_band_max": 0.78
+    "min_margin": 0.1,
+    "uncertain_band_min": 0.52,
+    "uncertain_band_max": 0.65
   },
   "metrics": {
-    "total_frames": 500,
-    "target_present_frames": 343,
-    "true_positives": 327,
+    "total_frames": 360,
+    "target_present_frames": 264,
+    "true_positives": 177,
     "false_positives": 0,
-    "false_negatives": 16,
-    "true_negatives": 157,
+    "false_negatives": 87,
+    "true_negatives": 96,
     "precision": 1.0,
-    "recall": 0.9534,
-    "f1_score": 0.9761,
+    "recall": 0.6705,
+    "f1_score": 0.8027,
     "false_positive_rate": 0.0,
     "id_switches": 0,
-    "recovery_events": 1,
-    "mean_target_sim": 0.891,
-    "mean_bystander_sim": 0.1592,
-    "separation_gap": 0.7318,
+    "recovery_events": 2,
+    "mean_target_sim": 0.9154,
+    "mean_bystander_sim": 0.1506,
+    "separation_gap": 0.7648,
     "state_frames": {
-      "UNSELECTED": 50,
+      "UNSELECTED": 120,
       "LOCKED": 1,
-      "TRACKING": 218,
-      "CONFIRMED": 108,
-      "SEARCHING": 122,
-      "UNCERTAIN": 1
+      "CONFIRMED": 174,
+      "LOST": 63,
+      "TRACKING": 2
     }
   },
-  "elapsed_seconds": 57.53,
-  "evaluation_fps": 8.7
+  "elapsed_seconds": 62.25,
+  "evaluation_fps": 5.8
 }

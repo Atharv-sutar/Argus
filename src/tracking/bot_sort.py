@@ -474,6 +474,9 @@ class BoTSORTTracker(BaseTracker):
         gmc_method: str = "sparseOptFlow",
         reid_extractor: Optional[BaseReID] = None,
         reid_weight: float = 0.5,
+        # REDUNDANT (bot_sort.py lines 480, 493): appearance_thresh is unused by BoTSORTTracker
+        # association (retired in config.py _RETIRED_KEYS; target gating is owned by IdentityManager).
+        # Retained only for keyword-argument backward compatibility.
         appearance_thresh: float = 0.35,
         ema_alpha: float = 0.9,
         fix_association_cost: bool = False,
@@ -487,7 +490,7 @@ class BoTSORTTracker(BaseTracker):
         self.min_box_area = min_box_area
         self.reid_extractor = reid_extractor
         self.reid_weight = reid_weight
-        self.appearance_thresh = appearance_thresh
+        self.appearance_thresh = appearance_thresh  # REDUNDANT (see comment at line 477)
         self.ema_alpha = ema_alpha
 
         self.kalman_filter = BoTSORTKalmanFilter()
