@@ -32,7 +32,9 @@ except ImportError:
     np = None
 
 from src.core.multi_camera_types import (
+    CameraEdgeConfig,
     CameraNodeConfig,
+    EdgeDirection,
     SourceType,
 )
 from src.multi_camera.camera_graph import CameraGraph
@@ -1534,9 +1536,6 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                         source=src_val,
                         source_type=SourceType.WEBCAM if isinstance(src_val, int) else SourceType.RTSP,
                         enabled=True,
-                        width=c.get("width", 1280),
-                        height=c.get("height", 720),
-                        fps=c.get("fps", 30),
                         position_x=220.0 + (idx * 260.0),
                         position_y=160.0,
                     )
@@ -1547,7 +1546,11 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                 if len(added_cams) >= 2:
                     for i in range(len(added_cams)):
                         for j in range(i + 1, len(added_cams)):
-                            new_graph.add_edge(added_cams[i], added_cams[j], bidirectional=True)
+                            new_graph.add_edge(CameraEdgeConfig(
+                                source_camera_id=added_cams[i],
+                                target_camera_id=added_cams[j],
+                                direction=EdgeDirection.BIDIRECTIONAL,
+                            ))
 
                 with self.graph_lock:
                     new_graph.save(self.graph_file)
@@ -1582,20 +1585,23 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
             source_type = "webcam"
             
             if mode == "video":
-                file_path = payload.get("source")
+                raw_path = payload.get("source")
+                file_path = str(raw_path).strip().strip('"').strip("'") if raw_path is not None else ""
                 if not file_path:
-                    self._send_json({"success": False, "error": "No file path provided"})
+                    self._send_json({"success": False, "error": "No file path provided"}, status=HTTPStatus.BAD_REQUEST)
                     return
-                    
+
                 source_val = file_path
-                source_type = "video_file" if not str(file_path).startswith(("rtsp://", "http://")) else "rtsp"
-            
+                source_type = "video_file" if not file_path.startswith(("rtsp://", "http://", "https://")) else "rtsp"
+
             try:
                 if mode == "video" and Path(file_path).is_dir():
                     new_graph = auto_load_video_directory(file_path)
                     with self.graph_lock:
                         new_graph.save(self.graph_file)
                     self.runtime_pipeline.update_graph(new_graph)
+                    if getattr(self.runtime_pipeline, "playback_controller", None) is not None:
+                        self.runtime_pipeline.playback_controller.play()
                     all_cams = sorted(list(new_graph.all_camera_ids()))
                     if all_cams:
                         self.runtime_pipeline.set_active_camera(all_cams[0])
@@ -1617,60 +1623,75 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     if has_video_nodes:
                         # Cleanly purge video files and reinstate live hardware webcams
                         probed = probe_local_webcams(pipeline=self.runtime_pipeline)
-                        if probed:
-                            new_graph = CameraGraph()
-                            for idx, c in enumerate(probed):
-                                cid = f"cam_{idx}"
-                                clean_name = str(c.get("name", f"Webcam {idx}")).replace(" (Active)", "").replace(" (In Use)", "").strip()
-                                new_graph.add_node(CameraNodeConfig(
-                                    camera_id=cid,
-                                    name=clean_name,
-                                    source=int(c.get("source", idx)),
-                                    source_type=SourceType.WEBCAM,
-                                    enabled=True,
-                                    width=c.get("width", 1280),
-                                    height=c.get("height", 720),
-                                    fps=c.get("fps", 30),
-                                    position_x=220.0 + (idx * 260.0),
-                                    position_y=160.0,
-                                ))
-                            if new_graph.node_count() >= 2:
-                                ids = list(new_graph.all_camera_ids())
-                                for i in range(len(ids)):
-                                    for j in range(i + 1, len(ids)):
-                                        new_graph.add_edge(ids[i], ids[j], bidirectional=True)
-                            with self.graph_lock:
-                                new_graph.save(self.graph_file)
-                            self.runtime_pipeline.update_graph(new_graph)
-                            all_cams = list(new_graph.all_camera_ids())
-                            if all_cams:
-                                self.runtime_pipeline.set_active_camera(all_cams[0])
-                            self._send_json({"success": True, "mode": "live", "updated": all_cams})
+                        if not probed:
+                            self._send_json(
+                                {"success": False, "error": "No live hardware webcams detected while switching from recorded playback."},
+                                status=HTTPStatus.BAD_REQUEST,
+                            )
                             return
+
+                        new_graph = CameraGraph()
+                        for idx, c in enumerate(probed):
+                            cid = f"cam_{idx}"
+                            clean_name = str(c.get("name", f"Webcam {idx}")).replace(" (Active)", "").replace(" (In Use)", "").strip()
+                            new_graph.add_node(CameraNodeConfig(
+                                camera_id=cid,
+                                name=clean_name,
+                                source=int(c.get("source", idx)),
+                                source_type=SourceType.WEBCAM,
+                                enabled=True,
+                                position_x=220.0 + (idx * 260.0),
+                                position_y=160.0,
+                            ))
+                        if new_graph.node_count() >= 2:
+                            ids = list(new_graph.all_camera_ids())
+                            for i in range(len(ids)):
+                                for j in range(i + 1, len(ids)):
+                                    new_graph.add_edge(CameraEdgeConfig(
+                                        source_camera_id=ids[i],
+                                        target_camera_id=ids[j],
+                                        direction=EdgeDirection.BIDIRECTIONAL,
+                                    ))
+                        with self.graph_lock:
+                            new_graph.save(self.graph_file)
+                        self.runtime_pipeline.update_graph(new_graph)
+                        all_cams = list(new_graph.all_camera_ids())
+                        if all_cams:
+                            self.runtime_pipeline.set_active_camera(all_cams[0])
+                        self._send_json({"success": True, "mode": "live", "updated": all_cams})
+                        return
 
                 with self.graph_lock:
                     if not self.graph_file.is_file():
                         self._send_json({"success": False, "error": "No graph file found"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
                         return
-                    
+
                     graph_dict = CameraGraph.load(self.graph_file).to_dict()
                     updated_cameras = []
-                    
-                    for cam in graph_dict.get("cameras", []):
+                    cameras_list = graph_dict.get("cameras", [])
+
+                    for cam in cameras_list:
                         if cam.get("camera_id") == cam_id:
                             cam["source"] = source_val
                             cam["source_type"] = source_type
                             updated_cameras.append(cam_id)
                             break
-                    
+
+                    if not updated_cameras and cameras_list:
+                        cameras_list[0]["source"] = source_val
+                        cameras_list[0]["source_type"] = source_type
+                        updated_cameras.append(cameras_list[0].get("camera_id", cam_id))
+
                     if not updated_cameras:
                         self._send_json({"success": False, "error": f"Camera '{cam_id}' not found in graph"}, status=HTTPStatus.BAD_REQUEST)
                         return
-                        
+
                     new_graph = CameraGraph.from_dict(graph_dict)
                     new_graph.save(self.graph_file)
                     self.runtime_pipeline.update_graph(new_graph)
-                    
+                    if mode == "video" and getattr(self.runtime_pipeline, "playback_controller", None) is not None:
+                        self.runtime_pipeline.playback_controller.play()
+
                     logger.info(f"[SERVER] Switched sources for {updated_cameras} to {mode}")
                     self._send_json({"success": True, "mode": mode, "updated": updated_cameras})
                     

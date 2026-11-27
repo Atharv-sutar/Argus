@@ -239,3 +239,105 @@ def test_case_open_and_close_restores_default_db_paths(tmp_path, monkeypatch):
             MappingAPIHandler.case_manager,
             MappingAPIHandler.audit_logger,
         ) = saved_attrs
+
+
+def test_switch_source_recorded_to_live_clears_playback_and_streams(tmp_path, monkeypatch):
+    """
+    Regression test for switching from recorded video view -> live view and apply_discovered:
+    1. Does not pass unsupported width/height/fps kwargs to CameraNodeConfig.
+    2. Releases and clears ended/paused PlaybackController so live frames stream immediately.
+    """
+    from src.multi_camera.ui_server import MappingAPIHandler
+    from src.playback.controller import PlaybackController
+
+    monkeypatch.setattr(
+        "src.multi_camera.ui_server.probe_local_webcams",
+        lambda **kwargs: [
+            {"source": 0, "name": "Integrated Cam", "width": 640, "height": 480, "fps": 30},
+            {"source": 1, "name": "USB Cam", "width": 1280, "height": 720, "fps": 30},
+        ],
+    )
+
+    graph_file = tmp_path / "camera_graph.json"
+    rec_graph = CameraGraph()
+    rec_graph.add_node(CameraNodeConfig(camera_id="campus4_c0", name="Cam 0", source="fake0.avi", source_type=SourceType.VIDEO_FILE))
+    rec_graph.add_node(CameraNodeConfig(camera_id="campus4_c1", name="Cam 1", source="fake1.avi", source_type=SourceType.VIDEO_FILE))
+    rec_graph.save(graph_file)
+
+    pipe = MultiCameraPipeline(
+        graph=rec_graph,
+        config=AppConfig(),
+        camera_factory=lambda cfg: SyntheticCamera(width=320, height=240, fps=30),
+    )
+    pc = PlaybackController()
+    pc.is_playing = False  # Simulate finished/paused recorded playback
+    pipe.playback_controller = pc
+
+    saved_attrs = (
+        MappingAPIHandler.graph_file,
+        MappingAPIHandler.runtime_pipeline,
+        MappingAPIHandler.annotation_store,
+        MappingAPIHandler.default_annotation_db_path,
+        MappingAPIHandler.default_identity_db_path,
+        MappingAPIHandler.case_manager,
+        getattr(MappingAPIHandler, "audit_logger", None),
+    )
+
+    server = run_ui_server(port=0, graph_file=str(graph_file), pipeline=pipe, block=False)
+    port = server.server_port
+    time.sleep(0.05)
+
+    try:
+        # Before switch: ended/paused PlaybackController pauses step()
+        assert pipe.step() == {}
+
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/system/switch_source",
+            data=json.dumps({"mode": "live"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5.0) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        assert body["success"] is True
+        assert body["mode"] == "live"
+        assert body["updated"] == ["cam_0", "cam_1"]
+
+        # PlaybackController must be cleared and live step() must now yield frames
+        assert pipe.playback_controller is None
+        res = pipe.step()
+        assert "cam_0" in res and res["cam_0"][0] is not None
+        assert "cam_1" in res and res["cam_1"][0] is not None
+
+        # apply_discovered with 2 cameras (including width/height/fps metadata) must also succeed cleanly
+        apply_req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/cameras/apply_discovered",
+            data=json.dumps({
+                "cameras": [
+                    {"source": 0, "name": "Cam 0", "width": 640, "height": 480, "fps": 30},
+                    {"source": 1, "name": "Cam 1", "width": 1280, "height": 720, "fps": 30},
+                ]
+            }).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(apply_req, timeout=5.0) as resp:
+            apply_body = json.loads(resp.read().decode("utf-8"))
+        assert apply_body["success"] is True
+        assert apply_body["cameras"] == ["cam_0", "cam_1"]
+    finally:
+        try:
+            pipe.stop()
+            server.shutdown()
+            server.server_close()
+        except Exception:
+            pass
+        (
+            MappingAPIHandler.graph_file,
+            MappingAPIHandler.runtime_pipeline,
+            MappingAPIHandler.annotation_store,
+            MappingAPIHandler.default_annotation_db_path,
+            MappingAPIHandler.default_identity_db_path,
+            MappingAPIHandler.case_manager,
+            MappingAPIHandler.audit_logger,
+        ) = saved_attrs

@@ -414,6 +414,8 @@ class MultiCameraPipeline:
             if source_changed or not cfg.enabled:
                 if getattr(self, "recording_manager", None):
                     self.recording_manager.stop_camera_recording(cid)
+                if getattr(self, "playback_controller", None):
+                    self.playback_controller.cameras.pop(cid, None)
                 worker = workers.pop(cid, None)
                 if worker is not None:
                     try:
@@ -422,6 +424,8 @@ class MultiCameraPipeline:
                         logger.debug(f"Error stopping worker '{cid}': {e}")
                 with self._frame_lock:
                     self._latest_jpegs.pop(cid, None)
+                with self._worker_lock:
+                    self._failed_worker_times.pop(cid, None)
             node.config = cfg
             if not cfg.enabled:
                 node.mark_disabled()
@@ -2723,6 +2727,10 @@ class MultiCameraPipeline:
                 for old_id in list(new_workers.keys()):
                     if old_id not in all_new_ids:
                         logger.info(f"[MULTI-CAM] Releasing removed camera worker '{old_id}'")
+                        if getattr(self, "recording_manager", None):
+                            self.recording_manager.stop_camera_recording(old_id)
+                        if getattr(self, "playback_controller", None):
+                            self.playback_controller.cameras.pop(old_id, None)
                         worker = new_workers.pop(old_id, None)
                         if worker is not None:
                             try:
@@ -2755,6 +2763,29 @@ class MultiCameraPipeline:
                         worker = self._get_or_create_worker(cid)
                         if worker:
                             new_workers[cid] = worker
+
+                # Keep PlaybackController aligned with active graph sources so switching
+                # from paused/ended recorded videos back to live feeds resumes streaming.
+                has_video_sources = any(
+                    cfg.enabled and (
+                        cfg.source_type == SourceType.VIDEO_FILE
+                        or str(cfg.source).lower().endswith((".mp4", ".avi", ".mkv"))
+                    )
+                    for cfg in (new_graph.get_node(cid) for cid in all_new_ids)
+                    if cfg is not None
+                )
+                if not has_video_sources:
+                    if getattr(self, "playback_controller", None) is not None:
+                        try:
+                            self.playback_controller.release_all()
+                        except Exception as e:
+                            logger.debug(f"Error releasing playback controller on live switch: {e}")
+                        self.playback_controller = None
+                elif getattr(self, "playback_controller", None) is not None:
+                    self.playback_controller.max_duration_ms = max(
+                        (cam.duration_ms for cam in self.playback_controller.cameras.values()),
+                        default=0.0,
+                    )
 
                 # 3. Update active camera if previous active camera was deleted or disabled
                 enabled_ids = [cid for cid in all_new_ids if new_nodes.get(cid) and new_nodes[cid].config.enabled]
