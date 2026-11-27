@@ -195,3 +195,57 @@ def test_adaptive_gallery_anti_poisoning_and_flush():
     assert len(ident.adaptive_gallery) == 0
     assert len(ident.reference_gallery) == 1
 
+
+def test_enroll_cross_camera_viewpoint_enforces_token_authorization():
+    """
+    Verifies IdentityManager.enroll_cross_camera_viewpoint validates tokens via
+    VerifiedIdentityDecision.is_authorized_for(...) before enrolling view clusters.
+    """
+    from src.core.types import MatchDecisionState, VerifiedIdentityDecision
+
+    reid = MockReID()
+    im = IdentityManager(reid_extractor=reid, similarity_threshold=0.7)
+
+    # Textured high-contrast crop so CropQualityEvaluator accepts it
+    y_grad = np.linspace(40, 220, 120, dtype=np.uint8)[:, None, None]
+    x_pat = ((np.arange(60, dtype=np.uint8) % 6) * 15)[None, :, None]
+    crop = np.broadcast_to(np.clip(y_grad + x_pat, 0, 255).astype(np.uint8), (120, 60, 3)).copy()
+
+    im.register_new_target(crop, identity_id="target_0", timestamp_ms=100.0)
+    ident = im.get_identity("target_0")
+    assert ident is not None and ident.anchor is not None
+    initial_clusters = len(ident.anchor.clusters)
+
+    # 1. None token rejected
+    assert im.enroll_cross_camera_viewpoint(crop, "target_0", decision=None, timestamp_ms=150.0) is False
+
+    # 2. Mismatched identity token rejected
+    wrong_id_tok = VerifiedIdentityDecision(
+        target_identity_id="target_other",
+        authorized_track_id=7,
+        decision_state=MatchDecisionState.MATCH,
+        confidence=0.95,
+        margin=0.2,
+        timestamp_ms=100.0,
+        expires_at_ms=500.0,
+        reason="Wrong target identity",
+    )
+    assert im.enroll_cross_camera_viewpoint(crop, "target_0", decision=wrong_id_tok, timestamp_ms=150.0) is False
+
+    # 3. Expired token rejected
+    valid_tok = VerifiedIdentityDecision(
+        target_identity_id="target_0",
+        authorized_track_id=7,
+        decision_state=MatchDecisionState.MATCH,
+        confidence=0.95,
+        margin=0.2,
+        timestamp_ms=100.0,
+        expires_at_ms=300.0,
+        reason="Valid token",
+    )
+    assert im.enroll_cross_camera_viewpoint(crop, "target_0", decision=valid_tok, timestamp_ms=400.0) is False
+    assert len(ident.anchor.clusters) == initial_clusters
+
+    # 4. Valid token within expiry accepted
+    assert im.enroll_cross_camera_viewpoint(crop, "target_0", decision=valid_tok, timestamp_ms=200.0) is True
+

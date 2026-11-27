@@ -395,6 +395,51 @@ class MultiCameraPipeline:
             fps=self.config.camera.fps,
         )
 
+    def _apply_node_config_update(
+        self,
+        cid: str,
+        cfg: CameraNodeConfig,
+        nodes: Dict[str, CameraNode],
+        workers: Dict[str, CameraWorker],
+        annotators: Dict[str, FrameAnnotator],
+    ) -> None:
+        """Applies updated CameraNodeConfig to an existing or new node and stops stale workers."""
+        if cid in nodes:
+            node = nodes[cid]
+            old_cfg = node.config
+            source_changed = (
+                str(old_cfg.source) != str(cfg.source)
+                or old_cfg.source_type != cfg.source_type
+            )
+            if source_changed or not cfg.enabled:
+                if getattr(self, "recording_manager", None):
+                    self.recording_manager.stop_camera_recording(cid)
+                worker = workers.pop(cid, None)
+                if worker is not None:
+                    try:
+                        worker.stop()
+                    except Exception as e:
+                        logger.debug(f"Error stopping worker '{cid}': {e}")
+                with self._frame_lock:
+                    self._latest_jpegs.pop(cid, None)
+            node.config = cfg
+            if not cfg.enabled:
+                node.mark_disabled()
+            elif node.status == CameraStatus.DISABLED:
+                node.mark_offline()
+        else:
+            node = CameraNode(cfg)
+            if not cfg.enabled:
+                node.mark_disabled()
+            nodes[cid] = node
+            annotators[cid] = FrameAnnotator(
+                draw_fps=self.config.visualization.draw_fps,
+                draw_boxes=self.config.visualization.draw_boxes,
+                draw_ids=self.config.visualization.draw_ids,
+                box_thickness=self.config.visualization.box_thickness,
+                font_scale=self.config.visualization.font_scale,
+            )
+
     def _sync_nodes_with_graph(self) -> None:
         """Instantiate/sync CameraNode and CameraWorker objects for all nodes in the graph."""
         graph_ids = set(self.graph.all_camera_ids())
@@ -418,31 +463,9 @@ class MultiCameraPipeline:
         # Sync existing and new nodes
         for cid in graph_ids:
             cfg = self.graph.get_node(cid)
-            if not cfg:
-                continue
-
-            if cid in self._nodes:
-                old_cfg = self._nodes[cid].config
-                if str(old_cfg.source) != str(cfg.source) or old_cfg.source_type != cfg.source_type:
-                    if getattr(self, "recording_manager", None):
-                        self.recording_manager.stop_camera_recording(cid)
-                    if cid in self._workers:
-                        try:
-                            self._workers[cid].stop()
-                        except Exception:
-                            pass
-                        del self._workers[cid]
-                    with self._frame_lock:
-                        self._latest_jpegs.pop(cid, None)
-                self._nodes[cid].config = cfg
-            else:
-                self._nodes[cid] = CameraNode(cfg)
-                self._annotators[cid] = FrameAnnotator(
-                    draw_fps=self.config.visualization.draw_fps,
-                    draw_boxes=self.config.visualization.draw_boxes,
-                    draw_ids=self.config.visualization.draw_ids,
-                    box_thickness=self.config.visualization.box_thickness,
-                    font_scale=self.config.visualization.font_scale,
+            if cfg:
+                self._apply_node_config_update(
+                    cid, cfg, self._nodes, self._workers, self._annotators
                 )
 
     def _initialize_enabled_workers(self) -> None:
@@ -2414,6 +2437,8 @@ class MultiCameraPipeline:
         for cid, node in self._nodes.items():
             if cid != self._active_camera_id and node.status == CameraStatus.SEARCHING:
                 node.deactivate_ai()
+                if getattr(self, "search_manager", None) is not None:
+                    self.search_manager.on_search_complete(cid)
 
     def _perform_handoff(
         self,
@@ -2718,29 +2743,9 @@ class MultiCameraPipeline:
                     if not node_cfg:
                         continue
 
-                    if cid in new_nodes:
-                        old_cfg = new_nodes[cid].config
-                        # Check if camera source changed; if so, recreate worker
-                        if str(old_cfg.source) != str(node_cfg.source) or old_cfg.source_type != node_cfg.source_type:
-                            logger.info(f"[MULTI-CAM] Camera '{cid}' source changed ({old_cfg.source} -> {node_cfg.source}), restarting worker...")
-                            worker = new_workers.pop(cid, None)
-                            if worker is not None:
-                                try:
-                                    worker.stop()
-                                except Exception:
-                                    pass
-                            with self._frame_lock:
-                                self._latest_jpegs.pop(cid, None)
-                        new_nodes[cid].config = node_cfg
-                    else:
-                        new_nodes[cid] = CameraNode(node_cfg)
-                        new_annotators[cid] = FrameAnnotator(
-                            draw_fps=self.config.visualization.draw_fps,
-                            draw_boxes=self.config.visualization.draw_boxes,
-                            draw_ids=self.config.visualization.draw_ids,
-                            box_thickness=self.config.visualization.box_thickness,
-                            font_scale=self.config.visualization.font_scale,
-                        )
+                    self._apply_node_config_update(
+                        cid, node_cfg, new_nodes, new_workers, new_annotators
+                    )
 
                     # Create workers for enabled cameras
                     if node_cfg.enabled and cid not in new_workers:

@@ -1,5 +1,9 @@
 /**
  * Argus Surveillance REST API & Stream Client
+ *
+ * UNUSED:
+ * - API.updateAnnotation (lines 356-372): Client wrapper for PUT /api/annotations/:id retained for future inline edit UI.
+ * - API.deleteAnnotation (lines 374-385): Client wrapper for DELETE /api/annotations/:id retained for future delete UI.
  */
 const API = {
   baseUrl: '',

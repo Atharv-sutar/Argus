@@ -843,7 +843,9 @@ class SurveillanceApp {
                     <td style="padding: 8px;">${c.status}</td>
                     <td style="padding: 8px;">${new Date(c.created_at).toLocaleString()}</td>
                     <td style="padding: 8px;">
-                        ${!isActive ? `<button class="btn btn-primary" onclick="window.appInstance.openCase('${c.case_id}')" style="padding: 2px 6px; font-size: 12px;">Open</button>` : ''}
+                        ${!isActive
+                            ? `<button class="btn btn-primary" onclick="window.appInstance.openCase('${c.case_id}')" style="padding: 2px 6px; font-size: 12px;">Open</button>`
+                            : `<button class="btn btn-secondary" onclick="window.appInstance.closeCase('${c.case_id}')" style="padding: 2px 6px; font-size: 12px;">Close</button>`}
                         <button class="btn btn-secondary" onclick="window.appInstance.deleteCase('${c.case_id}')" style="padding: 2px 6px; font-size: 12px;">Del</button>
                         <button class="btn btn-secondary" onclick="window.appInstance.exportCase('${c.case_id}')" style="padding: 2px 6px; font-size: 12px; margin-left: 4px;">Export</button>
                     </td>
@@ -868,6 +870,21 @@ class SurveillanceApp {
             this.pollGallery(); // immediate refresh
         } catch (err) {
             this.showToast(`Failed to open case: ${err.message}`, 'error');
+        }
+    };
+
+    this.closeCase = async (cid) => {
+        try {
+            await API.closeCase(cid);
+            this.activeCaseId = null;
+            this.showToast(`Closed case ${cid}`, 'success');
+            this.galleryItems = [];
+            this.annotations = [];
+            this.renderGallery();
+            this.loadCaseList();
+            this.pollGallery();
+        } catch (err) {
+            this.showToast(`Failed to close case: ${err.message}`, 'error');
         }
     };
 

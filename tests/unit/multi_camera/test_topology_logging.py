@@ -160,3 +160,82 @@ def test_topology_save_and_live_matrix_logging(tmp_path):
             server.shutdown()
         except Exception:
             pass
+
+
+def test_case_open_and_close_restores_default_db_paths(tmp_path, monkeypatch):
+    """Verify POST /api/cases/<id>/open switches DB paths and /close restores defaults."""
+    from types import SimpleNamespace
+    from src.multi_camera.ui_server import MappingAPIHandler
+
+    monkeypatch.chdir(tmp_path)
+
+    class _StubIdentityManager:
+        def __init__(self, db_path):
+            self.db_path = db_path
+            self.calls = []
+
+        def set_db_path(self, db_path):
+            self.db_path = db_path
+            self.calls.append(db_path)
+
+    default_id_db = str(tmp_path / "default_identities.db")
+    stub_im = _StubIdentityManager(default_id_db)
+    stub_pipe = SimpleNamespace(
+        identity_manager=stub_im,
+        config=SimpleNamespace(storage=SimpleNamespace(db_path=default_id_db)),
+    )
+
+    saved_attrs = (
+        MappingAPIHandler.graph_file,
+        MappingAPIHandler.runtime_pipeline,
+        MappingAPIHandler.annotation_store,
+        MappingAPIHandler.default_annotation_db_path,
+        MappingAPIHandler.default_identity_db_path,
+        MappingAPIHandler.case_manager,
+        getattr(MappingAPIHandler, "audit_logger", None),
+    )
+
+    server = run_ui_server(
+        port=0,
+        graph_file=str(tmp_path / "camera_graph.json"),
+        pipeline=stub_pipe,
+        block=False,
+    )
+    port = server.server_port
+    time.sleep(0.05)
+
+    try:
+        default_anno_db = MappingAPIHandler.annotation_store.db_path
+        MappingAPIHandler.case_manager.create_case(case_id="case_001", mode="live")
+
+        # Open case -> switches annotation & identity DBs
+        open_req = urllib.request.Request(f"http://127.0.0.1:{port}/api/cases/case_001/open", data=b"{}", method="POST")
+        with urllib.request.urlopen(open_req, timeout=3.0) as resp:
+            assert json.loads(resp.read().decode("utf-8"))["success"] is True
+
+        assert "case_001" in MappingAPIHandler.annotation_store.db_path
+        assert "case_001" in stub_im.db_path
+
+        # Close case -> restores original DB paths
+        close_req = urllib.request.Request(f"http://127.0.0.1:{port}/api/cases/case_001/close", data=b"{}", method="POST")
+        with urllib.request.urlopen(close_req, timeout=3.0) as resp:
+            assert json.loads(resp.read().decode("utf-8"))["success"] is True
+
+        assert MappingAPIHandler.case_manager.active_case is None
+        assert MappingAPIHandler.annotation_store.db_path == default_anno_db
+        assert stub_im.db_path == default_id_db
+    finally:
+        try:
+            server.shutdown()
+            server.server_close()
+        except Exception:
+            pass
+        (
+            MappingAPIHandler.graph_file,
+            MappingAPIHandler.runtime_pipeline,
+            MappingAPIHandler.annotation_store,
+            MappingAPIHandler.default_annotation_db_path,
+            MappingAPIHandler.default_identity_db_path,
+            MappingAPIHandler.case_manager,
+            MappingAPIHandler.audit_logger,
+        ) = saved_attrs

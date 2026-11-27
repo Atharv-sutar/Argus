@@ -1,4 +1,8 @@
-"""Camera acquisition module for recorded video files."""
+"""Camera acquisition module for recorded video files.
+
+UNUSED:
+- VideoFileCamera.read_at (lines 165-170): Random-access frame seek utility kept for offline inspection/testing; playback uses sequential read()/seek_to().
+"""
 
 from __future__ import annotations
 

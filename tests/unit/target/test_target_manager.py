@@ -267,3 +267,67 @@ def test_ambiguous_candidates_rejected():
 
     # Ambiguous match must NOT be accepted
     assert tm.target.state == TargetState.LOST
+
+
+def test_reassociate_target_enforces_token_camera_and_identity():
+    """
+    Verifies TargetManager.reassociate_target delegates authorization to
+    VerifiedIdentityDecision.is_authorized_for(...) for camera, identity, token, and expiry.
+    """
+    from src.core.types import MatchDecisionState, VerifiedIdentityDecision
+
+    tm = TargetManager()
+    t10 = Track(track_id=10, box=BoundingBox(10, 10, 60, 140))
+    tm.select_by_track_id(10, TrackResult(tracks=[t10], frame_id=1, timestamp_ms=33.3))
+    tm.mark_lost(100.0)
+
+    t20 = Track(track_id=20, box=BoundingBox(20, 20, 70, 150))
+
+    # 1. Wrong camera rejected when camera_id is supplied
+    cam_a_token = VerifiedIdentityDecision(
+        target_identity_id="target_0",
+        authorized_track_id=20,
+        source_camera_id="cam_A",
+        decision_state=MatchDecisionState.MATCH,
+        confidence=0.92,
+        margin=0.20,
+        timestamp_ms=120.0,
+        expires_at_ms=500.0,
+        reason="Test cam_A authorization",
+    )
+    assert tm.reassociate_target(t20, frame_id=2, timestamp_ms=150.0, decision=cam_a_token, camera_id="cam_B") is False
+    assert tm.target.state == TargetState.LOST
+
+    # 2. Wrong target_identity_id rejected
+    wrong_ident_token = VerifiedIdentityDecision(
+        target_identity_id="target_other",
+        authorized_track_id=20,
+        source_camera_id="cam_A",
+        decision_state=MatchDecisionState.MATCH,
+        confidence=0.92,
+        margin=0.20,
+        timestamp_ms=120.0,
+        expires_at_ms=500.0,
+        reason="Wrong target",
+    )
+    assert tm.reassociate_target(t20, frame_id=2, timestamp_ms=150.0, decision=wrong_ident_token, camera_id="cam_A") is False
+
+    # 3. Missing/cleared decision_token rejected
+    forged_token = VerifiedIdentityDecision(
+        target_identity_id="target_0",
+        authorized_track_id=20,
+        source_camera_id="cam_A",
+        decision_state=MatchDecisionState.MATCH,
+        confidence=0.92,
+        margin=0.20,
+        timestamp_ms=120.0,
+        expires_at_ms=500.0,
+        reason="Forged empty signature",
+    )
+    forged_token.decision_token = ""
+    assert tm.reassociate_target(t20, frame_id=2, timestamp_ms=150.0, decision=forged_token, camera_id="cam_A") is False
+
+    # 4. Valid camera, identity, token, and timestamp succeeds
+    assert tm.reassociate_target(t20, frame_id=2, timestamp_ms=150.0, decision=cam_a_token, camera_id="cam_A") is True
+    assert tm.target.track_id == 20
+    assert tm.target.state == TargetState.TRACKING

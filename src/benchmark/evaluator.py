@@ -1,4 +1,8 @@
-"""Evaluation Harness for Multi-Camera Person Tracking and Re-Identification."""
+"""Evaluation Harness for Multi-Camera Person Tracking and Re-Identification.
+
+UNUSED:
+- ReIDEvaluationHarness.get_frame_results (lines 302-304): Per-frame benchmark accessor retained for external evaluation reporting scripts.
+"""
 
 from __future__ import annotations
 

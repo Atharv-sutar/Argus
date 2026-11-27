@@ -5,6 +5,10 @@ Provides high-performance model compilation, caching, and execution:
 2. TensorRT engine compilation and ONNX graph optimization.
 3. ONNX Runtime TensorRT / CUDA execution provider management.
 4. Dynamic batch size support for real-time surveillance pipelines.
+
+UNUSED:
+- get_available_execution_providers (lines 70-77): Diagnostic provider listing helper retained for hardware inspection/CLI use.
+- export_reid_to_onnx (lines 154-191): Offline PyTorch-to-ONNX ReID export utility retained for model build tooling.
 """
 
 from __future__ import annotations

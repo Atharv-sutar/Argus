@@ -1,4 +1,8 @@
-"""Camera topology graph: nodes, edges, adjacency queries, and distance calculations."""
+"""Camera topology graph: nodes, edges, adjacency queries, and distance calculations.
+
+UNUSED:
+- CameraGraph.get_edges_for_camera (lines 136-141): Convenience bidirectional edge lookup helper retained as a public graph API.
+"""
 
 from __future__ import annotations
 

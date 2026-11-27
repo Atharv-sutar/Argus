@@ -1,4 +1,8 @@
-"""Person detector implementation using YOLO conforming to BaseDetector."""
+"""Person detector implementation using YOLO conforming to BaseDetector.
+
+UNUSED:
+- register_detector_backend (lines 324-326): Modular detector backend extension hook kept for registering custom BaseDetector plugins.
+"""
 
 from __future__ import annotations
 

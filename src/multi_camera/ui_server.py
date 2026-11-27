@@ -1,4 +1,11 @@
-"""Lightweight HTTP server and REST API for the interactive Camera Mapping UI."""
+"""Lightweight HTTP server and REST API for the interactive Camera Mapping UI.
+
+UNUSED ROUTES (retained as operational/diagnostic REST APIs; no active web UI caller):
+- GET /api/recording/stats (lines 618-630)
+- GET /api/recording/segments (lines 632-647)
+- GET /api/undo/stack (lines 649-654)
+- GET /api/forensic/status (lines 817-822)
+"""
 
 from __future__ import annotations
 
@@ -277,6 +284,8 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
     runtime_pipeline = None  # Optional MultiCameraPipeline reference
     graph_lock = threading.Lock()
     annotation_store = None
+    default_annotation_db_path: str = "case_db.sqlite"
+    default_identity_db_path: Optional[str] = None
     case_manager = None
     export_status = {}
 
@@ -1147,11 +1156,19 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                     
                     # Update active paths
                     if self.annotation_store:
+                        if not self.default_annotation_db_path:
+                            type(self).default_annotation_db_path = getattr(self.annotation_store, "db_path", "case_db.sqlite")
                         self.annotation_store.set_db_path(str(case_dir / "annotations.db"))
-                        
-                    if self.runtime_pipeline:
-                        if hasattr(self.runtime_pipeline.identity_manager, "set_db_path"):
-                            self.runtime_pipeline.identity_manager.set_db_path(str(case_dir / "gallery" / "entries.db"))
+
+                    if self.runtime_pipeline and getattr(self.runtime_pipeline, "identity_manager", None):
+                        im = self.runtime_pipeline.identity_manager
+                        if self.default_identity_db_path is None:
+                            type(self).default_identity_db_path = (
+                                getattr(im, "db_path", None)
+                                or getattr(getattr(getattr(self.runtime_pipeline, "config", None), "storage", None), "db_path", None)
+                            )
+                        if hasattr(im, "set_db_path"):
+                            im.set_db_path(str(case_dir / "gallery" / "entries.db"))
                             
                     self._send_json({"success": True, "case": case.to_dict()})
                 except Exception as e:
@@ -1308,6 +1325,16 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
         elif path.startswith("/api/cases/") and path.endswith("/close"):
             if self.case_manager:
                 self.case_manager.close_case()
+                if self.annotation_store:
+                    self.annotation_store.set_db_path(self.default_annotation_db_path)
+                if self.runtime_pipeline and getattr(self.runtime_pipeline, "identity_manager", None):
+                    im = self.runtime_pipeline.identity_manager
+                    default_id_db = (
+                        self.default_identity_db_path
+                        or getattr(getattr(getattr(self.runtime_pipeline, "config", None), "storage", None), "db_path", None)
+                    )
+                    if default_id_db and hasattr(im, "set_db_path"):
+                        im.set_db_path(str(default_id_db))
                 self._send_json({"success": True})
             return
 
@@ -1815,6 +1842,11 @@ def run_ui_server(
     MappingAPIHandler.graph_file = Path(graph_file)
     MappingAPIHandler.runtime_pipeline = pipeline
     MappingAPIHandler.annotation_store = AnnotationStore()
+    MappingAPIHandler.default_annotation_db_path = MappingAPIHandler.annotation_store.db_path
+    MappingAPIHandler.default_identity_db_path = (
+        getattr(getattr(pipeline, "identity_manager", None), "db_path", None)
+        or getattr(getattr(getattr(pipeline, "config", None), "storage", None), "db_path", None)
+    )
     MappingAPIHandler.case_manager = CaseManager("cases")
     
     # Initialize global audit logger

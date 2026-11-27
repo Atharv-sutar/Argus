@@ -1,4 +1,8 @@
-"""Orchestrates playback across multiple VideoFileCameras."""
+"""Orchestrates playback across multiple VideoFileCameras.
+
+UNUSED:
+- PlaybackController.get_time (lines 182-185): Direct playback clock accessor retained as a convenience API alongside get_state().
+"""
 
 from __future__ import annotations
 

@@ -535,30 +535,6 @@ class SingleCameraPipeline:
 
         return det_result, track_result, target, annotated_frame
 
-    def process_frame_headless(
-        self,
-        frame: np.ndarray,
-        timestamp_ms: float
-    ) -> Tuple[DetectionResult, TrackResult, Target]:
-        """Processes a single video frame without rendering annotations."""
-        self._frame_id += 1
-        self._last_frame = frame
-
-        det_result = self.detector.detect(
-            frame=frame,
-            frame_id=self._frame_id,
-            timestamp_ms=timestamp_ms
-        )
-
-        track_result = self.tracker.update(
-            detection_result=det_result,
-            frame=frame
-        )
-        self._last_track_result = track_result
-
-        target = self._manage_target_identity(track_result, frame, timestamp_ms)
-        return det_result, track_result, target
-
     def stream(self) -> Generator[Tuple[np.ndarray, TrackResult, Target], None, None]:
         """Continuously yields frames from camera."""
         while self.camera.is_opened():

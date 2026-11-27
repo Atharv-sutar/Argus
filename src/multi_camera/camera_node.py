@@ -81,14 +81,3 @@ class CameraNode:
         """Mark this camera as the one currently tracking the target."""
         self.is_ai_active = True
         self.status = CameraStatus.ACTIVE_TARGET
-
-    def to_status_dict(self) -> dict:
-        """Serialize runtime status for the UI."""
-        return {
-            "camera_id": self.camera_id,
-            "name": self.name,
-            "status": self.status.value,
-            "is_ai_active": self.is_ai_active,
-            "fps": round(self.fps, 1),
-            "enabled": self.config.enabled,
-        }

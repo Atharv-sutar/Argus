@@ -1,4 +1,8 @@
-"""Hardware capability detection, device selection, and adaptive GPU execution management."""
+"""Hardware capability detection, device selection, and adaptive GPU execution management.
+
+UNUSED:
+- resolve_inference_device (lines 473-488): Legacy public device helper kept for src.inference compatibility; internal code uses detect_hardware_profile().
+"""
 
 from __future__ import annotations
 

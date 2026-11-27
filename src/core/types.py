@@ -1,4 +1,10 @@
-"""Core data types and domain contracts for Argus surveillance system."""
+"""Core data types and domain contracts for Argus surveillance system.
+
+UNUSED LEGACY COMPATIBILITY SHIMS:
+- Identity.reference_upper_gallery / lower / deep / color aliases (lines 378-408)
+- Identity.reference_deep_proto / color / upper / lower aliases (lines 418-448)
+  Retained for backward compatibility; runtime IdentityManager uses trusted_* fields directly.
+"""
 
 from __future__ import annotations
 
@@ -521,10 +527,6 @@ class Identity:
 
         return proto_sim, best_trusted_sim, best_provisional_sim, top2_provisional_mean
 
-    def compute_similarity(self, query: Embedding) -> float:
-        """Returns highest appearance similarity score against stored identity."""
-        proto_sim, best_trust, best_prov, _ = self.compute_detailed_similarity(query)
-        return max(proto_sim, best_trust, best_prov)
 
 
 

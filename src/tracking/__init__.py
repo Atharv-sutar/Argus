@@ -1,4 +1,8 @@
-"""Tracking subsystem with modular tracker factory registry."""
+"""Tracking subsystem with modular tracker factory registry.
+
+UNUSED:
+- register_tracker (lines 21-23): Modular tracker extension hook kept for registering custom BaseTracker implementations.
+"""
 
 from __future__ import annotations
 

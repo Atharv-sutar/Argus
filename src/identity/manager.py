@@ -817,7 +817,15 @@ class IdentityManager:
         if ident is None or crop is None or crop.size == 0:
             return False
 
-        if decision is None or decision.decision_state != MatchDecisionState.MATCH:
+        if (
+            decision is None
+            or decision.authorized_track_id is None
+            or not decision.is_authorized_for(
+                target_identity_id=identity_id,
+                track_id=decision.authorized_track_id,
+                current_timestamp_ms=timestamp_ms,
+            )
+        ):
             logger.warning("[IDENTITY] Cross-camera viewpoint enrollment REJECTED: no valid VerifiedIdentityDecision token.")
             return False
 

@@ -1,3 +1,7 @@
+# UNUSED:
+# - AnnotationStore.get_in_range (lines 111-112): Time-window query helper retained for future timeline filtering UI.
+# - AnnotationStore.clear_all (lines 114-119): Bulk annotation clear helper retained for administrative/test cleanup.
+
 import logging
 import sqlite3
 import json

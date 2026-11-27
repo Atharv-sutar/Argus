@@ -448,18 +448,20 @@ class TargetManager:
         frame_id: int,
         timestamp_ms: float,
         decision: Optional[VerifiedIdentityDecision] = None,
+        camera_id: Optional[str] = None,
         **kwargs: Any,
     ) -> bool:
         """
         Reassociates a lost/switched target with a new tracker ID.
         """
         if decision is not None:
-            from src.core.types import MatchDecisionState
-            if decision.decision_state != MatchDecisionState.MATCH:
-                return False
-            if decision.authorized_track_id is not None and decision.authorized_track_id != track.track_id:
-                return False
-            if decision.expires_at_ms is not None and timestamp_ms > decision.expires_at_ms:
+            target_id = getattr(self._target, "identity_id", None) or "target_0"
+            if not decision.is_authorized_for(
+                target_identity_id=target_id,
+                track_id=track.track_id,
+                current_timestamp_ms=timestamp_ms,
+                camera_id=camera_id,
+            ):
                 return False
 
         old_tr = self._target.track_id

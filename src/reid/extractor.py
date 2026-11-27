@@ -1,4 +1,8 @@
-"""Person Re-Identification (ReID) multi-region and texture-enriched feature extraction module."""
+"""Person Re-Identification (ReID) multi-region and texture-enriched feature extraction module.
+
+UNUSED:
+- register_reid_model (lines 74-96): Modular ReID backbone extension hook kept for registering custom ReID models without editing core code.
+"""
 
 from __future__ import annotations
 
@@ -340,35 +344,6 @@ class PyTorchReIDExtractor(BaseReID):
         normalized = (rgb - mean) / std
 
         return np.transpose(normalized, (2, 0, 1)).astype(np.float32)
-
-    def _extract_model_feature(self, crop: np.ndarray, model_override=None) -> np.ndarray:
-        """Runs forward pass through the primary model to extract a single L2-normalized vector."""
-        if crop is None or crop.size == 0 or cv2 is None:
-            return np.zeros(self.feature_dim, dtype=np.float32)
-
-        if model_override is None and self._trt_session is not None:
-            embs = self.extract_batch([crop])
-            return embs[0].vector if embs else np.zeros(self.feature_dim, dtype=np.float32)
-
-        model = model_override or self._model
-        if model is None:
-            return np.zeros(self.feature_dim, dtype=np.float32)
-
-        try:
-            import torch
-            prep = self._preprocess(crop)
-            if prep is not None:
-                tensor = torch.from_numpy(prep).unsqueeze(0).to(self._device)
-                with torch.inference_mode():
-                    feat = model(tensor).squeeze().cpu().numpy().astype(np.float32)
-                if len(feat.shape) > 1:
-                    feat = feat.flatten()
-                norm = float(np.linalg.norm(feat))
-                return (feat / norm) if norm > 0 else feat
-        except Exception as e:
-            logger.debug(f"Error in deep feature extraction: {e}")
-
-        return np.zeros(self.feature_dim, dtype=np.float32)
 
     def extract(self, crop: np.ndarray) -> Embedding:
         """Extracts primary full-body embedding with high-speed single forward pass."""
