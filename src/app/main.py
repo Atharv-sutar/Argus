@@ -39,6 +39,9 @@ logger = logging.getLogger("argus.app")
 
 def _launch_browser_when_ready(port: int, delay: float = 0.8) -> None:
     """Opens the web browser to the given port in a background daemon thread."""
+    if os.environ.get("ARGUS_NO_BROWSER") == "1":
+        return
+
     def _open() -> None:
         time.sleep(delay)
         url = f"http://127.0.0.1:{port}"
@@ -368,9 +371,12 @@ def run_multi_camera_app(
     graph_path: Optional[str] = None,
     video_dir: Optional[str] = None,
     source: Optional[str] = None,
+    device: Optional[str] = None,
+    synthetic: bool = False,
+    target_id: Optional[int] = None,
     no_gui: bool = True,
     serve_ui: bool = True,
-    ui_port: int = 8765,
+    ui_port: Optional[int] = None,
 ) -> None:
     """
     Runs the multi-camera surveillance system with the web operations center as primary interface.
@@ -378,8 +384,15 @@ def run_multi_camera_app(
     config_file = Path(config_path)
     config = AppConfig.from_yaml(config_file) if config_file.is_file() else AppConfig()
 
+    if device is not None:
+        config.inference.device = device
+
     from src.core.dependencies import ensure_technologies
     ensure_technologies(config)
+
+    resolved_port = int(ui_port if ui_port is not None else config.multi_camera.ui_port)
+    if synthetic and source is None:
+        source = "synthetic"
 
     loaded_graph = None
     target_graph_file = graph_path or config.multi_camera.graph_file
@@ -421,15 +434,19 @@ def run_multi_camera_app(
             logger.warning(f"Could not persist auto-loaded graph to '{target_graph_file}': {e}")
 
     pipeline = build_multi_camera_pipeline(config, graph_path=graph_path, graph=loaded_graph)
-    if loaded_graph and loaded_graph.nodes:
+    if loaded_graph and loaded_graph.node_count() > 0:
         first_cam = sorted(list(loaded_graph.all_camera_ids()))[0]
         pipeline.set_active_camera(first_cam)
+        if target_id is not None:
+            pipeline.select_target_by_id(first_cam, target_id)
+    elif target_id is not None and pipeline.active_camera_id:
+        pipeline.select_target_by_id(pipeline.active_camera_id, target_id)
 
     server = None
     if serve_ui:
-        server = run_ui_server(port=ui_port, graph_file=target_graph_file, pipeline=pipeline, block=False)
-        logger.info(f"Surveillance Operations Center web UI available at http://127.0.0.1:{ui_port}")
-        _launch_browser_when_ready(ui_port)
+        server = run_ui_server(port=resolved_port, graph_file=target_graph_file, pipeline=pipeline, block=False)
+        logger.info(f"Surveillance Operations Center web UI available at http://127.0.0.1:{resolved_port}")
+        _launch_browser_when_ready(resolved_port)
 
     # Register OS termination signals for clean shutdown
     import signal
@@ -886,7 +903,7 @@ def main() -> None:
     parser.add_argument("--graph", type=str, default="configs/camera_graph.json", help="Path to camera topology graph JSON")
     parser.add_argument("--multi-camera", action="store_true", default=True, help="Run in multi-camera web surveillance mode (default)")
     parser.add_argument("--map-ui", action="store_true", help="Launch interactive web camera mapping UI")
-    parser.add_argument("--ui-port", type=int, default=8765, help="Port for the surveillance web UI")
+    parser.add_argument("--ui-port", type=int, default=None, help="Port for the surveillance web UI (default: config multi_camera.ui_port, 8765)")
     parser.add_argument("--source", type=str, default=None, help="Camera index, video file, or 'synthetic'")
     parser.add_argument("--video-dir", type=str, default=None, help="Directory containing video files to auto-load as cameras (e.g. 'test_footage/EPFL campus')")
     parser.add_argument("--device", type=str, default=None, help="Inference device ('auto', 'cuda', 'cpu')")
@@ -898,7 +915,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.map_ui:
-        run_map_ui(graph_path=args.graph, port=args.ui_port)
+        run_map_ui(graph_path=args.graph, port=args.ui_port if args.ui_port is not None else 8765)
     elif args.legacy_desktop:
         logger.warning("The OpenCV desktop window is deprecated. Running in debug legacy mode.")
         run_app(
@@ -916,6 +933,9 @@ def main() -> None:
             graph_path=args.graph,
             video_dir=args.video_dir,
             source=args.source,
+            device=args.device,
+            synthetic=args.synthetic,
+            target_id=args.target_id,
             no_gui=True,
             serve_ui=True,
             ui_port=args.ui_port,

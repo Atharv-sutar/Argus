@@ -67,4 +67,4 @@ Run the full pytest suite:
 ---
 
 ## 5. Controls
-- Press **`q`** or **`Esc`** in the video window to stop the application.
+- Press **`Ctrl + C`** in the terminal (or click Quit in the web UI) to stop the surveillance server; when running `--legacy-desktop`, press **`q`** or **`Esc`** in the video window.

@@ -13,7 +13,7 @@ Argus is an enterprise-grade, GPU-accelerated multi-camera tracking system power
 
 ## 1. Quick Start (1-Click Self-Healing Launcher)
 
-Argus features a **Self-Healing Launcher** that detects your environment, verifies required packages, automatically installs any missing dependencies (OpenCV, PyTorch, FAISS, Flask, etc.), configures hardware acceleration, and boots the system automatically.
+Argus features a **Self-Healing Launcher** that detects your environment, verifies required packages, automatically installs any missing dependencies (OpenCV, PyTorch, FAISS, ONNX Runtime, etc.), configures hardware acceleration, and boots the web operations center automatically.
 
 ### Option A: Windows Command Prompt / Desktop (Recommended)
 Simply double-click [`run.bat`](file:///e:/MAJOR_PROJECT/Project/run.bat) or run from CMD:
@@ -125,8 +125,7 @@ If Python is not installed on Windows, `run.bat` automatically invokes the Windo
 Ensure you have the latest NVIDIA drivers installed. Argus automatically detects your GPU capabilities (VRAM, compute capability, Tensor Cores, TensorRT) and enables FP16/TF32/TensorRT and larger batch sizes on higher-tier RTX GPUs, while scaling conservatively on compact GPUs or falling back to CPU vectorization when no GPU is present.
 
 ### Checking Full System Tests
-To run all 97 automated unit and integration tests:
+To run the automated unit and integration test suite:
 ```cmd
-.venv\Scripts\pytest tests/unit/ --ignore=tests/unit/pipeline/test_gallery_management_and_batch_reid.py --ignore=tests/unit/reid/test_color_normalizer.py
+.venv\Scripts\python -m pytest tests/unit tests/integration -q
 ```
-*(All 97 tests pass with 100% success rate).*

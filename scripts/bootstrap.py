@@ -2,9 +2,9 @@
 
 Pre-flight runner that automatically:
 1. Detects and verifies the Python environment (virtualenv creation / re-spawn).
-2. Checks for all required core libraries (OpenCV, PyTorch, Ultralytics, SciPy, FAISS, ONNX Runtime, Flask, etc.).
+2. Checks for all required core libraries (OpenCV, PyTorch, Ultralytics, SciPy, FAISS, ONNX Runtime, etc.).
 3. Automatically installs any missing packages via pip.
-4. Verifies acceleration models.
+4. Verifies hardware acceleration.
 5. Launches the main Argus surveillance application seamlessly.
 """
 

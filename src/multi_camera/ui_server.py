@@ -1609,8 +1609,9 @@ class MappingAPIHandler(BaseHTTPRequestHandler):
                         curr_graph = CameraGraph.load(self.graph_file) if self.graph_file.is_file() else None
                     has_video_nodes = False
                     if curr_graph:
-                        for n in curr_graph.nodes.values():
-                            if n.source_type == SourceType.VIDEO_FILE or str(n.source).lower().endswith(('.mp4', '.avi', '.mkv')):
+                        for cid in curr_graph.all_camera_ids():
+                            n = curr_graph.get_node(cid)
+                            if n and (n.source_type == SourceType.VIDEO_FILE or str(n.source).lower().endswith(('.mp4', '.avi', '.mkv'))):
                                 has_video_nodes = True
                                 break
                     if has_video_nodes:
