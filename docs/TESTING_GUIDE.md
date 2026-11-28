@@ -38,7 +38,7 @@ This document provides standard operating procedures and test scripts for manual
   3. Click **Auto-Detect** under the Camera Devices pane.
 - **Expected Result:**
   - Status changes to "Scanning video capture devices...".
-  - Probing completes in **$< 1.5$ seconds**.
+  - Probing finishes cleanly within the bounded per-device timeout without hanging the UI server.
   - All available hardware devices appear in the list with resolution (e.g., `640x480 @ 30fps`).
   - Clicking a detected camera displays an instant live preview.
 
@@ -64,9 +64,9 @@ This document provides standard operating procedures and test scripts for manual
   1. Have a person walk into the field of view of Camera 1.
   2. In the Live Matrix view, click directly on the person's bounding box.
 - **Expected Result:**
-  - Target bounding box turns **Cyan/Green** with label `TARGET [LOCKED] (ID: #X)`.
+  - Target bounding box turns **Yellow/Gold** with corner brackets and label `[TARGET] LOCKED (Tracker: X)`.
   - Target card in the right sidebar displays Tracker ID, Camera ID, and state `LOCKED`.
-  - Seed crop is captured and enrolled in the Appearance Gallery (`Gallery: 1/25`).
+  - Seed crop is captured and enrolled in the Appearance Gallery (`Gallery: 1/100`).
 
 ### Test 2.2: 360° Multi-Angle Viewpoint Accumulation
 - **Goal:** Verify target lock continuity across full body rotations (front, profile, back).
@@ -75,8 +75,8 @@ This document provides standard operating procedures and test scripts for manual
   2. Have the person slowly turn around 360° over 10 seconds (Front $\rightarrow$ Left Profile $\rightarrow$ Back $\rightarrow$ Right Profile $\rightarrow$ Front).
 - **Expected Result:**
   - Target lock **never breaks** and never drops to `LOST`.
-  - Appearance Gallery automatically enrolls diverse viewpoints (Gallery count increases to `4-8/25`).
-  - Real-time similarity scores remain strong ($\ge 0.70$).
+  - Appearance Gallery automatically enrolls diverse viewpoints (Gallery count increases, bounded by `max_gallery_size: 100`).
+  - Real-time similarity scores remain above `match_threshold` ($\ge 0.60$).
 
 ### Test 2.3: Re-Identification After Temporary Exit
 - **Goal:** Verify rapid target re-acquisition when the person leaves and re-enters the scene.
@@ -86,8 +86,8 @@ This document provides standard operating procedures and test scripts for manual
   3. Have the target walk back into frame wearing the same clothes.
 - **Expected Result:**
   - Within 1-2 frames of re-entry, the tracker re-identifies the target.
-  - State transitions immediately from `LOST` $\rightarrow$ `LOCKED`.
-  - Similarity score reads $\ge 0.68$.
+  - State transitions from `LOST` $\rightarrow$ `TRACKING`.
+  - Similarity score meets `reacquisition_threshold` ($\ge 0.65$).
 
 ---
 

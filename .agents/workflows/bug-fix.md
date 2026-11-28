@@ -3,7 +3,7 @@
 This workflow guides the reproducible identification, tracking, resolution, and verification of defects.
 
 ## Step 1: Register in Volatile Bug Tracker
-1. If the bug is verified or reported, log it in `BUGS.md` in the project root:
+1. If the bug is verified or reported, log it in `.agents/BUGS.md`:
    - Bug ID / Title
    - Symptom & error log
    - Affected module
@@ -27,7 +27,7 @@ This workflow guides the reproducible identification, tracking, resolution, and 
    ```
 
 ## Step 5: Close Bug & Auto Push
-1. Remove or mark the resolved bug entry as cleared in `BUGS.md`.
+1. Remove or mark the resolved bug entry as cleared in `.agents/BUGS.md`.
 2. Commit and push changes:
    ```powershell
    git add -A
